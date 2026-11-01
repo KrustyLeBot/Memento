@@ -43,11 +43,29 @@ class Settings(context: Context) {
         get() = runCatching { GpsMode.valueOf(prefs.getString("gps_mode", "NORMAL")!!) }.getOrDefault(GpsMode.NORMAL)
         set(v) = prefs.edit().putString("gps_mode", v.name).apply()
 
+    /** Module shown when the app opens: the last one used. */
+    var lastModule: Module
+        get() = Module.of(prefs.getString("last_module", null)) ?: Module.NOTES
+        set(v) = prefs.edit().putString("last_module", v.key).apply()
+
+    var hiddenModules: Set<Module>
+        get() = prefs.getStringSet("hidden_modules", emptySet()).orEmpty().mapNotNull { Module.of(it) }.toSet()
+        set(v) = prefs.edit().putStringSet("hidden_modules", v.map { it.key }.toSet()).apply()
+
+    /** The user declined the import from the former Griffonote folder: do not ask again. */
+    var legacyImportDismissed: Boolean
+        get() = prefs.getBoolean("legacy_import_dismissed", false)
+        set(v) = prefs.edit().putBoolean("legacy_import_dismissed", v).apply()
+
     val storage: StorageConfig
         get() = storageUri?.let { StorageConfig.Tree(Uri.parse(it)) } ?: StorageConfig.Default
 
     companion object {
         fun defaultDir(): File =
             File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "Scriptorium")
+
+        /** Folder of the app's former name, imported once into [defaultDir]. */
+        fun legacyDir(): File =
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "Griffonote")
     }
 }

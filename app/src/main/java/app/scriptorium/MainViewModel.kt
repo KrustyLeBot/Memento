@@ -36,7 +36,25 @@ import app.scriptorium.sync.SkipReason
 import app.scriptorium.sync.SyncState
 import app.scriptorium.sync.SynchrotronClient
 
-enum class Screen { LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING }
+enum class Screen { LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS }
+
+/** Screens that carry the bottom bar: the home screen of each module. */
+val Screen.module: Module?
+    get() = when (this) {
+        Screen.LIST -> Module.NOTES
+        Screen.AGENDA -> Module.AGENDA
+        Screen.ACTIVITIES -> Module.ACTIVITIES
+        Screen.CONTACTS -> Module.CONTACTS
+        else -> null
+    }
+
+/** State of the one-time import from the former Griffonote folder. */
+sealed class LegacyImport {
+    data class Offer(val files: Int, val bytes: Long) : LegacyImport()
+    data class Copying(val done: Int, val total: Int) : LegacyImport()
+    data class Copied(val files: Int) : LegacyImport()
+    data class Failed(val message: String) : LegacyImport()
+}
 
 data class Snack(val text: String, val undo: (() -> Unit)? = null)
 
@@ -119,7 +137,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         c.onOpen = { screen = Screen.ACTIVITY }
     }
 
-    var screen by mutableStateOf(Screen.LIST)
+    var screen by mutableStateOf(rootOf(settings.lastModule.takeUnless { it in settings.hiddenModules } ?: Module.NOTES))
+    var hiddenModules by mutableStateOf(settings.hiddenModules)
+        private set
+    var legacyImport by mutableStateOf<LegacyImport?>(null)
     var editor by mutableStateOf<EditorState?>(null)
     var labelFilter by mutableStateOf<String?>(null)
     var query by mutableStateOf("")
@@ -185,6 +206,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             repo.startWatching()
             checkExternal()
             syncOnOpen()
+            checkLegacyFolder()
         }
     }
 
@@ -499,15 +521,83 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { withContext(io) { repo.saveActivitySettings(s) } }
     }
 
-    fun openActivities() { flushEditor(); screen = Screen.ACTIVITIES }
+    fun openActivities() { openModule(Module.ACTIVITIES) }
+
+    private fun rootOf(m: Module) = when (m) {
+        Module.NOTES -> Screen.LIST
+        Module.AGENDA -> Screen.AGENDA
+        Module.ACTIVITIES -> Screen.ACTIVITIES
+        Module.CONTACTS -> Screen.CONTACTS
+    }
+
+    fun openModule(m: Module) {
+        flushEditor()
+        screen = rootOf(m)
+        settings.lastModule = m
+    }
+
+    val visibleModules: List<Module> get() = Module.entries.filter { it !in hiddenModules }
+
+    fun setModuleVisible(m: Module, visible: Boolean) {
+        if (m !in Module.hideable) return
+        hiddenModules = if (visible) hiddenModules - m else hiddenModules + m
+        settings.hiddenModules = hiddenModules
+    }
+
+    // ---- one-time import from the former Griffonote folder ----
+
+    /** Offers the import when the old folder has files and the new one has none. */
+    fun checkLegacyFolder() {
+        if (legacyImport != null || settings.legacyImportDismissed || settings.storage !is StorageConfig.Default) return
+        viewModelScope.launch {
+            val offer = withContext(Dispatchers.IO) {
+                val old = Settings.legacyDir()
+                if (LegacyFolder.needsImport(old, Settings.defaultDir())) LegacyFolder.summary(old) else null
+            }
+            if (offer != null && legacyImport == null) legacyImport = LegacyImport.Offer(offer.files, offer.bytes)
+        }
+    }
+
+    fun dismissLegacyImport() {
+        if (legacyImport is LegacyImport.Offer) settings.legacyImportDismissed = true
+        legacyImport = null
+    }
+
+    fun importLegacyFolder() {
+        legacyImport = LegacyImport.Copying(0, 0)
+        viewModelScope.launch {
+            legacyImport = try {
+                val s = withContext(Dispatchers.IO) {
+                    LegacyFolder.copy(Settings.legacyDir(), Settings.defaultDir()) { done, total ->
+                        if (done == total || done % 20 == 0) viewModelScope.launch { legacyImport = LegacyImport.Copying(done, total) }
+                    }
+                }
+                LegacyImport.Copied(s.files)
+            } catch (e: Exception) {
+                LegacyImport.Failed(e.message ?: e.toString())
+            }
+            refresh()
+        }
+    }
+
+    fun deleteLegacyFolder() {
+        viewModelScope.launch {
+            val error = withContext(Dispatchers.IO) {
+                runCatching { LegacyFolder.deleteIfCopied(Settings.legacyDir(), Settings.defaultDir()) }.exceptionOrNull()
+            }
+            settings.legacyImportDismissed = true
+            legacyImport = null
+            snack = Snack(if (error == null) "Ancien dossier Griffonote supprimé" else "Suppression impossible : ${error.message}")
+        }
+    }
     fun openRecord() { screen = Screen.RECORD }
     fun openActivity(note: Note) { activities.open(note) }
 
     fun back() {
         when (screen) {
             Screen.EDITOR -> closeEditor()
-            Screen.SETTINGS -> screen = Screen.LIST
-            Screen.ACTIVITIES -> screen = Screen.LIST
+            Screen.SETTINGS -> screen = rootOf(settings.lastModule.takeUnless { it in hiddenModules } ?: Module.NOTES)
+            Screen.ACTIVITIES, Screen.AGENDA, Screen.CONTACTS -> openModule(Module.NOTES)
             Screen.ACTIVITY -> { activities.close(); screen = Screen.ACTIVITIES }
             Screen.RECORD -> screen = Screen.ACTIVITIES
             Screen.DRAWING -> closeDrawing()

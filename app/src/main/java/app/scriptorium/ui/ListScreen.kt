@@ -179,7 +179,7 @@ fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
             } else vm.syncNotice?.let { SuiteBanner(it) }
             UpdateBanner(vm.updates)
 
-            if (vm.query.isBlank() && vm.labelFilter == null) ActivitiesEntry(vm)
+            if (vm.query.isBlank() && vm.labelFilter == null) RecordingEntry(vm)
 
             if (visible.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -222,14 +222,13 @@ fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
     }
 }
 
-/** The pinned "Activités" folder, above the notes. */
+/** A recording running in the background stays one tap away from the notes. */
 @Composable
-private fun ActivitiesEntry(vm: MainViewModel) {
-    val all by vm.activities.activities.collectAsState()
+private fun RecordingEntry(vm: MainViewModel) {
     val live by app.scriptorium.record.Recorder.state.collectAsState()
-    val last = all.mapNotNull { n -> n.activity?.let { n to it } }.maxByOrNull { it.second.start }
+    if (live == null || live?.finished != false) return
     Card(
-        onClick = { vm.openActivities() },
+        onClick = { vm.openRecord() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -238,14 +237,7 @@ private fun ActivitiesEntry(vm: MainViewModel) {
             Text("🏅", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(end = 12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Activités", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    when {
-                        live != null && live?.finished == false -> "Enregistrement en cours"
-                        last != null -> "Dernière : ${last.first.title} · ${summaryLine(last.second)}"
-                        else -> "Aucune activité pour l'instant"
-                    },
-                    style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Text("Enregistrement en cours", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Default.PushPin, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f))
         }

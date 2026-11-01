@@ -68,6 +68,17 @@ fun SettingsScreen(vm: MainViewModel, onPickFolder: () -> Unit) {
                 }
             }
 
+            SectionTitle("Modules")
+            SettingsCard {
+                SettingsHint("Les modules masqués disparaissent de la barre du bas ; leurs fichiers restent dans le dossier.")
+                app.scriptorium.Module.hideable.forEach { m ->
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(m.label, modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(checked = m !in vm.hiddenModules, onCheckedChange = { vm.setModuleVisible(m, it) })
+                    }
+                }
+            }
+
             SectionTitle("Affichage")
             SettingsCard {
                 Text("Présentation", fontWeight = FontWeight.SemiBold)

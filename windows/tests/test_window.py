@@ -16,6 +16,8 @@ class FakeConfig:
     geometry = None
     grid = True
     theme = "light"
+    last_module = "notes"
+    hidden_modules: set[str] = set()
 
 
 @pytest.fixture(scope="module")
@@ -269,5 +271,15 @@ def test_activities_screen_lists_and_opens_an_activity(window, tmp_path, monkeyp
     assert window.list_screen.notes == []  # activities stay out of the regular list
     window._escape()
     assert window.activities.current is None
-    window._escape()
+    window._escape()  # the activities list is a module root: Escape stays there
+    assert window.stack.currentWidget() is window.activities
+
+
+def test_rail_switches_modules_and_hides_them(window):
+    window.show_module("agenda")
+    assert window.stack.currentWidget() is window.agenda
+    window.set_module_visible("agenda", False)
+    assert window.rail.buttons["agenda"].isHidden()
+    window.show_module("agenda")  # a hidden module falls back to the notes
     assert window.stack.currentWidget() is window.list_screen
+    window.set_module_visible("agenda", True)

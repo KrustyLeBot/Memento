@@ -28,10 +28,12 @@ def main() -> int:
     config = Config()
     theme.apply_theme(app, config.theme)
     workdir = config.workdir
-    if workdir is None or not workdir.is_dir():
+    if workdir is None or not workdir.is_dir() or not any(workdir.iterdir()):
         if workdir is not None:
-            QMessageBox.warning(None, "Scriptorium", f"Le dossier {workdir} est introuvable. Choisis-en un autre.")
-        workdir = ask_workdir(None, first_run=workdir is None)
+            # A missing or emptied folder is usually one that moved (e.g. renamed by the sync): ask again.
+            QMessageBox.warning(None, "Scriptorium", f"Le dossier {workdir} est introuvable ou vide. Choisis le dossier "
+                                                     "de tes notes.")
+        workdir = ask_workdir(None, first_run=config.workdir is None, start=workdir.parent if workdir else None)
         if workdir is None:
             return 0
         config.workdir = workdir

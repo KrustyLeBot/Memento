@@ -45,3 +45,22 @@ class Config:
     def theme(self, value: str) -> None:
         self._settings.setValue("theme", value)
         self._settings.sync()
+
+    @property
+    def last_module(self) -> str:
+        return str(self._settings.value("last_module", "notes"))
+
+    @last_module.setter
+    def last_module(self, value: str) -> None:
+        self._settings.setValue("last_module", value)
+        self._settings.sync()
+
+    @property
+    def hidden_modules(self) -> set[str]:
+        value = str(self._settings.value("hidden_modules", ""))
+        return {k for k in value.split(",") if k}
+
+    @hidden_modules.setter
+    def hidden_modules(self, value: set[str]) -> None:
+        self._settings.setValue("hidden_modules", ",".join(sorted(value)))
+        self._settings.sync()

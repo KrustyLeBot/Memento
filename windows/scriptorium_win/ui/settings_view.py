@@ -8,6 +8,7 @@ from ..core.settings import ActivitySettings
 from ..core.track import Sport
 from ..services import updater
 from . import icons, theme
+from .rail import HIDEABLE, MODULES
 
 
 class SettingsScreen(QWidget):
@@ -17,6 +18,7 @@ class SettingsScreen(QWidget):
     theme_changed = Signal(str)
     check_updates = Signal()
     activity_changed = Signal(object)  # ActivitySettings
+    module_visibility = Signal(str, bool)
 
     def __init__(self):
         super().__init__()
@@ -48,6 +50,7 @@ class SettingsScreen(QWidget):
         outer.addWidget(scroll, 1)
 
         self._sections: list[QLabel] = []
+        self._loading = False
 
         def section(text: str) -> None:
             label = QLabel(text)
@@ -64,6 +67,18 @@ class SettingsScreen(QWidget):
         pick = QPushButton("Choisir un dossier")
         pick.clicked.connect(self.choose_folder)
         body.addWidget(pick, 0, Qt.AlignmentFlag.AlignLeft)
+
+        section("Modules")
+        body.addWidget(QLabel("Les modules masqués disparaissent du menu ; leurs fichiers restent dans le dossier."))
+        self.module_boxes = {}
+        modules_row = QHBoxLayout()
+        for key in HIDEABLE:
+            box = QCheckBox(MODULES[key][0])
+            box.toggled.connect(lambda on, k=key: None if self._loading else self.module_visibility.emit(k, on))
+            self.module_boxes[key] = box
+            modules_row.addWidget(box)
+        modules_row.addStretch()
+        body.addLayout(modules_row)
 
         section("Affichage")
         self.grid_button = self._chip("Grille")
@@ -105,7 +120,6 @@ class SettingsScreen(QWidget):
         self.refine_box = QCheckBox("Affiner l'altitude avec le relief à l'enregistrement (téléphone)")
         self.refine_box.toggled.connect(lambda _=False: self._activity_edited())
         body.addWidget(self.refine_box)
-        self._loading = False
 
         section("À propos")
         self.version = QLabel(f"Scriptorium build {updater.current_build()}")
@@ -141,9 +155,12 @@ class SettingsScreen(QWidget):
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
                                                     {s for s, b in self.total_boxes.items() if b.isChecked()}))
 
-    def load(self, folder: str, grid: bool, theme_mode: str, activity: ActivitySettings | None = None) -> None:
+    def load(self, folder: str, grid: bool, theme_mode: str, activity: ActivitySettings | None = None,
+             hidden: set[str] | None = None) -> None:
         self.folder.setText(folder)
         self._loading = True
+        for key, box in self.module_boxes.items():
+            box.setChecked(key not in (hidden or set()))
         activity = activity or ActivitySettings()
         for sport, box in self.total_boxes.items():
             box.setChecked(sport in activity.totals)

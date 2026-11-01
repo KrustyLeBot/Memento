@@ -22,7 +22,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.Modifier
 import app.scriptorium.ui.ActivitiesScreen
+import app.scriptorium.ui.AgendaScreen
+import app.scriptorium.ui.ContactsScreen
+import app.scriptorium.ui.LegacyImportDialog
+import app.scriptorium.ui.ModuleBar
 import app.scriptorium.ui.ActivityDetailScreen
 import app.scriptorium.ui.DrawingScreen
 import app.scriptorium.ui.RecordScreen
@@ -58,9 +69,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var pickTree: androidx.activity.result.ActivityResultLauncher<Uri?>? = null
+    private var scanner: androidx.activity.result.ActivityResultLauncher<IntentSenderRequest>? = null
+
     @Composable
     private fun App() {
-        val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+        pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
             if (uri != null) {
                 contentResolver.takePersistableUriPermission(
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
@@ -72,7 +86,7 @@ class MainActivity : ComponentActivity() {
         val legacyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
             vm.onResume()
         }
-        val scanner = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        scanner = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
                 val pages = GmsDocumentScanningResult.fromActivityResultIntent(result.data)?.pages.orEmpty()
                 vm.saveScan(pages.map { it.imageUri })
@@ -101,21 +115,38 @@ class MainActivity : ComponentActivity() {
                 PermissionScreen(
                     storage = vm.settings.storage,
                     onGrant = { requestFileAccess { legacyPermission.launch(it) } },
-                    onPickFolder = { pickTree.launch(null) },
+                    onPickFolder = { pickTree?.launch(null) },
                 )
             } else {
-                when (vm.screen) {
-                    Screen.LIST -> ListScreen(vm, onScan = { startScan { scanner.launch(it) } })
-                    Screen.EDITOR -> vm.editor?.let { EditorScreen(vm, it) }
-                    Screen.SETTINGS -> SettingsScreen(vm, onPickFolder = { pickTree.launch(null) })
-                    Screen.PDF -> vm.viewingPdf?.let { PdfViewerScreen(vm, it) }
-                    Screen.ACTIVITIES -> ActivitiesScreen(vm)
-                    Screen.ACTIVITY -> vm.activities.detail?.let { ActivityDetailScreen(vm, it) }
-                    Screen.RECORD -> RecordScreen(vm)
-                    Screen.DRAWING -> vm.drawing?.let { DrawingScreen(vm, it) }
+                LegacyImportDialog(vm)
+                val module = vm.screen.module
+                if (module != null) {
+                    Column(Modifier.fillMaxSize()) {
+                        // The bar takes the navigation-bar inset; screens above must not pad for it again.
+                        Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.navigationBars)) { Screens() }
+                        ModuleBar(vm.visibleModules, module) { vm.openModule(it) }
+                    }
+                } else {
+                    Screens()
                 }
             }
         }
+    }
+
+    @Composable
+    private fun Screens() {
+        when (vm.screen) {
+            Screen.LIST -> ListScreen(vm, onScan = { startScan { scanner?.launch(it) } })
+            Screen.EDITOR -> vm.editor?.let { EditorScreen(vm, it) }
+            Screen.SETTINGS -> SettingsScreen(vm, onPickFolder = { pickTree?.launch(null) })
+            Screen.PDF -> vm.viewingPdf?.let { PdfViewerScreen(vm, it) }
+            Screen.ACTIVITIES -> ActivitiesScreen(vm)
+            Screen.ACTIVITY -> vm.activities.detail?.let { ActivityDetailScreen(vm, it) }
+            Screen.RECORD -> RecordScreen(vm)
+            Screen.DRAWING -> vm.drawing?.let { DrawingScreen(vm, it) }
+            Screen.AGENDA -> AgendaScreen(vm)
+            Screen.CONTACTS -> ContactsScreen(vm)
+                }
     }
 
     /** Google's document scanner: camera, automatic page corners, several pages. Photos only, no gallery. */

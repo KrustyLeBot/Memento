@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-                               QPushButton, QStackedWidget)
+                               QPushButton, QStackedWidget, QWidget)
 
 from ..config import Config
 from ..core import atomic
@@ -16,6 +16,9 @@ from ..services import updater
 from ..services.async_util import run_async
 from . import files, theme
 from .activities_view import ActivitiesScreen, summary_line
+from .agenda_view import AgendaScreen
+from .contacts_view import ContactsScreen
+from .rail import Rail
 from .editor_view import EditorScreen
 from .list_view import ListScreen
 from .settings_view import SettingsScreen
@@ -49,9 +52,20 @@ class MainWindow(QMainWindow):
         self.editor = EditorScreen()
         self.settings = SettingsScreen()
         self.activities = ActivitiesScreen()
-        for page in (self.list_screen, self.editor, self.settings, self.activities):
+        self.agenda = AgendaScreen()
+        self.contacts = ContactsScreen()
+        for page in (self.list_screen, self.editor, self.settings, self.activities, self.agenda, self.contacts):
             self.stack.addWidget(page)
-        self.setCentralWidget(self.stack)
+        self.rail = Rail()
+        self.rail.set_hidden(config.hidden_modules)
+        central = QWidget()
+        row = QHBoxLayout(central)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.rail)
+        row.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+        self.module = "notes"
 
         # ---- snackbar (delete + undo, copy confirmation...) ----
         self.snack = QFrame(self)
@@ -84,17 +98,21 @@ class MainWindow(QMainWindow):
         self.editor.message.connect(self.show_snack)
         self.editor.saved.connect(lambda _: self.refresh())
         self.list_screen.open_activities.connect(self.show_activities)
+        self.list_screen.activities_button.hide()  # the rail replaces the pinned entry
+        self.rail.selected.connect(self.show_module)
+        self.rail.open_settings.connect(self.show_settings)
         self.activities.back_requested.connect(self.show_list)
         self.activities.changed.connect(self.refresh)
         self.activities.open_file.connect(self.open_attachment)
         self.activities.reveal_file.connect(self.reveal_attachment)
         self.activities.message.connect(self.show_snack)
-        self.settings.back_requested.connect(self.show_list)
+        self.settings.back_requested.connect(lambda: self.show_module(self.module))
         self.settings.choose_folder.connect(self.choose_workdir)
         self.settings.grid_changed.connect(self._grid_changed)
         self.settings.theme_changed.connect(self._theme_changed)
         self.settings.check_updates.connect(lambda: self.check_updates(manual=True))
         self.settings.activity_changed.connect(self._activity_settings_changed)
+        self.settings.module_visibility.connect(self.set_module_visible)
 
         QShortcut(QKeySequence("Ctrl+N"), self, activated=lambda: self.new_note(False))
         QShortcut(QKeySequence("Ctrl+Shift+N"), self, activated=lambda: self.new_note(True))
@@ -130,27 +148,47 @@ class MainWindow(QMainWindow):
 
     # ---- navigation ----
 
-    def show_list(self) -> None:
-        self.stack.setCurrentWidget(self.list_screen)
+    def show_module(self, key: str) -> None:
+        if key in self.config.hidden_modules:
+            key = "notes"
+        self.module = key
+        self.config.last_module = key
+        self.rail.set_current(key)
+        if self.stack.currentWidget() is self.editor:
+            self.editor.close_note()
+            self.refresh()
+        if key == "activities":
+            self.activities.show_list()
+        page = {"notes": self.list_screen, "agenda": self.agenda, "activities": self.activities,
+                "contacts": self.contacts}[key]
+        self.stack.setCurrentWidget(page)
         self.setWindowTitle(f"Scriptorium — {self.store.root}")
 
+    def show_list(self) -> None:
+        self.show_module("notes")
+
     def show_activities(self) -> None:
-        self.activities.show_list()
-        self.stack.setCurrentWidget(self.activities)
+        self.show_module("activities")
+
+    def set_module_visible(self, key: str, visible: bool) -> None:
+        hidden = set(self.config.hidden_modules)
+        hidden.discard(key) if visible else hidden.add(key)
+        self.config.hidden_modules = hidden
+        self.rail.set_hidden(hidden)
 
     def show_settings(self) -> None:
-        self.settings.load(str(self.store.root), self.list_screen.grid, self.config.theme, self.store.activity_settings())
+        self.settings.load(str(self.store.root), self.list_screen.grid, self.config.theme, self.store.activity_settings(),
+                           self.config.hidden_modules)
+        self.rail.set_current(None)
         self.stack.setCurrentWidget(self.settings)
 
     def _escape(self) -> None:
         current = self.stack.currentWidget()
         if current is self.settings:
-            self.show_list()
+            self.show_module(self.module)
         elif current is self.activities:
             if self.activities.current is not None:
                 self.activities.show_list()
-            else:
-                self.show_list()
         elif current is self.list_screen and self.list_screen.search.text():
             self.list_screen.search.clear()
 
@@ -164,11 +202,13 @@ class MainWindow(QMainWindow):
         self.editor.close_note()
         self.store = store
         self.activities.set_store(store)
+        self.agenda.set_store(store)
+        self.contacts.set_store(store)
         if self.watcher.directories():
             self.watcher.removePaths(self.watcher.directories())
         self._arm_watcher()
         self.refresh()
-        self.show_list()
+        self.show_module(self.config.last_module)
 
     def _arm_watcher(self) -> None:
         # Re-add the path after every event: an atomically replaced file loses its watch.
@@ -196,6 +236,8 @@ class MainWindow(QMainWindow):
         latest = max((n for n in acts if n.activity), key=lambda n: n.activity.start, default=None)
         self.list_screen.set_activity_summary(
             f"Dernière : {latest.title} · {summary_line(latest.activity)}" if latest else "Aucune activité pour l'instant")
+        self.agenda.refresh()
+        self.contacts.refresh()
 
     def _poll_disk(self) -> None:
         snapshot = self.store.snapshot()
@@ -218,7 +260,7 @@ class MainWindow(QMainWindow):
     def _theme_changed(self, mode: str) -> None:
         self.config.theme = mode
         theme.apply_theme(QApplication.instance(), mode)
-        for screen in (self.list_screen, self.settings, self.activities):
+        for screen in (self.list_screen, self.settings, self.activities, self.rail):
             screen.restyle()
         self.list_screen.rebuild()
 
@@ -240,7 +282,7 @@ class MainWindow(QMainWindow):
     def close_editor(self) -> None:
         self.editor.close_note()
         self.refresh()
-        self.show_list()
+        self.show_module(self.module)
 
     def open_pdf(self, note: Note) -> None:
         path = self.store.pdf_path(note)

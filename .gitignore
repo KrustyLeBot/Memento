@@ -14,3 +14,4 @@ windows/build/
 windows/dist/
 *.spec
 .pytest_cache/
+.claude/
