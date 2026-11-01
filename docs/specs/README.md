@@ -55,18 +55,21 @@ Today: the notes list with a pinned "Activités" entry. With four modules the pi
 Proposal (question 7): a bottom bar **Notes · Agenda · Activités · Contacts** on Android, a left rail on Windows,
 modules hideable in the settings. The editor, search and settings stay where they are.
 
-## 4. Roadmap
+## 4. Delivery
 
-Each phase ships on its own (every push to `main` already publishes a build).
+**Decision: one delivery, no phase order.** Contacts, agenda, reminders, widgets and the contacts mirror are built together
+and shipped as one version of the app (each push to `main` still publishes a build; nothing needs to be released piecemeal).
+What the work does have is a **dependency order inside it**, which is how it will be sequenced:
 
-| Phase | Content | Why this order |
-|---|---|---|
-| 0 | Module skeleton: folders, navigation, per-module settings file, module on/off. Shared "dated item" index. | Everything below plugs into it. |
-| 1 | **Contacts, standalone**: list, search, create/edit, vCard import/export, call/SMS/email actions. Windows too. | Smallest module and the one that frees the user from Google Contacts. |
-| 2 | **Agenda core**: calendars, events (single and recurring), month/week/day/list views, activities and dated notes in the calendar, **ICS import/export**. Windows too. | The big one. |
-| 3 | **Reminders and widget** (Android): notifications, agenda widget. | Needs phase 2's data. |
-| 4 | **Contacts mirrored into Android** (caller ID, SMS names): own account in the system contacts provider. | Optional, needs real-phone testing. |
-| 5 | Extras: month widget, birthdays from contacts, read-only URL subscription, "this and following" edits, Windows reminders. | Only if wanted. |
+1. Module skeleton: folders, navigation, per-module settings file, module on/off, the shared "dated entries" index.
+2. Contacts (list, edit, vCard import/export) and the agenda data layer (events, recurrence, time zones, ICS import/export): they only need (1).
+3. The views (agenda, month, week, day, contacts), the editors, activities and dated notes in the calendar.
+4. Reminders and the two widgets (need the agenda index).
+5. The contacts mirror into the phone's contacts (needs the contacts module; **verified on the real phone first**, see contacts.md).
+6. The Windows UI of both modules, the guides, the README.
+
+Left for later, on request only: a month widget, "this and following" edits of a series, Windows reminders, read-only URL
+subscription to an external calendar, a two-way contacts sync.
 
 ## 5. Risks
 
@@ -78,27 +81,27 @@ Each phase ships on its own (every push to `main` already publishes a build).
 - **Behaviour on the user's phone** (Samsung) can differ from the documentation: every Android integration point in
   these specs is marked *to verify on the device* and gets a short test checklist.
 
-## 6. Open questions
+## 6. Decisions and remaining questions
 
-Answer what you can; each has a default (in bold) that the specs assume.
+Decided (answers of the user):
 
-1. **Events as notes.** An event is a Markdown note (description = the note body, with checklists, photos, drawings)
-   stored in `agenda/`, and any normal note can also get a date. **Yes**, or events as a separate, simpler kind of item?
-2. **Import cut-off.** When importing a calendar, the default is **the last 12 months and everything after** (older
-   events skippable by choice), to keep the file count sane. OK?
-3. **Contacts and the phone.** Do you want the app's contacts to show up in the phone's dialer, messages and
-   WhatsApp (needs the "mirror" of phase 4)? **Yes, later.** Do you stop syncing Google Contacts afterwards?
-4. **Windows scope.** Contacts and agenda **views and editing** on Windows; no reminders on Windows (the app is not
-   resident). OK?
-5. **Widget.** Send screenshots of the Google and Proton widgets you like (layout, sizes, what a row shows). Default:
-   an agenda list widget, resizable; month widget later.
-6. **Birthdays.** An optional `birthday` field on a contact, shown yearly in the calendar. **Yes, optional.**
-7. **Navigation.** Bottom bar with four modules (Android) and a left rail (Windows). **OK?**
-8. **Name.** Undecided; independent of this work.
-9. **Time zones.** Events keep their own zone (so a flight "14:00 Paris" stays correct abroad) and show in the
-   device zone; "floating" events (no zone) follow the device. **OK?**
-10. **Note reminders.** Notes already have a `reminder` field reserved (Keep-style, not implemented). **Plan:** the
-    same alert mechanism serves both, and a note with a reminder also appears in the calendar. OK?
-11. **Parallel use.** After the one-shot import, do you keep using Google or Proton calendars at the same time? If
-    yes, you will want re-importing (updates by UID, supported) or later a read-only URL subscription. **Assumed: you switch over.**
-12. **Priority.** The phases above put contacts first, then the agenda. Preferred order?
+| Topic | Decision |
+|---|---|
+| One app or several | One app, one folder, modules. |
+| Events | An event is a note (Markdown). ICS is the interchange format; properties the app does not model are kept verbatim (`ical_extra`) so nothing is lost on export. |
+| Import | Everything is imported by default (the user has few events); an optional "depuis le …" cut-off. |
+| Recurrence | The usual: daily, weekdays, weekly, every 2 weeks, monthly, yearly, and a custom editor (interval, weekdays, n-th weekday, end by date or count). |
+| Time zones | Standard iCalendar model: an event keeps its zone (local time + IANA zone), floating events are an option, display in the device zone. See agenda.md 3.5. |
+| Contacts in the phone | Yes: the mirror into Android's contacts so names show in the dialer and the messages; then Google's contact sync is turned off. |
+| Widget | The user's screenshot is the reference (agenda.md section 7). |
+| Order | No order: everything in one delivery. |
+| Contact fields | First name, last name, phones, emails (+ optional address, birthday, notes). No photos. |
+
+Still open (each has a default, in bold, that the specs assume; answer only to change it):
+
+1. **Birthdays** from contacts in the calendar, optional per contact: **yes**.
+2. **Navigation**: a bottom bar Notes · Agenda · Activités · Contacts on Android, a left rail on Windows, modules hideable: **yes**.
+3. **Windows scope**: views and editing of both modules, no reminders on Windows (the app is not resident): **yes**.
+4. **Note reminders** (the `reminder` field reserved since the first version): the same alert mechanism as events, and a note with a reminder shows in the calendar: **yes**.
+5. **Parallel use** of Google/Proton calendars after the import: assumed that you switch over; re-importing an updated export is supported by event ID if you ever need it.
+6. **Name** of the app: undecided, independent of this work.

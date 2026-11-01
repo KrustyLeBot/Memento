@@ -151,7 +151,7 @@ So three levels, from the simplest to the most integrated:
 | Level | What | Result | Cost |
 |---|---|---|---|
 | **L0 Standalone** | Contacts live only in the app's files | The list, search, call/SMS buttons work in the app. The phone's dialer and messages do not know the names (unless Google Contacts stays on). | none |
-| **L1 Mirror (recommended)** | The files stay the source of truth; the app **writes a copy into the system provider**, under its own account ("Contacts Scriptorium" or whatever the app is called), one way (files → provider) | Caller ID, names in SMS/WhatsApp, the car, the watch all work. Delete the account and the copies disappear. | moderate: an account type (a stub authenticator), a sync step, the `READ_CONTACTS`/`WRITE_CONTACTS` permissions |
+| **L1 Mirror (decided)** | The files stay the source of truth; the app **writes a copy into the system provider**, under its own account ("Contacts Scriptorium" or whatever the app is called), one way (files → provider) | Caller ID, names in SMS/WhatsApp, the car, the watch all work. Delete the account and the copies disappear. | moderate: an account type (a stub authenticator), a sync step, the `READ_CONTACTS`/`WRITE_CONTACTS` permissions |
 | L2 Two-way | Also read the provider's changes (edits made in the phone's contacts app) back into the files | Edit anywhere | high (conflict rules, sync adapter), only if L1's one-way rule hurts |
 
 **L1 design**
@@ -183,7 +183,7 @@ file sync for contacts, so it is a fallback only.
 1. Export the contacts from Google Contacts as vCard (keep that file: it is the backup).
 2. Import into the app (phase 1); check the count against Google's ("236 contacts").
 3. Use the app's contacts for a few days next to Google's (no conflict, nothing is mirrored yet).
-4. When phase 4 exists: turn on the mirror, check the checklist above, then turn off Google's contact sync on the
+4. Once the mirror is built: turn on the mirror, check the checklist above, then turn off Google's contact sync on the
    phone (Settings → Accounts → Google → Account sync → Contacts) and, only after keeping a fresh vCard, delete the contacts from Google.
 
 ## 7. Windows

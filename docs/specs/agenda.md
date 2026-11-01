@@ -52,6 +52,21 @@ uid: 0a1b2c@google.com         # original ICS UID, kept for re-imports; generate
 Prendre la carte vitale.
 ```
 
+**Why Markdown files and not `.ics` files as the storage** (decision, the question was "an ICS already contains
+everything": it contains the event, but not what this app adds). ICS stays the *interchange* format (import, export),
+the storage is one note per event because: the description is a **rich note** (checklists, photos, drawings, scans;
+`DESCRIPTION` in ICS is plain text and `ATTACH` is only a URL); one file per event syncs and merges per event, while one
+`.ics` per calendar would turn two edits on two devices into a whole-calendar conflict; the same files serve notes,
+events and activities (links by id, one search, one editor). To make the format **lossless**, any ICS property the app
+does not model is kept verbatim as raw lines in `ical_extra` and written back on export (so an imported event exports
+back with everything it came with):
+
+```yaml
+ical_extra:
+  - "X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij"
+  - "CATEGORIES:Santé"
+```
+
 Rules
 
 - `start` decides what the file is: **a note with a `start` appears in the calendar.** In `agenda/` it is an event;
@@ -115,16 +130,49 @@ event before the settings file).
 
 ### 3.5 Time zones
 
-- Stored as IANA names (`Europe/Paris`). Android: `java.time`; Windows: `zoneinfo` + the `tzdata` package (Windows has no system IANA database).
-- Imported Windows/Outlook zone names (`Romance Standard Time`) are mapped to IANA with the CLDR table; an unknown zone falls back to the device zone and the import report says how many events were affected.
-- Display is in the **device zone** ("fuseau de l'appareil"); an event with a different `tz` shows its own zone next to the time in its detail ("14:00 à Paris").
-- All-day events are zone-free dates.
+**What the standard says** (RFC 5545, iCalendar, the format behind Google, Proton, Apple and Outlook calendars): a
+date-time has **three forms**, and the choice is made per event:
+
+| Form | In an `.ics` | Meaning |
+|---|---|---|
+| **Local time with a zone** | `DTSTART;TZID=Europe/Paris:20261112T143000` | 14:30 on the wall clocks of Paris, whatever zone you are in. The rules of the zone (daylight saving) apply to every occurrence of a series. |
+| **UTC** | `DTSTART:20261112T133000Z` | One absolute instant. |
+| **Floating** | `DTSTART:20261112T143000` (no `TZID`, no `Z`) | 14:30 *wherever you are*: "take my pill at 8:00". |
+| *All-day* | `DTSTART;VALUE=DATE:20261112` | A calendar day, no zone. |
+
+The standard requires a `TZID` on every date-time that is neither UTC nor floating, and forbids it on UTC values. For
+**recurring events** the correct form is local time + zone: "every Thursday 14:30 in Paris" stays at 14:30 across
+the daylight-saving change, whereas a UTC series would drift an hour. This is also what Google Calendar does (each
+event has its own time zone, optionally a different one for its end) and why the user's guess is right: **an event keeps
+its zone**.
+
+**What the app does**
+
+- An event is stored as **local wall time + IANA zone** (`start: 2026-11-12T14:30`, `tz: Europe/Paris`), exactly the
+  first form. Series therefore survive daylight saving correctly, and a flight "14:00 Paris" is still 14:00 Paris abroad.
+- **Floating** events are an option ("Fuseau: celui de l'appareil"): no `tz` key; they show at the same wall time wherever the phone is.
+- **UTC events** (`...Z`, the form some senders use for single meetings) are converted at import to the device
+  zone's wall time and stored with that zone (the instant is preserved; the file stays human-readable).
+- **Display**: entries are shown in the **device's current zone** (the instant is converted), so after landing in
+  New York a 14:30 Paris event shows 08:30; its detail says "14:30 à Paris". A setting "Afficher les heures dans le
+  fuseau de l'événement" shows the event's own wall time instead (Google offers the same choice).
+- All-day events are zone-free dates and never move.
+- **Names**: IANA (`Europe/Paris`). `java.time` on Android; `zoneinfo` + the `tzdata` package on Windows (Windows has no IANA database of its own).
+  Outlook-style names (`Romance Standard Time`) and custom `TZID`s with an embedded `VTIMEZONE` are mapped to IANA
+  (CLDR table; if the embedded rules are standard, the zone is recognised from them); an unresolvable zone falls
+  back to the device zone and the import report says how many events were affected. Export writes a `TZID` with a
+  `VTIMEZONE` block for every zone used, which is what strict clients expect.
+- **Daylight-saving gaps**: a local time that does not exist (02:30 the night the clocks jump forward) is moved to
+  the first valid instant after the gap; a time that exists twice (the night they go back) uses the first one: the
+  same rules as `java.time` and Python's `zoneinfo`, and tested.
+- A series whose `DTSTART` is excluded by an `EXDATE` (allowed by the standard) is kept as is; `start` stays the series anchor.
 
 ### 3.6 Volume and layout
 
 A multi-year Google or Proton calendar can mean thousands of events. Every event is a file, so:
 
-- **Import cut-off** (question 2): the import dialog proposes "depuis il y a 12 mois" by default; "tout" is one tick away.
+- **Import cut-off** (decision: the user has few events): **everything is imported by default**; the dialog still
+  offers "depuis le …" for someone with a long history.
 - **Subfolders by year of the start** (`agenda/2026/…`) keep directories small; a recurring series lives in the year of its first occurrence.
 - A rebuilt **in-memory index** (sorted by start; recurring series expanded on demand for the visible window plus a margin) keeps every view fast; startup scans the folder with the same watcher as the notes.
 - Measure before deciding anything more: import a synthetic 5 000-event calendar on a real phone and time the first scan and the first sync. If it hurts, the fallback is one `.ics` file per calendar per year for **imported past events only** (read-only archive), never for events the user edits.
@@ -148,10 +196,15 @@ day), search of events by title/location/description, week starting Monday (sett
 French labels: Titre · Toute la journée · Début / Fin · Fuseau horaire (hidden unless different from the device) ·
 Agenda (the calendar) · Lieu (tap opens the maps app) · Répétition · Rappels · Description (the note editor).
 
-**Répétition** presets: Jamais · Tous les jours · Toutes les semaines (on the same weekday) · Tous les mois (same day
-of month, or "le 2e jeudi") · Tous les ans · Personnalisé… (interval, weekdays, end: never / on a date / after N).
-Anything the editor cannot express but the file contains (imported rules like `BYSETPOS`) is shown as read-only text
-"Règle importée" and preserved untouched.
+**Répétition**: the usual presets, then a full custom editor. Presets: Jamais · Tous les jours · Du lundi au vendredi ·
+Toutes les semaines (same weekday) · **Toutes les 2 semaines** · Tous les mois (same day of the month, or "le 2e jeudi")
+· Tous les ans · Personnalisé…
+**Personnalisé**: every N days / weeks / months / years (N from 1), on which weekdays (weekly), by day of the month or by
+"n-th weekday" including "dernier" (monthly), which date (yearly), and the end: **jamais**, **jusqu'au** a date, or **après
+N occurrences**. All of these map to a standard `RRULE` (`FREQ`, `INTERVAL`, `BYDAY`, `BYMONTHDAY`, `BYSETPOS`, `UNTIL`,
+`COUNT`), so import and export need no translation layer. Anything the editor cannot express but the file contains is
+shown as read-only text "Règle importée" and preserved untouched. The list of the next occurrences is shown under the rule
+("Prochaines : 12 nov., 26 nov., 10 déc.") so a wrong rule is obvious before saving.
 
 **Rappels**: list of offsets (5 min, 10 min, 15 min, 30 min, 1 h, 1 day, 1 week, custom), several allowed.
 
@@ -227,7 +280,7 @@ with synthetic files of the same shape in the tests.
 1. Pick the file(s) (system picker; also reachable by opening an `.ics` attachment from a mail or the file manager: the app registers for `text/calendar`).
 2. **Preview**, no write yet: per calendar, count of events, series, date range, number of ignored items and of
    zones that could not be resolved.
-3. Options: target calendar (new or existing, colour), **"depuis le …"** cut-off (default 12 months back), duplicates policy.
+3. Options: target calendar (new or existing, colour), optional **"depuis le …"** cut-off (default: everything), duplicates policy.
 4. Import with a progress bar (events are written in batches; the UI stays usable); report at the end ("812 événements, 37 séries, 3 ignorés").
 5. **Undo** the whole import in one action ("Annuler l'import"): every file created by an import carries `import: <import-id>` in its frontmatter, so removal is exact.
 
@@ -253,39 +306,54 @@ the ICS description changed), or *keep both*.
 
 ## 7. Android widget
 
-Inspired by Google Calendar's *Agenda* widget and Proton Calendar's agenda widget; **please send screenshots of the
-ones you like** (question 5) so the layout matches your taste. Until then:
+Reference: the screenshot the user sent (a dark agenda widget on the home screen, next to the Cerbère widget). What it
+shows, which the spec follows:
 
-**Widget "Agenda"** (resizable; 2×2 to 4×5)
+- A **header** on the top left: the weekday in small text ("dimanche") above the full date in large text ("1 novembre"); on
+  the top right two icons: **refresh** (circular arrows) and **+** (new event).
+- Under it, a **list of the next entries**, one row each, generous spacing:
+  - a **date block** on the left: abbreviated weekday over the day number ("mer." / "11"), the number large;
+  - a **thin vertical bar** in the calendar's colour;
+  - the **title** (bold, large; up to two lines) and under it, in a dimmer colour, **the time range** ("20:00 - 20:30") or
+    "Toute la journée".
+- A dark rounded card (the system's dark theme; a light variant in the light theme), no frame, no day separators.
 
 ```
-┌─────────────────────────────┐
-│ jeu. 12 nov.            [+] │   header: today's date, quick new event
-├─────────────────────────────┤
-│ Aujourd'hui                 │   day header (bold), then rows
-│ ▌14:30  Dentiste            │   ▌ = calendar colour; time; title
-│ ▌       12 rue de la Paix   │   second line: location (if it fits)
-│ ▌Toute la journée  Férié    │
-│ ▌18:00  🏃 Course à pied    │   activity entry: emoji
-│ Demain · ven. 13 nov.       │
-│ ▌09:00  Réunion équipe      │
-│ …                           │
-└─────────────────────────────┘
+┌───────────────────────────────────────┐
+│ dimanche                    ⟳    +    │
+│ 1 novembre                            │
+│                                       │
+│  dim.  ▌ Faire virements IBKR 4000€   │
+│   1    ▌ Toute la journée             │
+│                                       │
+│  mer.  ▌ Sortir poubelles…            │
+│  11    ▌ 20:00 - 20:30                │
+│  …                                    │
+└───────────────────────────────────────┘
 ```
 
 Behaviour
 
-- Shows upcoming entries (today's already finished ones greyed or hidden: setting), grouped by day, scrollable.
-  Empty state: "Rien de prévu".
-- Tap a row → the event, the activity or the note; tap the header → the agenda; "+" → new event.
-- **Configuration** (shown when the widget is added): calendars and layers to show, how many days ahead (7/14/30), show finished events today, background opacity.
-- Theme: follows the system dark/light and the suite palette; row text sizes follow the widget height.
-- Updates: after any data change made in the app or brought by a sync (the app notifies the widget), at midnight,
-  and every 30 minutes as a safety net. A widget never reads files itself: it asks the app's index.
-- Implementation: `AppWidgetProvider` with a `RemoteViewsService` collection (the existing Cerbère widget already uses RemoteViews, no new UI toolkit).
-  Glance (Compose for widgets) is a possible alternative; decide at implementation by comparing APK size and effort.
+- **Rows**: upcoming entries from today on (events, activities, dated notes, according to the configuration), sorted by
+  start. When several entries fall on the same day, the date block appears on the first row of that day only (Google
+  Calendar's habit); the others keep the bar and leave the block empty. A series shows its next occurrence(s).
+- **Colour bar**: the calendar's colour; activities and notes use their layer's colour and a small icon (sport emoji, note) before the title.
+- **Time line**: `HH:mm - HH:mm`, `Toute la journée`, or `Du 1 au 3 déc.` for multi-day entries; the start only when there is no end.
+- **Tap** a row → the event, activity or note. **Tap the date** (header) → the agenda on today. **+** → new event on today. **⟳**
+  → rescans the folder and asks Synchrotron to sync the folder (the same "sync on open" call the apps already use),
+  then redraws; a spinner replaces the icon meanwhile.
+- **Sizes**: resizable (about 2×2 up to 4×6); the number of rows follows the height, the list scrolls inside the widget.
+- **Empty state**: "Rien de prévu" with the **+** still available.
+- **Configuration screen** (when the widget is added, editable later): calendars and layers shown, how many days ahead
+  (7 / 14 / 30 / 90), show today's finished entries (default off), show the refresh button, background opacity.
+- **Theme**: follows the system dark/light; text sizes follow the widget size; the suite's palette for the accents.
+- **Updates**: after any change made in the app or brought by a sync (the app tells the widget), at midnight, on the
+  date change, and every 30 minutes as a safety net. The widget never reads the files itself: it asks the app's index.
+- **Implementation**: `AppWidgetProvider` with a `RemoteViews` collection (a `RemoteViewsService`), like the existing Cerbère widget; no new UI toolkit.
+  Glance (Compose for widgets) is the alternative; decide at implementation by comparing APK size and effort.
 
-**Later**: a *Mois* widget (grid of the month with dots, tap a day) and a *Aujourd'hui* strip (2×1).
+**Second widget (same delivery, small)**: **"Aujourd'hui"**, 2×1: only today's next entry and the count of the others,
+for the places where the list is too big. A **Mois** widget (grid with dots) can come later.
 
 ## 8. Windows UI
 

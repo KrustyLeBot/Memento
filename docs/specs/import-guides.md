@@ -40,7 +40,7 @@ signed in; the file itself is **not encrypted**, treat it like your agenda in pl
    from a mail attachment or the file manager starts the same dialog.)
 2. The preview lists each calendar with its number of events and series and its date range. Rename the calendars,
    pick their colours.
-3. Keep **"depuis il y a 12 mois"** unless you want the whole history (thousands of events make the first sync of the folder slower).
+3. By default **everything** is imported; use **"depuis le …"** only to skip old history (the first sync of the folder is slower with thousands of events).
 4. **Importer.** The report tells how many events were imported and how many items were ignored.
 5. Check a few things you know: a recurring event (the next three occurrences), an all-day event, an event in a
    different time zone, a birthday or a holiday.
@@ -78,7 +78,7 @@ not, unless you copy them into "Mes contacts" first *(verify)*.
 4. Use the **Doublons** tool if both versions exist.
 5. **Annuler l'import** undoes it if something is off.
 
-Until the optional "mirror" exists (phase 4 of the roadmap), the phone's own dialer and messages still use the
+Until the optional "mirror" exists (part of the same delivery), the phone's own dialer and messages still use the
 contacts kept in Google: nothing changes there. Do not turn Google's contact sync off before the mirror works and has been checked.
 
 ### Exporting contacts from the phone itself (alternative to Google)
