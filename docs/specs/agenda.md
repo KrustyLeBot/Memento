@@ -86,7 +86,7 @@ An occurrence moved or edited is a **separate event file** with `recurrence_of: 
 occurrence in its `exdate`, written at the same time. Deleting the exception file restores nothing by itself (the
 original occurrence stays excluded): "restore" is an explicit action that removes both.
 v1 ships the two edit scopes **"cet événement"** and **"tous les événements"**; **"celui-ci et les suivants"**
-(split the series with an `UNTIL` and start a new one) is phase 5.
+(split the series with an `UNTIL` and start a new one) comes later, on request.
 
 ### 3.3 Dated notes
 
@@ -108,7 +108,7 @@ How the calendar relates notes and events: **three ways were considered**
 | Option | How | Verdict |
 |---|---|---|
 | A. A date on a note | Note → calendar | Kept, section 3.3. |
-| B. An event links a note | Event has `note: <id>`, shows "Ouvrir la note" | Redundant when the event itself is a note; kept only as an optional `links: [id, id]` (chips on the event) for linking existing notes (phase 5). |
+| B. An event links a note | Event has `note: <id>`, shows "Ouvrir la note" | Redundant when the event itself is a note; kept only as an optional `links: [id, id]` (chips on the event) for linking existing notes (later, on request). |
 | C. The event *is* a note | Description = note body; everything notes can do, events can do | **Chosen**: no second text editor, attachments and drawings for free, links by id are trivial. |
 
 ### 3.4 Calendars (`agenda/calendars.json`, synced settings)
@@ -244,7 +244,7 @@ computed (no files). Tap opens the contact. If the year of birth is known, "(34 
 - Needs `POST_NOTIFICATIONS` on Android 13+ (the app already asks for it for other features).
 - Shown reminders are not duplicated when a sync brings the same event again (alarm key = event id + occurrence + offset).
 
-Windows: no reminders in v1 (the app is not resident). Phase 5 can add a tray mode.
+Windows: no reminders in v1 (the app is not resident). A tray mode could add them later.
 
 ## 5. Import
 

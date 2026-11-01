@@ -181,7 +181,7 @@ file sync for contacts, so it is a fallback only.
 ## 6. Migration from Google (the plan, steps in [import-guides.md](import-guides.md))
 
 1. Export the contacts from Google Contacts as vCard (keep that file: it is the backup).
-2. Import into the app (phase 1); check the count against Google's ("236 contacts").
+2. Import into the app; check the count against Google's ("236 contacts").
 3. Use the app's contacts for a few days next to Google's (no conflict, nothing is mirrored yet).
 4. Once the mirror is built: turn on the mirror, check the checklist above, then turn off Google's contact sync on the
    phone (Settings → Accounts → Google → Account sync → Contacts) and, only after keeping a fresh vCard, delete the contacts from Google.
