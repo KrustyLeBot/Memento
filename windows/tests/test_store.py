@@ -1,8 +1,8 @@
 import pytest
 import time
 
-from griffonote_win.core import note as fmt
-from griffonote_win.core.store import Store, now_ms
+from scriptorium_win.core import note as fmt
+from scriptorium_win.core.store import Store, now_ms
 
 
 def make(store, title, body=""):
@@ -58,8 +58,8 @@ def test_keep_conflict_copy_replaces_the_original(tmp_path):
 
 
 def test_deleting_a_scan_note_deletes_its_pdf(tmp_path):
-    from griffonote_win.core.note import Note
-    from griffonote_win.core.store import Store, now_ms
+    from scriptorium_win.core.note import Note
+    from scriptorium_win.core.store import Store, now_ms
     store = Store(tmp_path)
     (tmp_path / "attachments").mkdir()
     pdf = tmp_path / "attachments" / "scan-abc.pdf"
@@ -71,7 +71,7 @@ def test_deleting_a_scan_note_deletes_its_pdf(tmp_path):
 
 
 def test_atomic_write_leaves_no_temporary(tmp_path):
-    from griffonote_win.core import atomic
+    from scriptorium_win.core import atomic
 
     target = tmp_path / "sub" / "a.md"
     atomic.write_text(target, "one")
@@ -98,7 +98,7 @@ def test_attachments_are_copied_in_and_deleted_with_the_note(tmp_path):
 
 def test_importing_a_fit_file_creates_an_activity_in_its_own_folder(tmp_path):
     from pathlib import Path
-    from griffonote_win.core.store import Store
+    from scriptorium_win.core.store import Store
     store = Store(tmp_path)
     note = store.import_activity(Path(__file__).parent / "data" / "synthetic.fit", None, None)
     assert note.path.startswith("activities/")
@@ -118,7 +118,7 @@ def test_importing_a_fit_file_creates_an_activity_in_its_own_folder(tmp_path):
 
 
 def test_importing_a_gpx_file(tmp_path):
-    from griffonote_win.core.store import Store
+    from scriptorium_win.core.store import Store
     gpx = tmp_path / "ride.gpx"
     pts = "".join(f'<trkpt lat="{45 + i * 3 / 111320:.7f}" lon="6.0"><ele>{1000 + i}</ele><time>2024-01-01T10:{i // 60:02d}:{i % 60:02d}Z</time></trkpt>'
                   for i in range(120))
@@ -132,8 +132,8 @@ def test_importing_a_gpx_file(tmp_path):
 
 def test_reimporting_the_same_recording_replaces_the_activity_and_keeps_the_photos(tmp_path):
     from pathlib import Path
-    from griffonote_win.core.store import Store
-    from griffonote_win.core.track import Sport
+    from scriptorium_win.core.store import Store
+    from scriptorium_win.core.track import Sport
     store = Store(tmp_path)
     source = Path(__file__).parent / "data" / "synthetic.fit"
     first = store.import_activity(source, "Sortie du matin", Sport.GPS)
@@ -154,8 +154,8 @@ def test_reimporting_the_same_recording_replaces_the_activity_and_keeps_the_phot
 
 def test_filling_altitudes_in_bulk_skips_what_already_has_one(tmp_path, monkeypatch):
     from pathlib import Path
-    from griffonote_win.core import elevation
-    from griffonote_win.core.store import Store
+    from scriptorium_win.core import elevation
+    from scriptorium_win.core.store import Store
     gpx = tmp_path / "ski.gpx"
     pts = "".join(f'<trkpt lat="{45 + i * 8 / 111320:.7f}" lon="6.0"><time>2024-01-01T10:{i // 60:02d}:{i % 60:02d}Z</time></trkpt>'
                   for i in range(200))
@@ -182,9 +182,9 @@ def test_filling_altitudes_in_bulk_skips_what_already_has_one(tmp_path, monkeypa
 
 
 def test_activity_settings_default_to_everything_and_round_trip_through_the_folder(tmp_path):
-    from griffonote_win.core.settings import ActivitySettings
-    from griffonote_win.core.store import Store
-    from griffonote_win.core.track import Sport
+    from scriptorium_win.core.settings import ActivitySettings
+    from scriptorium_win.core.store import Store
+    from scriptorium_win.core.track import Sport
     store = Store(tmp_path)
     assert store.activity_settings().totals == set(Sport)
     assert store.activity_settings().refine_altitude is False

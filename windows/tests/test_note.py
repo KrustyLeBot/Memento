@@ -1,6 +1,6 @@
 import re
 
-from griffonote_win.core import note as fmt
+from scriptorium_win.core import note as fmt
 
 SAMPLE = """---
 id: x81bq0

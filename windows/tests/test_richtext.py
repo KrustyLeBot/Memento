@@ -2,7 +2,7 @@ import pytest
 from PySide6.QtGui import QFont, QTextDocument
 from PySide6.QtWidgets import QApplication
 
-from griffonote_win.ui import richtext
+from scriptorium_win.ui import richtext
 
 
 @pytest.fixture(scope="module")

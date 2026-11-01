@@ -1,13 +1,13 @@
-# Griffonote
+# Scriptorium
 
 A simple Google Keep replacement for Android. Every note is a plain Markdown file in a
-folder (`Documents/Griffonote/` by default), so notes can be read and edited on a PC
+folder (`Documents/Scriptorium/` by default), so notes can be read and edited on a PC
 (Obsidian, any editor) and synced by a separate app. The user never sees Markdown on the phone.
 
 ## Storage format
 
 ```
-Griffonote/
+Scriptorium/
 ├── courses-k3f9a2.md      # one file per note: YAML frontmatter + Markdown body
 ├── attachments/           # scanned PDFs (`pdf:`), attached files (`attachments:`) and activity tracks
 ├── activities/            # the "Activités" folder: one note per activity, kept out of the regular list
@@ -32,8 +32,8 @@ Griffonote/
 A note can hold sketches (editor toolbar, brush button): a page to draw on with a finger (phone) or the mouse
 (PC), with a pen in six colours and three widths, an eraser that removes whole strokes, undo/redo, and zoom and
 pan (two fingers on the phone; wheel and right/middle drag on the PC). A drawing is a plain SVG, `drawings/dessin-<id6>.svg`,
-listed in the note's `attachments:` like any file: any viewer opens it, and Griffonote reads back its own paths
-(`<path d="M… L…" stroke="#rrggbb" stroke-width="…">`, page marked `data-griffonote="1"`) to edit it again. Tap
+listed in the note's `attachments:` like any file: any viewer opens it, and Scriptorium reads back its own paths
+(`<path d="M… L…" stroke="#rrggbb" stroke-width="…">`, page marked `data-scriptorium="1"`, older drawings `data-griffonote="1"`) to edit it again. Tap
 the thumbnail in the note to edit; erasing everything removes the drawing. Deleting the note deletes its drawings.
 
 ## Activities
@@ -104,7 +104,7 @@ python -m pytest tests -q
 python run.py
 ```
 
-The CI builds `Griffonote.exe` (PyInstaller, one file) and publishes it next to the APK in the
+The CI builds `Scriptorium.exe` (PyInstaller, one file) and publishes it next to the APK in the
 `latest` release. The exe is not signed, so SmartScreen may warn the first time.
 
 ## Build
@@ -122,7 +122,7 @@ rolling `latest` release that the in-app updater reads.
 ```bash
 keytool -genkeypair -keystore griffonote.jks -alias griffonote \
   -keyalg RSA -keysize 4096 -validity 36500 \
-  -dname "CN=Griffonote, O=Griffonote, C=FR"
+  -dname "CN=Scriptorium, O=Scriptorium, C=FR"
 base64 -w0 griffonote.jks > griffonote.jks.b64
 ```
 

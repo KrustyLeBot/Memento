@@ -8,11 +8,11 @@ plugins {
 val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
 
 android {
-    namespace = "app.griffonote"
+    namespace = "app.scriptorium"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.griffonote"
+        applicationId = "app.scriptorium"
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber

@@ -1,4 +1,4 @@
-from griffonote_win.core import note as fmt
+from scriptorium_win.core import note as fmt
 
 
 def test_body_splits_and_rebuilds_checklist():

@@ -2,10 +2,10 @@ import math
 import unittest
 from pathlib import Path
 
-from griffonote_win.core import activity as act
-from griffonote_win.core import analysis, fit, gpx
-from griffonote_win.core import note as fmt
-from griffonote_win.core.track import Pause, Sport, Track, TrackPoint
+from scriptorium_win.core import activity as act
+from scriptorium_win.core import analysis, fit, gpx
+from scriptorium_win.core import note as fmt
+from scriptorium_win.core.track import Pause, Sport, Track, TrackPoint
 
 T0 = 1_700_000_000_000
 M = 111_320.0
@@ -193,7 +193,7 @@ class SportAndElevationTest(unittest.TestCase):
         self.assertEqual(Sport.SKI, Sport.guess(13))
 
     def test_terrain_elevation_makes_ski_runs_detectable_without_altitude(self):
-        from griffonote_win.core import elevation
+        from scriptorium_win.core import elevation
         strip = lambda ps: [TrackPoint(p.time, p.lat, p.lon) for p in ps]
         raw_down = leg(None, 120, 12.0)
         down = strip(raw_down)
@@ -218,6 +218,6 @@ class SportAndElevationTest(unittest.TestCase):
         self.assertLess(abs(res.stats.run_drop - 144.0), 25.0)
 
     def test_a_bad_answer_is_an_error(self):
-        from griffonote_win.core import elevation
+        from scriptorium_win.core import elevation
         with self.assertRaises(elevation.ElevationError):
             elevation.query(leg(None, 100, 5.0)[:3], get=lambda url: '{"error": "quota"}', pause=lambda: None)

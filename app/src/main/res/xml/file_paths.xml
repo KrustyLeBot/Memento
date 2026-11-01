@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="updates" path="updates/" />
-    <!-- Scanned PDFs of the default notes folder (Documents/Griffonote/attachments), opened in a PDF viewer. -->
+    <!-- Scanned PDFs of the default notes folder (Documents/Scriptorium/attachments), opened in a PDF viewer. -->
     <external-path name="storage" path="." />
 </paths>

@@ -1,4 +1,4 @@
-"""Draws the Griffonote icon, the same as the Android launcher icon (amber gradient, white note sheet), as icon.png and icon.ico.
+"""Draws the Scriptorium icon, the same as the Android launcher icon (amber gradient, white note sheet), as icon.png and icon.ico.
 
 Usage: python tools/make_icon.py   (needs PySide6 and Pillow)
 """
@@ -24,7 +24,7 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72">
   </g>
 </svg>"""
 
-out = Path(__file__).resolve().parent.parent / "griffonote_win" / "assets"
+out = Path(__file__).resolve().parent.parent / "scriptorium_win" / "assets"
 out.mkdir(parents=True, exist_ok=True)
 app = QGuiApplication(sys.argv)
 image = QImage(256, 256, QImage.Format.Format_ARGB32)

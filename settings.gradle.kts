@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "griffonote"
+rootProject.name = "scriptorium"
 include(":app")

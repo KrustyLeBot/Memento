@@ -3,12 +3,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from griffonote_win.core import note as fmt
-from griffonote_win.core.store import Store, now_ms
-from griffonote_win.services import updater
-from griffonote_win.ui import theme
-from griffonote_win.ui.main_window import MainWindow
-from griffonote_win.ui.update_toast import UpdateToast
+from scriptorium_win.core import note as fmt
+from scriptorium_win.core.store import Store, now_ms
+from scriptorium_win.services import updater
+from scriptorium_win.ui import theme
+from scriptorium_win.ui.main_window import MainWindow
+from scriptorium_win.ui.update_toast import UpdateToast
 
 
 class FakeConfig:
@@ -256,7 +256,7 @@ def test_change_on_the_share_is_picked_up_without_a_watcher_event(window, tmp_pa
 
 def test_activities_screen_lists_and_opens_an_activity(window, tmp_path, monkeypatch):
     from pathlib import Path
-    from griffonote_win.ui import trackmap
+    from scriptorium_win.ui import trackmap
     monkeypatch.setattr(trackmap.TileCache, "get", lambda self, z, x, y: None)  # no network in tests
     note = window.store.import_activity(Path(__file__).parent / "data" / "synthetic.fit", "Sortie vélo", None)
     window.refresh()

@@ -59,12 +59,12 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Stage the APK
-        run: cp app/build/outputs/apk/release/app-release.apk griffonote.apk
+        run: cp app/build/outputs/apk/release/app-release.apk scriptorium.apk
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: griffonote-android
-          path: griffonote.apk
+          name: scriptorium-android
+          path: scriptorium.apk
           retention-days: 7
 
   # Windows client: tests, then a single-file exe (every event, nothing published here).
@@ -84,21 +84,21 @@ jobs:
         run: pip install -r requirements.txt pyinstaller pytest
       - name: Stamp the build number (same as the Android version code)
         shell: bash
-        run: echo "BUILD = ${{ github.run_number }}" > griffonote_win/_version.py
+        run: echo "BUILD = ${{ github.run_number }}" > scriptorium_win/_version.py
       - name: Tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests -q
       - name: Build the exe
         run: >
-          pyinstaller --noconfirm --onefile --windowed --name Griffonote
-          --icon griffonote_win/assets/icon.ico
-          --add-data "griffonote_win/assets;griffonote_win/assets"
+          pyinstaller --noconfirm --onefile --windowed --name Scriptorium
+          --icon scriptorium_win/assets/icon.ico
+          --add-data "scriptorium_win/assets;scriptorium_win/assets"
           run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: griffonote-windows
-          path: windows/dist/Griffonote.exe
+          name: scriptorium-windows
+          path: windows/dist/Scriptorium.exe
           retention-days: 7
 
   # One "latest" release carrying both apps, published only when both builds succeeded.
@@ -119,8 +119,8 @@ jobs:
         shell: bash
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest dist/griffonote-android/griffonote.apk dist/griffonote-windows/Griffonote.exe \
-            --title "Griffonote build ${{ github.run_number }}" \
+          gh release create latest dist/scriptorium-android/scriptorium.apk dist/scriptorium-windows/Scriptorium.exe \
+            --title "Scriptorium build ${{ github.run_number }}" \
             --notes "Build ${{ github.run_number }} of commit ${{ github.sha }}." \
             --target "${{ github.sha }}" \
             --latest
