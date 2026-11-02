@@ -77,9 +77,15 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   followed with a 5 minute time constant). The consolidated altitude is the standard FIT field; the raw GPS
   altitude and the pressure are kept as developer fields (`gps_altitude`, `pressure`).
 - GPS rate while recording: 5 s walking, 2 s cycling and skiing, 3 s other; "Économie de batterie" uses 12 s.
-- The map is OpenStreetMap raster tiles drawn by hand (no map library, no web engine), cached on disk (100 MB at
-  most, oldest purged) and fetched only online; offline only the track is drawn. Tiles are requested with an
-  identifying User-Agent, as the tile usage policy asks.
+- The map is one web page shared by both apps (`web/map/`, MapLibre GL JS 4.7.1 vendored): Plan IGN on the
+  Terrarium elevation model, in 3D (default) as a square block cut out of the relief around the track (side = the
+  track's larger side + 25 %, at least 1 km), or flat in 2D; the switch is a native control and is remembered. The
+  track is coloured by its speed relative to the mean (red slow, yellow mean, green fast), ski days keep their
+  descents/climbs colours; up to 12 summits (IGN BD TOPO + IGN altimetry, spread out) are labelled. The page asks
+  its host for everything under one base URL (`t/plan|dem/{z}/{x}/{y}`, `peaks?w&s&e&n`): the host fetches with an
+  identifying User-Agent and keeps a disk cache (300 MB, least recently used purged), so what was seen once works
+  offline. Where IGN has no tile (abroad) the OpenStreetMap tile is served instead. `web/map/dev/serve.py` serves
+  the page with these endpoints for development (`python web/map/dev/serve.py`, then drive `window.SMap`).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
 
@@ -104,7 +110,8 @@ python -m pytest tests -q
 python run.py
 ```
 
-The CI builds `Scriptorium.exe` (PyInstaller, one file) and publishes it next to the APK in the
+The CI builds `Scriptorium.exe` with `pyinstaller --noconfirm scriptorium.spec` (one file; the spec keeps only the
+Qt parts the app loads, Qt WebEngine for the map included) and publishes it next to the APK in the
 `latest` release. The exe is not signed, so SmartScreen may warn the first time.
 
 ## Build

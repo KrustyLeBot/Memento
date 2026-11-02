@@ -11,12 +11,13 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
                                QToolButton, QVBoxLayout, QWidget)
 
 from ..core import activity as act
+from ..core import mapdata
 from ..core.analysis import Analysis, analyze
 from ..core.note import Note
 from ..core.store import Store
 from ..core.track import Sport
 from . import icons, theme
-from .trackmap import TrackMap
+from .mapview import MapPanel
 
 EMOJI = {Sport.WALK: "🚶", Sport.BIKE: "🚴", Sport.EBIKE: "⚡", Sport.SKI: "⛷️", Sport.GPS: "📍", Sport.PLAIN: "⏱️"}
 GPS_SPORTS = (Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS)
@@ -71,6 +72,18 @@ def summary_line(i: act.ActivityInfo) -> str:
 CLIMB = QColor("#00B0FF")
 
 
+def page_lines(chunks) -> list[dict]:
+    """map_lines' chunks in the map page's shape (setLines)."""
+    return [{"coords": [[lon, lat] for lat, lon in points], "color": color.name()} for points, color in chunks]
+
+
+def page_track(a: Analysis) -> dict:
+    """The whole track with its speeds (setTrack), thinned to 5000 points like the Android host does."""
+    s = [a.samples[i] for i in mapdata.thin_indices(len(a.samples), 5000)]
+    speeds, avg = mapdata.track_speeds([p.time for p in s], [p.lat for p in s], [p.lon for p in s], [p.speed for p in s])
+    return {"coords": [[p.lon, p.lat] for p in s], "speeds": speeds, "avg": avg}
+
+
 def map_lines(a: Analysis, ski: bool, mode: str = "both"):
     """Chunks of the track coloured from violet (slow) to red (fast). Skiing: descents in that gradient and climbs
     in blue ("both"), descents only ("down"), or everything with the rest in grey ("all")."""
@@ -106,11 +119,14 @@ def map_lines(a: Analysis, ski: bool, mode: str = "both"):
 
 
 class Chart(QWidget):
-    """A filled line chart with its extremes written above."""
+    """A filled line chart with its extremes written above. Hovering it emits the position under the mouse
+    (`coords[i]` as (lon, lat), None when the mouse leaves), which the map shows as a cursor."""
+    hovered = Signal(object)
 
-    def __init__(self, title: str, xs: list[float], ys: list[float], low: str, high: str, color: str):
+    def __init__(self, title: str, xs: list[float], ys: list[float], low: str, high: str, color: str,
+                 coords: list[tuple[float, float]] | None = None):
         super().__init__()
-        self.xs, self.ys, self.color = xs, ys, QColor(color)
+        self.xs, self.ys, self.color, self.coords = xs, ys, QColor(color), coords
         s = theme.scheme()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -132,6 +148,19 @@ class _ChartCanvas(QWidget):
         super().__init__()
         self.chart = chart
         self.setFixedHeight(110)
+        self.setMouseTracking(chart.coords is not None)
+
+    def mouseMoveEvent(self, event) -> None:
+        xs, coords = self.chart.xs, self.chart.coords
+        if not coords or len(xs) < 2 or self.width() <= 0:
+            return
+        x = xs[0] + max(0.0, min(1.0, event.position().x() / self.width())) * (xs[-1] - xs[0])
+        i = min(range(len(xs)), key=lambda k: abs(xs[k] - x))
+        self.chart.hovered.emit(coords[i])
+
+    def leaveEvent(self, event) -> None:
+        if self.chart.coords:
+            self.chart.hovered.emit(None)
 
     def paintEvent(self, event) -> None:
         xs, ys = self.chart.xs, self.chart.ys
@@ -310,6 +339,8 @@ class ActivitiesScreen(QWidget):
         self.selected: set[str] = set()
         self.included: set[Sport] = set(Sport)  # sports counted in the totals (settings)
         self.current: Note | None = None
+        self.config = None  # set by the window: remembers the map's 3D/2D choice
+        self.map_panel: MapPanel | None = None
         self.stack = QStackedWidget()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -372,7 +403,31 @@ class ActivitiesScreen(QWidget):
 
     def restyle(self) -> None:
         self.back.setIcon(icons.icon("back", theme.scheme().on_surface, 22))
+        if self.map_panel is not None:
+            self.map_panel.restyle()
         self.rebuild()
+
+    # ---- map (one page kept for every activity) ----
+
+    def preload_map(self) -> None:
+        self._map()
+
+    def _map(self) -> MapPanel:
+        if self.map_panel is None:
+            self.map_panel = MapPanel(getattr(self.config, "map_mode", "3d"), self)
+            self.map_panel.hide()
+            self.map_panel.mode_changed.connect(self._map_mode_changed)
+        return self.map_panel
+
+    def _map_mode_changed(self, mode: str) -> None:
+        if self.config is not None:
+            self.config.map_mode = mode
+
+    def _park_map(self) -> None:
+        """Takes the map out of the detail page before that page is deleted, so the loaded view survives."""
+        if self.map_panel is not None and self.map_panel.parent() is not self:
+            self.map_panel.hide()
+            self.map_panel.setParent(self)
 
     def set_included(self, sports: set[Sport]) -> None:
         self.included = set(sports)
@@ -512,12 +567,14 @@ class ActivitiesScreen(QWidget):
 
     def show_list(self) -> None:
         self.current = None
+        self._park_map()
         self.stack.setCurrentWidget(self.list_page)
 
     def open_activity(self, note: Note) -> None:
         if self.store is None or note.activity is None:
             return
         self.current = note
+        self._park_map()
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():
@@ -575,22 +632,28 @@ class ActivitiesScreen(QWidget):
             col.addWidget(frame)
 
         ski = info.sport == Sport.SKI
-        if analysis is not None:
-            lines = map_lines(analysis, ski, False)
-            if lines:
-                tmap = TrackMap()
-                samples = analysis.samples
-                tmap.set_data(lines, [(samples[0].lat, samples[0].lon, QColor("#00C853")), (samples[-1].lat, samples[-1].lon, QColor("#FF1744"))])
-                col.addWidget(tmap)
-                if ski:
-                    modes = QComboBox()
-                    for label, key in (("Descentes + montées (en bleu)", "both"), ("Descentes seulement", "down"), ("Tout le tracé", "all")):
-                        modes.addItem(label, key)
-
-                    def switch(_i: int, m=tmap, a=analysis, sm=samples, box=modes) -> None:
-                        m.set_data(map_lines(a, True, box.currentData()), [(sm[0].lat, sm[0].lon, QColor("#00C853")), (sm[-1].lat, sm[-1].lon, QColor("#FF1744"))])
-                    modes.currentIndexChanged.connect(switch)
-                    col.addWidget(modes)
+        panel = None
+        if analysis is not None and len(analysis.samples) >= 2:
+            samples = analysis.samples
+            panel = self._map()
+            dots = [{"lon": samples[0].lon, "lat": samples[0].lat, "color": "#00C853"},
+                    {"lon": samples[-1].lon, "lat": samples[-1].lat, "color": "#FF1744"}]
+            if ski:
+                # the square is the whole day's, whichever lines the selector shows
+                lats, lons = [p.lat for p in samples], [p.lon for p in samples]
+                square = list(mapdata.square_of(min(lons), min(lats), max(lons), max(lats)))
+                panel.show_activity(lines=page_lines(map_lines(analysis, True)), dots=dots, square=square)
+            else:
+                panel.show_activity(track=page_track(analysis), dots=dots)
+            col.addWidget(panel)
+            panel.show()
+            if ski:
+                modes = QComboBox()
+                for label, key in (("Descentes + montées (en bleu)", "both"), ("Descentes seulement", "down"), ("Tout le tracé", "all")):
+                    modes.addItem(label, key)
+                modes.currentIndexChanged.connect(
+                    lambda _i, p=panel, a=analysis, box=modes: p.set_lines(page_lines(map_lines(a, True, box.currentData()))))
+                col.addWidget(modes)
 
         frame, lay = card("Résumé")
         items = []
@@ -650,21 +713,28 @@ class ActivitiesScreen(QWidget):
                 col.addWidget(frame)
             idx = thin(len(analysis.samples))
             samples = analysis.samples
+
+            def linked(chart: Chart) -> Chart:
+                if panel is not None:
+                    chart.hovered.connect(lambda c, p=panel: p.set_cursor(*(c if c else (None, None))))
+                return chart
+            at = lambda ids: [(samples[i].lon, samples[i].lat) for i in ids]  # noqa: E731
             if analysis.quality.has_altitude and len(idx) >= 2 and all(samples[i].alt is not None for i in idx):
                 frame, lay = card()
-                lay.addWidget(Chart("Altitude", [samples[i].dist for i in idx], [samples[i].alt for i in idx],
-                                    f"{round(analysis.stats.min_alt or 0)} m", f"{round(analysis.stats.max_alt or 0)} m", s.primary))
+                lay.addWidget(linked(Chart("Altitude", [samples[i].dist for i in idx], [samples[i].alt for i in idx],
+                                           f"{round(analysis.stats.min_alt or 0)} m", f"{round(analysis.stats.max_alt or 0)} m", s.primary, at(idx))))
                 col.addWidget(frame)
             if len(idx) >= 2 and analysis.stats.max_speed > 0:
                 frame, lay = card()
-                lay.addWidget(Chart("Allure" if info.sport == Sport.WALK else "Vitesse", [samples[i].dist for i in idx],
-                                    [samples[i].speed * 3.6 for i in idx], "0 km/h", act.fmt_speed(analysis.stats.max_speed), "#2E7DF6"))
+                lay.addWidget(linked(Chart("Allure" if info.sport == Sport.WALK else "Vitesse", [samples[i].dist for i in idx],
+                                           [samples[i].speed * 3.6 for i in idx], "0 km/h", act.fmt_speed(analysis.stats.max_speed), "#2E7DF6", at(idx))))
                 col.addWidget(frame)
             hr_idx = [i for i in idx if samples[i].hr is not None]
             if analysis.quality.has_hr and len(hr_idx) >= 2:
                 frame, lay = card()
-                lay.addWidget(Chart("Fréquence cardiaque", [samples[i].dist for i in hr_idx], [float(samples[i].hr) for i in hr_idx],
-                                    f"{min(x.hr for x in samples if x.hr is not None)} bpm", f"{analysis.stats.hr_max or 0} bpm", "#E5484D"))
+                lay.addWidget(linked(Chart("Fréquence cardiaque", [samples[i].dist for i in hr_idx], [float(samples[i].hr) for i in hr_idx],
+                                           f"{min(x.hr for x in samples if x.hr is not None)} bpm", f"{analysis.stats.hr_max or 0} bpm", "#E5484D",
+                                           at(hr_idx))))
                 col.addWidget(frame)
 
         frame, lay = card("Photos")

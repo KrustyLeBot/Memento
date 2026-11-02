@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self.editor = EditorScreen()
         self.settings = SettingsScreen()
         self.activities = ActivitiesScreen()
+        self.activities.config = config
         for page in (self.list_screen, self.editor, self.settings, self.activities):
             self.stack.addWidget(page)
         self.setCentralWidget(self.stack)
@@ -120,6 +121,7 @@ class MainWindow(QMainWindow):
         if not updater.cleanup_previous():
             self._cleanup_timer.start(2000)  # retry every 2 s ...
         QTimer.singleShot(5000, self.check_updates)  # first check shortly after the start
+        QTimer.singleShot(1500, self.activities.preload_map)  # the map page loads while nothing else happens
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self.check_updates)
         self._update_timer.start(6 * 3600 * 1000)  # ... then every 6 hours

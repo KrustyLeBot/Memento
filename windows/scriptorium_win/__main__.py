@@ -18,8 +18,10 @@ def main() -> int:
     from .config import Config
     from .core.store import Store
     from .ui import theme
+    from .services import maphost
     from .ui.main_window import MainWindow, ask_workdir
 
+    maphost.register_scheme()  # before the QApplication, as Qt requires
     app = QApplication(sys.argv)
     app.setApplicationName("Scriptorium")
     app.setStyle("Fusion")
@@ -38,7 +40,9 @@ def main() -> int:
 
     window = MainWindow(config, Store(workdir))
     window.show()
-    return app.exec()
+    code = app.exec()
+    del window  # the map's pages must go before the QApplication takes their web profile with it
+    return code
 
 
 if __name__ == "__main__":

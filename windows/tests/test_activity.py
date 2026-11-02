@@ -174,12 +174,6 @@ class InfoTest(unittest.TestCase):
         self.assertEqual("5:00 /km", act.fmt_pace(3.3333))
         self.assertEqual("36,0 km/h", act.fmt_speed(10.0))
 
-    def test_mercator_round_trips(self):
-        x, y = act.world_x(6.0, 12), act.world_y(45.0, 12)
-        self.assertAlmostEqual(6.0, act.lon_of(x, 12), places=9)
-        self.assertAlmostEqual(45.0, act.lat_of(y, 12), places=9)
-        self.assertTrue(12 <= act.fit_zoom(45.0, 6.0, 45.01, 6.01, 800, 600) <= 17)
-
 
 if __name__ == "__main__":
     unittest.main()

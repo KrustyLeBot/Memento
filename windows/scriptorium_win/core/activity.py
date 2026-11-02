@@ -1,8 +1,7 @@
-"""What the note frontmatter says about an activity, display helpers and the slippy-map maths."""
+"""What the note frontmatter says about an activity, and display helpers."""
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 
 from .analysis import Analysis
@@ -117,35 +116,3 @@ def fmt_pace(ms: float) -> str:
 
 def fmt_speed_for(sport: Sport, ms: float) -> str:
     return fmt_pace(ms) if sport == Sport.WALK else fmt_speed(ms)
-
-
-# ---- Web Mercator ----
-
-TILE = 256
-MIN_ZOOM, MAX_ZOOM = 2, 18
-
-
-def world_x(lon: float, zoom: float) -> float:
-    return (lon + 180.0) / 360.0 * 2.0 ** zoom
-
-
-def world_y(lat: float, zoom: float) -> float:
-    r = math.radians(max(-85.0511, min(85.0511, lat)))
-    return (1 - math.log(math.tan(r) + 1 / math.cos(r)) / math.pi) / 2 * 2.0 ** zoom
-
-
-def lon_of(x: float, zoom: float) -> float:
-    return x / 2.0 ** zoom * 360.0 - 180.0
-
-
-def lat_of(y: float, zoom: float) -> float:
-    n = math.pi - 2 * math.pi * y / 2.0 ** zoom
-    return math.degrees(math.atan(math.sinh(n)))
-
-
-def fit_zoom(min_lat, min_lon, max_lat, max_lon, width_px, height_px) -> float:
-    w = max(world_x(max_lon, 0) - world_x(min_lon, 0), 1e-9)
-    h = max(world_y(min_lat, 0) - world_y(max_lat, 0), 1e-9)
-    zx = math.log2(width_px * 0.85 / TILE / w)
-    zy = math.log2(height_px * 0.85 / TILE / h)
-    return max(MIN_ZOOM, min(17.0, zx, zy))

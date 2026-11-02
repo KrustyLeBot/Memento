@@ -38,6 +38,16 @@ class Config:
         self._settings.sync()
 
     @property
+    def map_mode(self) -> str:
+        """Last 3D/2D choice of the activity map."""
+        return "2d" if str(self._settings.value("map_mode", "3d")) == "2d" else "3d"
+
+    @map_mode.setter
+    def map_mode(self, value: str) -> None:
+        self._settings.setValue("map_mode", value)
+        self._settings.sync()
+
+    @property
     def theme(self) -> str:
         return str(self._settings.value("theme", "system"))
 

@@ -13,4 +13,5 @@ __pycache__/
 windows/build/
 windows/dist/
 *.spec
+!windows/scriptorium.spec
 .pytest_cache/
