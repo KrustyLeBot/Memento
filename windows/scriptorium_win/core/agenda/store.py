@@ -136,6 +136,10 @@ class AgendaStore:
         self._ids = {e.id for e in result.events}
         return result
 
+    def remember_ids(self, ids: set[str]) -> None:
+        """The ids found by a scan made elsewhere (the window's incremental one): `save` keeps avoiding them."""
+        self._ids = set(ids)
+
     def calendars(self) -> CalendarSettings:
         text = self.fs.read_text(CALENDARS_PATH)
         return CalendarSettings.parse(text) if text is not None else CalendarSettings()

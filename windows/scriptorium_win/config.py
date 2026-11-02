@@ -84,3 +84,49 @@ class Config:
     def hidden_modules(self, value: set[str]) -> None:
         self._settings.setValue("hidden_modules", ",".join(sorted(value)))
         self._settings.sync()
+
+    # ---- agenda (settings of this PC; calendars and layers sync in agenda/calendars.json) ----
+
+    @property
+    def agenda_week_start(self) -> int:
+        """First day of the week in the agenda: 0 = Monday, 6 = Sunday."""
+        return 6 if str(self._settings.value("agenda_week_start", "0")) == "6" else 0
+
+    @agenda_week_start.setter
+    def agenda_week_start(self, value: int) -> None:
+        self._settings.setValue("agenda_week_start", str(value))
+        self._settings.sync()
+
+    @property
+    def agenda_event_zone(self) -> bool:
+        """"Afficher les heures dans le fuseau de l'événement" instead of the device's."""
+        return str(self._settings.value("agenda_event_zone", "false")).lower() == "true"
+
+    @agenda_event_zone.setter
+    def agenda_event_zone(self, value: bool) -> None:
+        self._settings.setValue("agenda_event_zone", "true" if value else "false")
+        self._settings.sync()
+
+    @property
+    def agenda_default_alerts(self) -> list[int]:
+        """Reminders a new event starts with, in minutes relative to its start (negative = before)."""
+        out = []
+        for part in str(self._settings.value("agenda_default_alerts", "")).split(","):
+            if part.strip().lstrip("-").isdigit():
+                out.append(int(part))
+        return out
+
+    @agenda_default_alerts.setter
+    def agenda_default_alerts(self, value: list[int]) -> None:
+        self._settings.setValue("agenda_default_alerts", ",".join(str(v) for v in value))
+        self._settings.sync()
+
+    @property
+    def agenda_view(self) -> str:
+        value = str(self._settings.value("agenda_view", "agenda"))
+        return value if value in ("agenda", "month", "week", "day") else "agenda"
+
+    @agenda_view.setter
+    def agenda_view(self, value: str) -> None:
+        self._settings.setValue("agenda_view", value)
+        self._settings.sync()

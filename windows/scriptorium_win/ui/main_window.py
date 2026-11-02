@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         self.settings = SettingsScreen()
         self.activities = ActivitiesScreen()
         self.activities.config = config
-        self.agenda = AgendaScreen()
+        self.agenda = AgendaScreen(config)
         self.contacts = ContactsScreen()
         for page in (self.list_screen, self.editor, self.settings, self.activities, self.agenda, self.contacts):
             self.stack.addWidget(page)
@@ -108,6 +108,12 @@ class MainWindow(QMainWindow):
         self.activities.reveal_file.connect(self.reveal_attachment)
         self.activities.message.connect(self.show_snack)
         self.contacts.message.connect(self.show_snack)
+        self.agenda.message.connect(self.show_snack)
+        self.agenda.changed.connect(self.refresh)
+        self.agenda.open_note.connect(self.open_note)
+        self.agenda.open_activity.connect(self.open_activity)
+        self.agenda.open_contact.connect(self.open_contact)
+        self.settings.agenda_changed.connect(self._agenda_settings_changed)
         self.contacts.set_first_name_first(bool(getattr(config, "contacts_first_name_first", False)))
         self.settings.contacts_order.connect(self._contacts_order_changed)
         self.settings.back_requested.connect(lambda: self.show_module(self.module))
@@ -185,6 +191,7 @@ class MainWindow(QMainWindow):
         self.settings.load(str(self.store.root), self.list_screen.grid, self.config.theme, self.store.activity_settings(),
                            self.config.hidden_modules)
         self.settings.set_contacts_first_name_first(self.contacts.first_name_first)
+        self.settings.load_agenda(self.agenda.prefs, self.agenda.data.settings)
         self.rail.set_current(None)
         self.stack.setCurrentWidget(self.settings)
 
@@ -200,6 +207,8 @@ class MainWindow(QMainWindow):
                 self.contacts.show_list()
             elif self.contacts.search.text():
                 self.contacts.search.clear()
+        elif current is self.agenda and self.agenda.search.text():
+            self.agenda.search.clear()
         elif current is self.list_screen and self.list_screen.search.text():
             self.list_screen.search.clear()
 
@@ -208,6 +217,8 @@ class MainWindow(QMainWindow):
             self.list_screen.focus_search()
         elif self.stack.currentWidget() is self.contacts:
             self.contacts.focus_search()
+        elif self.stack.currentWidget() is self.agenda:
+            self.agenda.focus_search()
 
     # ---- store / list ----
 
@@ -228,7 +239,11 @@ class MainWindow(QMainWindow):
         root = str(self.store.root)
         if root not in self.watcher.directories():
             self.watcher.addPath(root)
-        for sub in ("activities", "contacts"):
+        subs = ["activities", "contacts", "agenda"]
+        agenda = self.store.root / "agenda"
+        if agenda.is_dir():
+            subs += [f"agenda/{p.name}" for p in agenda.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        for sub in subs:
             path = str(self.store.root / sub)
             if (self.store.root / sub).is_dir() and path not in self.watcher.directories():
                 self.watcher.addPath(path)
@@ -250,8 +265,8 @@ class MainWindow(QMainWindow):
         latest = max((n for n in acts if n.activity), key=lambda n: n.activity.start, default=None)
         self.list_screen.set_activity_summary(
             f"Dernière : {latest.title} · {summary_line(latest.activity)}" if latest else "Aucune activité pour l'instant")
-        self.agenda.refresh()
         self.contacts.refresh()
+        self.agenda.refresh(self.notes, acts)
 
     def _poll_disk(self) -> None:
         snapshot = self.store.snapshot()
@@ -267,6 +282,35 @@ class MainWindow(QMainWindow):
         self.store.save_activity_settings(settings)
         self.activities.set_included(settings.totals)
 
+    def open_activity(self, note: Note) -> None:
+        self.show_module("activities")
+        self.activities.open_activity(note)
+
+    def open_contact(self, contact_id: str) -> None:
+        self.show_module("contacts")
+        self.store.scan_contacts()
+        contact = self.store.contacts.by_id(contact_id)
+        if contact is None:
+            self.show_snack("Contact introuvable (supprimé ?)")
+            return
+        self.contacts.show_contact(contact)
+
+    def _agenda_settings_changed(self, change: dict) -> None:
+        """From the settings page: this PC's preferences (QSettings) or the synced ones (calendars.json)."""
+        prefs = self.agenda.prefs
+        if "week_start" in change:
+            self.config.agenda_week_start = prefs.week_start = change["week_start"]
+        if "event_zone_times" in change:
+            self.config.agenda_event_zone = prefs.event_zone_times = change["event_zone_times"]
+        if "default_alerts" in change:
+            prefs.default_alerts = list(change["default_alerts"])
+            self.config.agenda_default_alerts = prefs.default_alerts
+        if "default_calendar" in change:
+            self.agenda.set_default_calendar(change["default_calendar"])
+        if "birthdays" in change:
+            self.agenda.set_layer("birthdays", visible=change["birthdays"])
+        self.agenda.apply_prefs(prefs)
+
     def _contacts_order_changed(self, first_name_first: bool) -> None:
         self.config.contacts_first_name_first = first_name_first
         self.contacts.set_first_name_first(first_name_first)
@@ -278,7 +322,7 @@ class MainWindow(QMainWindow):
     def _theme_changed(self, mode: str) -> None:
         self.config.theme = mode
         theme.apply_theme(QApplication.instance(), mode)
-        for screen in (self.list_screen, self.settings, self.activities, self.contacts, self.rail):
+        for screen in (self.list_screen, self.settings, self.activities, self.contacts, self.agenda, self.rail):
             screen.restyle()
         self.list_screen.rebuild()
 
@@ -336,7 +380,7 @@ class MainWindow(QMainWindow):
 
             self.show_snack("Note supprimée", undo)
         self.refresh()
-        self.show_list()
+        self.show_module(self.module)
 
     # ---- snackbar ----
 
