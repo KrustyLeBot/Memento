@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QDate, QEvent, QTime
+from PySide6.QtCore import QDate, QEvent, Qt, QTime
 from PySide6.QtWidgets import QApplication, QDialog
 
 from agenda_ui_data import ZONE, at, populate
@@ -203,6 +203,18 @@ def test_navigation_keys_and_today(filled, app):
     screen.set_view("week")
     screen.step(-1)
     assert screen.anchor == today - timedelta(days=7)
+    # T and the arrows are the agenda's own keys, but typing in its search field still types
+    from PySide6.QtTest import QTest
+    # Activating the window lets the grid's pending scroll_to_now run; a QTimer.singleShot on a bound method
+    # with no context object outlived the deleted view and crashed PySide 6.12 later (Signal::updateSourceObject).
+    window.activateWindow()
+    assert QTest.qWaitForWindowActive(window)
+    screen.search.setFocus()
+    QTest.keyClicks(screen.search, "Tt")
+    QTest.keyClick(screen.search, Qt.Key.Key_Left)
+    assert screen.search.text() == "Tt" and screen.search.cursorPosition() == 1
+    assert screen.anchor == today - timedelta(days=7)
+    screen.search.clear()
 
 
 # ---- opening ----

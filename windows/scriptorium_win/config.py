@@ -17,6 +17,21 @@ class Config:
     @workdir.setter
     def workdir(self, path: Path) -> None:
         self._settings.setValue("workdir", str(path))
+        # A folder chosen while empty (a new start) is not asked about again at every launch while it stays so.
+        try:
+            empty = path.is_dir() and not any(path.iterdir())
+        except OSError:
+            empty = False
+        self._settings.setValue("empty_workdir", str(path) if empty else "")
+        self._settings.sync()
+
+    @property
+    def empty_workdir(self) -> str:
+        """The folder the user chose although it was empty ("" when none)."""
+        return str(self._settings.value("empty_workdir", ""))
+
+    def forget_empty_workdir(self) -> None:
+        self._settings.setValue("empty_workdir", "")
         self._settings.sync()
 
     @property
