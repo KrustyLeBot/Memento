@@ -113,7 +113,8 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(300.dp).clip(RoundedCornerShape(16.dp)),
                 )
                 if (ski) {
-                    Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Scrolls rather than squeezing the last chip on narrow phones.
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = skiMap == SkiMap.BOTH, onClick = { skiMap = SkiMap.BOTH }, label = { Text("Descentes + montées") })
                         FilterChip(selected = skiMap == SkiMap.DOWN, onClick = { skiMap = SkiMap.DOWN }, label = { Text("Descentes") })
                         FilterChip(selected = skiMap == SkiMap.ALL, onClick = { skiMap = SkiMap.ALL }, label = { Text("Tout") })

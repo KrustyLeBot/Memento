@@ -14,7 +14,7 @@
     light: { bg: '#ffffff', band: '#d6d8da', frame: '#3a3f45', route: '#7d848d', casing: 'rgba(0,0,0,0.55)',
              brightness: 1, saturation: 0 },
     dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1', route: '#a3aab3', casing: 'rgba(0,0,0,0.85)',
-            brightness: 0.78, saturation: -0.25 },
+            brightness: 1, saturation: 0 },  // the IGN map keeps its real colours in dark mode too
   };
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
@@ -642,7 +642,32 @@
       const popup = new maplibregl.Popup({ offset: 34, closeButton: false, maxWidth: '240px' }).setDOMContent(card);
       return new maplibregl.Marker({ element: root, anchor: 'bottom' }).setLngLat([p.lon, p.lat]).setPopup(popup).addTo(map);
     });
+    declutter();
   }
+
+  // Labels are DOM markers, so MapLibre does not avoid collisions for them: hide those that overlap a more
+  // important one (the list comes sorted by importance), leave the screen, or sit under the top overlays.
+  const TOP_RESERVED = 64;
+  let declutterFrame = 0;
+  function declutter() {
+    if (declutterFrame) return;
+    declutterFrame = requestAnimationFrame(() => {
+      declutterFrame = 0;
+      const box = map.getContainer().getBoundingClientRect();
+      const kept = [];
+      for (const m of peakMarkers) {
+        const root = m.getElement();
+        root.style.visibility = 'visible';
+        const r = root.querySelector('.label').getBoundingClientRect();
+        const off = r.top < box.top + TOP_RESERVED || r.left < box.left || r.right > box.right || r.bottom > box.bottom;
+        const hit = kept.some((k) => !(r.right + 4 < k.left || r.left - 4 > k.right || r.bottom + 4 < k.top || r.top - 4 > k.bottom));
+        if (off || hit) root.style.visibility = 'hidden';
+        else kept.push(r);
+      }
+    });
+  }
+  map.on('move', declutter);
+  map.on('resize', declutter);
 
   // MapLibre changes the camera's elevation while rendering (DEM tiles arriving) and the ground under a marker
   // when its DEM tile loads, both without a move event: the DOM markers would stay where they were drawn, off the
@@ -654,6 +679,7 @@
       markerFrame = 0;
       if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
       peakMarkers.forEach((m) => m.setLngLat(m.getLngLat()));
+      declutter();
     });
   }
   map.on('render', () => {
