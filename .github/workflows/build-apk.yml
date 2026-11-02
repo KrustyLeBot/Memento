@@ -141,6 +141,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build the image, pushed from main only
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false # no build-record artifact next to the apps' ones
         with:
           context: .
           file: webapp/Dockerfile
@@ -164,9 +166,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # only the two apps: the Docker job's build record is not a zip and makes a download-all fail
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
+          pattern: memento-*
       - name: Publish the "latest" release
         shell: bash
         run: |
