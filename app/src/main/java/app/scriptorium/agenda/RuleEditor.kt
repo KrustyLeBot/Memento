@@ -196,6 +196,16 @@ object RuleEditor {
         else -> null
     }
 
+    /**
+     * The rule once the start moved from [old] to [new]: a preset follows the new day ("Toutes les semaines le
+     * lundi" moved to a Wednesday becomes "le mercredi", as calendar apps do); a custom or imported rule is kept.
+     */
+    fun followStart(rrule: String?, old: Stamp, new: Stamp, tz: String?, device: ZoneId): String? {
+        if (rrule.isNullOrBlank() || old.date == new.date) return rrule
+        val spec = presetSpec(detect(rrule, old, tz, device), new.date) ?: return rrule
+        return build(spec, new, tz, device)
+    }
+
     /** The presets offered in the menu (both monthly forms). */
     val MENU = listOf(
         RepeatPreset.NONE, RepeatPreset.DAILY, RepeatPreset.WEEKDAYS, RepeatPreset.WEEKLY, RepeatPreset.BIWEEKLY,

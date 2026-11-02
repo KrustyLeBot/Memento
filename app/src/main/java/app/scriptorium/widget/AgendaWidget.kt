@@ -14,6 +14,7 @@ import app.scriptorium.StorageConfig
 import app.scriptorium.agenda.AgendaData
 import app.scriptorium.agenda.WidgetRow
 import app.scriptorium.reminders.Reminders
+import app.scriptorium.reminders.async
 import app.scriptorium.sync.SyncState
 import app.scriptorium.sync.SynchrotronClient
 import kotlin.concurrent.thread
@@ -21,7 +22,7 @@ import kotlin.concurrent.thread
 /** The agenda list widget (Part B §7): header, ⟳, +, and the next entries in a scrollable collection. */
 class AgendaWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        AgendaWidgets.updateAll(context)
+        async("AgendaWidgetUpdate") { AgendaWidgets.updateAllNow(context) }
     }
 
     override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) {
@@ -33,7 +34,7 @@ class AgendaWidget : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            AgendaWidgets.ACTION_MIDNIGHT -> AgendaWidgets.updateAll(context)
+            AgendaWidgets.ACTION_MIDNIGHT -> async("AgendaWidgetMidnight") { AgendaWidgets.updateAllNow(context) }
             AgendaWidgets.ACTION_REFRESH -> refresh(context)
             else -> super.onReceive(context, intent)
         }
@@ -58,7 +59,7 @@ class AgendaWidget : AppWidgetProvider() {
                     Log.e("AgendaWidget", "refresh failed", e)
                 } finally {
                     AgendaWidgets.refreshing = false
-                    AgendaWidgets.updateAll(app)
+                    AgendaWidgets.updateAllNow(app)
                     pending.finish()
                 }
             }
@@ -106,10 +107,10 @@ class AgendaWidgetService : RemoteViewsService() {
 /** The small "Aujourd'hui" widget (2×1). */
 class TodayWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        AgendaWidgets.updateAll(context)
+        async("TodayWidgetUpdate") { AgendaWidgets.updateAllNow(context) }
     }
 
     override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) {
-        AgendaWidgets.updateAll(context)
+        async("TodayWidgetUpdate") { AgendaWidgets.updateAllNow(context) }
     }
 }

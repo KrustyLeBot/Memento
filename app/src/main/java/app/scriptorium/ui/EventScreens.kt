@@ -393,7 +393,8 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
 
     pickDate?.let { isStart ->
         AgendaDatePicker(if (isStart) d.startDate else d.endDate, { pickDate = null }) { v ->
-            ed.draft = if (isStart) d.withStart(v) else d.copy(endDate = v, noEnd = false)
+            ed.draft = if (isStart) d.withStart(v).let { it.copy(rrule = RuleEditor.followStart(d.rrule, d.start, it.start, d.tz, zone)) }
+            else d.copy(endDate = v, noEnd = false)
         }
     }
     pickTime?.let { isStart ->

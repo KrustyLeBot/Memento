@@ -43,7 +43,7 @@ class SystemEventsReceiver : BroadcastReceiver() {
         if (intent.action !in ACTIONS) return
         async("AgendaSystemEvent") {
             Reminders.rescheduleFromDisk(context)
-            AgendaWidgets.updateAll(context)
+            AgendaWidgets.updateAllNow(context)
         }
     }
 

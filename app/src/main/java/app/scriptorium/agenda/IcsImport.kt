@@ -503,6 +503,8 @@ object IcsImport {
             true
         } catch (_: java.time.DateTimeException) {
             true
+        } catch (_: AssertionError) {
+            true
         }
     }
 

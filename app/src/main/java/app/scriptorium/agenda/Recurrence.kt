@@ -231,6 +231,10 @@ object RecurrenceExpander {
         } catch (e: java.time.DateTimeException) {
             val o = make(event.start)
             return Expansion(if (inside(o)) listOf(o) else emptyList(), error = "règle de répétition illisible (${event.rrule}) : ${e.message}")
+        } catch (e: AssertionError) {
+            // biweekly's iterator asserts on values its parser accepts (BYMONTH=13): one bad file must not stop the agenda
+            val o = make(event.start)
+            return Expansion(if (inside(o)) listOf(o) else emptyList(), error = "règle de répétition illisible (${event.rrule}) : ${e.message}")
         }
         return Expansion(out, truncated)
     }
