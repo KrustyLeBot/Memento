@@ -139,6 +139,9 @@ class ContactsController(
         }
     }
 
+    /** Suspends until the folder was read. */
+    suspend fun awaitScanned() { scannedFlow.first { it } }
+
     /** Runs [action] once the folder was read (a birthday or a .vcf can arrive before the first scan). */
     fun whenScanned(action: () -> Unit) {
         if (scanned) return action()
@@ -159,6 +162,7 @@ class ContactsController(
     private var detailReturn = Screen.CONTACTS
 
     fun open(c: Contact, returnTo: Screen = Screen.CONTACTS) {
+        returnToCaller = false
         openId = c.id
         detailReturn = returnTo
         navigate(Screen.CONTACT)
@@ -168,12 +172,14 @@ class ContactsController(
 
     fun newContact() {
         if (readOnly()) return
+        returnToCaller = false
         editor = ContactEditState(null)
         navigate(Screen.CONTACT_EDIT)
     }
 
     fun edit(c: Contact) {
         if (readOnly()) return
+        returnToCaller = false
         editor = ContactEditState(c)
         navigate(Screen.CONTACT_EDIT)
     }
@@ -184,7 +190,7 @@ class ContactsController(
     fun back() {
         when {
             editor != null -> closeEditor(save = true)
-            openId != null -> { openId = null; navigate(detailReturn); detailReturn = Screen.CONTACTS }
+            openId != null -> { openId = null; navigate(detailReturn); detailReturn = Screen.CONTACTS; endExternal() }
             else -> navigate(Screen.CONTACTS)
         }
     }
@@ -221,6 +227,7 @@ class ContactsController(
     private fun leaveEditor(shown: Contact?) {
         editor = null
         drafts.clear(drafts.contact)
+        endExternal()
         if (shown != null) { openId = shown.id; navigate(Screen.CONTACT) } else { openId = null; navigate(Screen.CONTACTS) }
     }
 
@@ -295,6 +302,42 @@ class ContactsController(
                 say(Snack("Échec de l'enregistrement : ${e.message}", action = "Reprendre") { navigate(Screen.CONTACT_EDIT) })
             }
         }
+    }
+
+    // ---- contact actions of other apps (dialer, messaging, the phone's contacts app) ----
+
+    /** "Créer un contact", "Ajouter aux contacts", a contact opened from another app: see [ContactRequestFlow]. */
+    val requests = ContactRequestFlow(app, this, scope, io, say, syncing)
+
+    /** The screen on show was opened by another app: leaving it (save, cancel, back) hands back to that app. */
+    internal var returnToCaller = false
+    /** Read by the activity: set when such a screen is left, so it can finish and return to the caller. */
+    var finishRequested by mutableStateOf(false)
+
+    internal fun endExternal() {
+        if (!returnToCaller) return
+        returnToCaller = false
+        finishRequested = true
+    }
+
+    internal fun showList() = navigate(Screen.CONTACTS)
+
+    /** The editor on [base] (null: a new contact) with what [draft] brings, as another app asked. */
+    internal fun editDraft(base: Contact?, draft: Contact) {
+        val target = base?.let { ContactRequests.addTo(it, draft) } ?: draft
+        editor = ContactEditState(base).apply {
+            firstName = target.firstName
+            lastName = target.lastName
+            phones.clear(); phones.addAll(target.phones.map { PhoneField(it.number, it.label) })
+            if (phones.isEmpty()) phones.add(PhoneField("", PhoneLabels.MOBILE))
+            emails.clear(); emails.addAll(target.emails); if (emails.isEmpty()) emails.add("")
+            address = target.address.orEmpty()
+            target.birthday?.let { b -> birthDay = b.day.toString(); birthMonth = b.month; birthYear = b.year?.toString().orEmpty() }
+            notes = target.notes
+        }
+        openId = base?.id
+        detailReturn = Screen.CONTACTS
+        navigate(Screen.CONTACT_EDIT)
     }
 
     fun toggleFavorite(c: Contact) {

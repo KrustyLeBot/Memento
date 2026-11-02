@@ -161,6 +161,17 @@ fun ContactsSettings(vm: MainViewModel) {
                 }) { Text("Autorisations de l'app") }
             }
         }
+        Column {
+            Text("$appName comme app de contacts", fontWeight = FontWeight.SemiBold)
+            SettingsHint(
+                "Android n'a pas de réglage « app de contacts par défaut ». La première fois qu'une app propose " +
+                    "« Créer un contact », « Ajouter aux contacts » ou ouvre un contact, choisis $appName puis « Toujours » : " +
+                    "ces actions ouvriront ensuite la fiche ou l'éditeur de $appName. L'app Contacts du téléphone affiche toujours " +
+                    "les contacts copiés (copie ci-dessus activée), en lecture seule. Un contact d'un autre compte ouvert " +
+                    "ainsi peut être importé dans $appName. Pour revenir en arrière : Paramètres du téléphone → Applications → " +
+                    "$appName → Définir par défaut → Effacer les valeurs par défaut.",
+            )
+        }
     }
 }
 

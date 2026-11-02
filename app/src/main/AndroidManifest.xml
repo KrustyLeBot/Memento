@@ -76,6 +76,42 @@
                 <data android:mimeType="text/x-vcard" />
                 <data android:mimeType="text/directory" />
             </intent-filter>
+            <!--
+                Contact actions of other apps (dialer "Créer un contact", messaging "Ajouter aux contacts", a contact
+                opened from them): Mémento's editor and detail (contacts/ContactRequestFlow.kt). Android has no default
+                contacts app role: the chooser's "Toujours" is what makes Mémento the one these open.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.INSERT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.dir/contact" />
+                <data android:mimeType="vnd.android.cursor.dir/raw_contact" />
+                <data android:mimeType="vnd.android.cursor.dir/person" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.INSERT_OR_EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.item/contact" />
+                <data android:mimeType="vnd.android.cursor.item/raw_contact" />
+                <data android:mimeType="vnd.android.cursor.item/person" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.item/contact" />
+                <data android:mimeType="vnd.android.cursor.item/raw_contact" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.provider.action.QUICK_CONTACT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.item/contact" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="vnd.android.cursor.dir/contact" />
+            </intent-filter>
             <!-- An .ics opened or shared from another app (mail attachment, file manager) starts the agenda import. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

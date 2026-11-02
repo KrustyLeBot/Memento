@@ -1,3 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Lets the contacts app show the account's contacts with the standard fields. -->
-<ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android" />
+<!--
+    Lets the contacts app show the account's contacts with the standard fields. No EditSchema on purpose: the
+    mirrored copies stay read-only in the phone's contacts app (the files are the truth, see ContactsMirror).
+
+    inviteContactActivity / inviteContactActionLabel are the only standard hooks (AOSP ExternalAccountType, no
+    namespace): on a contact of ANOTHER account the contacts app may offer "Ajouter à Mémento", which starts
+    MainActivity with com.android.contacts.action.INVITE_CONTACT and the contact's lookup URI (an import into
+    Mémento, ContactRequestFlow). The platform has no "edit with this app" attribute for an account's own raw
+    contacts (editContactActivity does not exist); editing goes through the ACTION_EDIT intent filter instead.
+-->
+<ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android"
+    inviteContactActivity="app.memento.MainActivity"
+    inviteContactActionLabel="@string/invite_contact_label" />

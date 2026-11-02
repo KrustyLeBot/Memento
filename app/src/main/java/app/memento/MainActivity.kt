@@ -58,13 +58,28 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         MapRuntime.init(this)
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null) {
+            // started just for another app's contact action: done, it hands back to that app (like the stock editor)
+            if (handleContactRequest(intent)) vm.contacts.requests.finishWhenDone = true
+            else handleIntent(intent)
+        }
         setContent { App() }
+    }
+
+    /** "Créer un contact", "Ajouter aux contacts", a contact opened from another app (see contacts/ContactRequestFlow). */
+    private fun handleContactRequest(intent: Intent?): Boolean {
+        if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return false
+        val request = app.memento.contacts.ContactRequestFlow.request(intent) ?: return false
+        vm.leaveEditors()
+        vm.openModule(Module.CONTACTS)
+        vm.contacts.requests.handle(request)
+        intent.action = null // not again on configuration changes
+        return true
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleIntent(intent)
+        if (!handleContactRequest(intent)) handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -168,6 +183,11 @@ class MainActivity : ComponentActivity() {
             onDispose { owner.lifecycle.removeObserver(observer) }
         }
         LaunchedEffect(Unit) { vm.updates.checkOnOpen() }
+        LaunchedEffect(vm.contacts.finishRequested) {
+            if (!vm.contacts.finishRequested) return@LaunchedEffect
+            vm.contacts.finishRequested = false
+            if (vm.contacts.requests.finishWhenDone) finish()
+        }
 
         MementoTheme(vm.theme) {
             val dark = isDarkTheme()
@@ -195,6 +215,7 @@ class MainActivity : ComponentActivity() {
                 )
             } else {
                 LegacyImportDialog(vm)
+                app.memento.ui.ContactRequestDialogs(vm)
                 val module = vm.screen.module
                 if (module != null || vm.screen == Screen.SETTINGS) {
                     // The keyboard (search fields of the lists) lifts the screen and hides the bar, so the
