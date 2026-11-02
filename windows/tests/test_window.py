@@ -356,3 +356,26 @@ def test_escape_key_leaves_the_editor_and_clears_searches(window):
     QTest.keyClicks(window.contacts.search, "x")
     QTest.keyClick(window.contacts.search, Qt.Key.Key_Escape)
     assert window.contacts.search.text() == ""
+
+
+def test_a_long_list_shows_its_first_cards_at_once_and_the_rest_after(window):
+    from scriptorium_win.ui import list_view
+    total = list_view.FIRST_BATCH + list_view.BATCH + 5
+    for i in range(total):
+        add(window.store, f"Note {i:03d}", pinned=(i == 0))
+    window.refresh()
+    screen = window.list_screen
+
+    def cards():
+        return [w.note.title for kind, w in screen._items if kind == "card"]
+    assert len(screen._items) == list_view.FIRST_BATCH  # the pinned header counts as one item
+    screen.search.setText("Note 0")  # a new rebuild while chunks are pending: the old ones are dropped
+    while screen._pending:
+        QApplication.processEvents()
+    assert sorted(cards()) == sorted(n.title for n in screen.visible_notes())
+    assert len(cards()) == len(set(cards())) == total  # every title matches "Note 0", none twice
+    screen.search.clear()
+    screen.finish_building()
+    assert len(cards()) == total
+    tops = [w.geometry().top() for kind, w in screen._items if kind == "card"]
+    assert all(t >= 0 for t in tops) and screen.canvas.height() > max(tops)

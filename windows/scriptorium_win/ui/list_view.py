@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSizePolicy, QToolButton,
                                QVBoxLayout, QWidget)
 
@@ -10,6 +10,10 @@ from . import icons, theme
 
 CARD_MIN_WIDTH = 250
 GAP = 10
+# Building a card costs a few milliseconds: hundreds of notes froze the window before its first paint. The first
+# screenful is built at once, the rest in chunks, each after the event loop has had its turn.
+FIRST_BATCH = 30
+BATCH = 30
 MARGIN = 14
 
 
@@ -134,6 +138,8 @@ class ListScreen(QWidget):
         self.label: str | None = None
         self._items: list[tuple[str, QWidget]] = []  # ("card" | "header", widget)
         self._stale = False  # new notes arrived while the list was hidden: rebuilt when it shows
+        self._pending: list[tuple[str, object]] = []  # ("header", text) | ("card", note) still to build
+        self._generation = 0  # a newer rebuild drops the chunks an older one scheduled
 
         root = QVBoxLayout(self)
         root.setContentsMargins(MARGIN, 12, MARGIN, 0)
@@ -341,31 +347,13 @@ class ListScreen(QWidget):
         notes = self.visible_notes()
         pinned = [n for n in notes if n.pinned]
         others = [n for n in notes if not n.pinned]
-
-        def header(text: str) -> None:
-            label = QLabel(text, self.canvas)
-            label.setStyleSheet(f"color: {theme.scheme().on_surface_variant}; font-size: 8.5pt; font-weight: 600; "
-                                "letter-spacing: 1px; background: transparent;")
-            label.show()
-            self._items.append(("header", label))
-
-        def card(note: Note) -> None:
-            c = NoteCard(note)
-            c.setParent(self.canvas)
-            c.clicked.connect(self.open_note)
-            c.open_pdf.connect(self.open_pdf)
-            c.reveal.connect(self.reveal)
-            c.show()
-            self._items.append(("card", c))
-
+        plan: list[tuple[str, object]] = []
         if pinned:
-            header("ÉPINGLÉES")
-            for n in pinned:
-                card(n)
+            plan.append(("header", "ÉPINGLÉES"))
+            plan += [("card", n) for n in pinned]
             if others:
-                header("AUTRES")
-        for n in others:
-            card(n)
+                plan.append(("header", "AUTRES"))
+        plan += [("card", n) for n in others]
 
         filtered = bool(self.search.text().strip() or self.label)
         self.empty.setVisible(not notes)
@@ -373,7 +361,37 @@ class ListScreen(QWidget):
         if not notes:
             self.empty_title.setText("Aucun résultat" if filtered else "Aucune note pour l'instant")
             self.empty_hint.setText("" if filtered else "Appuyez sur « Note » pour commencer")
+        self._generation += 1
+        self._pending = plan
+        self._build_batch(self._generation, FIRST_BATCH)
+
+    def _build_batch(self, generation: int, count: int) -> None:
+        if generation != self._generation:
+            return  # a newer rebuild replaced this one
+        chunk, self._pending = self._pending[:count], self._pending[count:]
+        for kind, value in chunk:
+            if kind == "header":
+                label = QLabel(value, self.canvas)
+                label.setStyleSheet(f"color: {theme.scheme().on_surface_variant}; font-size: 8.5pt; font-weight: 600; "
+                                    "letter-spacing: 1px; background: transparent;")
+                label.show()
+                self._items.append(("header", label))
+                continue
+            c = NoteCard(value)
+            c.setParent(self.canvas)
+            c.clicked.connect(self.open_note)
+            c.open_pdf.connect(self.open_pdf)
+            c.reveal.connect(self.reveal)
+            c.show()
+            self._items.append(("card", c))
         self._layout_cards()
+        if self._pending:
+            QTimer.singleShot(0, self, lambda: self._build_batch(generation, BATCH))
+
+    def finish_building(self) -> None:
+        """Builds what is still pending at once (tests, and before anything reads every card)."""
+        if self._pending:
+            self._build_batch(self._generation, len(self._pending))
 
     def _layout_cards(self) -> None:
         width = self.scroll.viewport().width()
@@ -395,9 +413,14 @@ class ListScreen(QWidget):
                 heights = [y + 28] * cols
                 continue
             column = heights.index(min(heights))
-            h = widget.height_for(col_w)
+            cached = getattr(widget, "height_at", None)  # each chunk lays out every card again: measured once
+            if cached is not None and cached[0] == col_w:
+                h = cached[1]
+            else:
+                h = widget.height_for(col_w)
+                widget.height_at = (col_w, h)
+                widget.setFixedHeight(h)
             widget.setGeometry(offset + column * (col_w + GAP), heights[column], col_w, h)
-            widget.setFixedHeight(h)
             heights[column] += h + GAP
         self.canvas.resize(width, max(heights) + 150)
 
