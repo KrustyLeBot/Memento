@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
         snack_row.setContentsMargins(16, 6, 8, 6)
         self.snack_text = QLabel()
         self.snack_button = QPushButton("Annuler")
-        self.snack_button.setStyleSheet("QPushButton { color: #FFB950; } QPushButton:hover { background: #4A453F; }")
+        self.snack_button.setStyleSheet("QPushButton { color: #FFB1C6; } QPushButton:hover { background: #4A453F; }")
         snack_row.addWidget(self.snack_text)
         snack_row.addWidget(self.snack_button)
         self.snack.hide()

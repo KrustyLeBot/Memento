@@ -41,10 +41,10 @@ class Scheme:
     on_error_container: str
 
 
-LIGHT = Scheme("#F7FAF4", "#E9F0E7", "#E3EAE1", "#747D74", "#ABB4AB", "#2C342D", "#596159", "#006D3B", "#FFFFFF",
-               "#B8F0C5", "#295B3B", "#D2E8D4", "#435647", "#A83836", "#FA746F", "#6E0A12")
-DARK = Scheme("#0B0F0C", "#151B16", "#1A211C", "#6F786F", "#414A42", "#DFE8DD", "#A4ADA4", "#63DE91", "#00391C",
-              "#355A40", "#C3EECB", "#2D4031", "#AFC5B1", "#FA746F", "#871F21", "#FF9993")
+LIGHT = Scheme("#FFF8F8", "#FCE9EC", "#F7E3E7", "#88767A", "#C1ADB1", "#3C2F32", "#6B5B5E", "#912C52", "#FFFFFF",
+               "#FAAFC3", "#622D3E", "#FFD9E1", "#674A51", "#A8364B", "#F97386", "#6E0523")
+DARK = Scheme("#130D0E", "#211719", "#281D1F", "#837175", "#534447", "#F6E0E4", "#BAA6AA", "#FFB1C6", "#640330",
+              "#734552", "#FFDAE2", "#4E343B", "#DBB6BE", "#F97386", "#871C34", "#FF97A3")
 
 
 def is_dark() -> bool:
