@@ -45,8 +45,11 @@ class NoteRepository(private val context: Context, private val settings: Setting
         private set
 
     /** The agenda data layer on the current storage (rebuilt with it). */
-    var agendaStore = app.memento.agenda.AgendaStore(fs)
+    var agendaStore = app.memento.agenda.AgendaStore(fs, ::allNotes)
         private set
+
+    /** Every note, activity and event: what may list a file another one is deleting. */
+    fun allNotes(): List<Note> = _notes.value + _activities.value + _agenda.value.events.map { it.note }
 
     private fun buildFs(config: StorageConfig): Fs = when (config) {
         StorageConfig.Default -> FileFs(Settings.defaultDir())
@@ -55,7 +58,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
 
     fun reconfigure() {
         fs = buildFs(settings.storage)
-        agendaStore = app.memento.agenda.AgendaStore(fs)
+        agendaStore = app.memento.agenda.AgendaStore(fs, ::allNotes)
         parsed.clear()
         _notes.value = emptyList()
         _activities.value = emptyList()
@@ -223,11 +226,17 @@ class NoteRepository(private val context: Context, private val settings: Setting
             return
         }
         fs.delete(note.path)
-        ownedFiles(note, _notes.value + _activities.value + _agenda.value.events.map { it.note }).forEach { fs.delete(it) }
+        ownedFiles(note, allNotes()).forEach { fs.delete(it) }
         parsed.remove(note.path)
         if (isActivityPath(note.path)) _activities.value = _activities.value.filter { it.path != note.path }
         else _notes.value = _notes.value.filter { it.path != note.path }
     }
+
+    /**
+     * Deletes those of [paths] that [ownerPath]'s note may delete ([deletable]) and returns them; the others stay.
+     */
+    fun deleteOwned(paths: List<String>, ownerPath: String): List<String> =
+        deletable(paths, ownerPath, allNotes()).onEach { fs.delete(it) }
 
     /**
      * Conflict resolution: this copy replaces the original (same id, no "conflict" in its name).
@@ -273,10 +282,18 @@ class NoteRepository(private val context: Context, private val settings: Setting
         private val WATCHED_FOLDERS = setOf(ACTIVITIES_DIR, app.memento.contacts.ContactFormat.DIR, app.memento.agenda.EventFormat.AGENDA_DIR)
         private val CONFLICT_COPY = Regex(""".+\.md\.conflict\d+""")
 
-        /** The files (scan, attachments) of [note] no other note of [all] lists: a sync conflict copy shares its original's. */
-        fun ownedFiles(note: Note, all: List<Note>): List<String> {
-            val shared = all.filter { it.path != note.path }.flatMap { listOfNotNull(it.pdf) + it.attachments }.toSet()
-            return (listOfNotNull(note.pdf) + note.attachments).filter { it !in shared }
+        /** The files (scan, attachments) deleting [note] deletes too: see [deletable]. */
+        fun ownedFiles(note: Note, all: List<Note>): List<String> =
+            deletable(listOfNotNull(note.pdf) + note.attachments, note.path, all)
+
+        /**
+         * Those of [paths] the note at [ownerPath] may delete: under `attachments/` or `drawings/` ([SafePath.owned];
+         * the paths come from synced frontmatter and may name another note, a contact, or a file outside the folder),
+         * and listed by no other note of [all] (a sync conflict copy shares its original's files).
+         */
+        fun deletable(paths: List<String>, ownerPath: String, all: List<Note>): List<String> {
+            val shared = all.filter { it.path != ownerPath }.flatMap { listOfNotNull(it.pdf, it.activity?.file, it.activity?.alt) + it.attachments }.toSet()
+            return paths.distinct().filter { SafePath.owned(it) && it !in shared }
         }
     }
 }

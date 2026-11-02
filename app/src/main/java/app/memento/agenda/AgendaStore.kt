@@ -17,7 +17,7 @@ data class AgendaScan(
  * `agenda/calendars.json`; files directly in `agenda/` are read too. The path is fixed at creation.
  * Blocking I/O: call from Dispatchers.IO.
  */
-class AgendaStore(val fs: Fs) {
+class AgendaStore(val fs: Fs, private val allNotes: () -> List<app.memento.Note> = { emptyList() }) {
     private val ids = HashSet<String>()
     private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Event>>()
 
@@ -105,9 +105,10 @@ class AgendaStore(val fs: Fs) {
         return e
     }
 
-    /** Removes the file and its attachments (like a note). */
+    /** Removes the file and the attachments it owns (like a note: [app.memento.NoteRepository.ownedFiles]). */
     fun delete(event: Event) {
-        listOfNotNull(event.path.ifEmpty { null }, event.note.pdf).plus(event.note.attachments).forEach { fs.delete(it) }
+        val owned = app.memento.NoteRepository.ownedFiles(event.note, allNotes())
+        listOfNotNull(event.path.ifEmpty { null }).plus(owned).forEach { fs.delete(it) }
         cache.remove(event.path)
         synchronized(ids) { ids.remove(event.id) }
     }

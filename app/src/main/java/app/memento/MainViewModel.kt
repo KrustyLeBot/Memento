@@ -383,7 +383,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens the PDF for the in-app viewer; the caller closes it. */
     suspend fun openPdfPages(path: String): PdfPages = withContext(io) {
         val fd = when (val fs = repo.fs) {
-            is FileFs -> android.os.ParcelFileDescriptor.open(java.io.File(fs.root, path), android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+            is FileFs -> fs.fileOf(path)?.takeIf { path.isNotEmpty() && it.isFile }?.let {
+                android.os.ParcelFileDescriptor.open(it, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+            }
             is SafFs -> fs.uriOf(path)?.let { getApplication<Application>().contentResolver.openFileDescriptor(it, "r") }
             else -> null
         } ?: throw java.io.FileNotFoundException("PDF introuvable (pas encore synchronisé ?)")
@@ -397,7 +399,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openFile(path: String) {
         val app = getApplication<Application>()
         val uri = when (val fs = repo.fs) {
-            is FileFs -> java.io.File(fs.root, path).takeIf { it.isFile }?.let {
+            is FileFs -> fs.fileOf(path)?.takeIf { path.isNotEmpty() && it.isFile }?.let {
                 androidx.core.content.FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", it)
             }
             is SafFs -> fs.uriOf(path)
@@ -471,7 +473,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             ed.attachments.remove(path)
             persist(ed)
-            val bytes = withContext(io) { repo.fs.readBytes(path).also { repo.fs.delete(path) } }
+            val bytes = withContext(io) {
+                val owner = ed.base?.path.orEmpty()
+                if (NoteRepository.deletable(listOf(path), owner, repo.allNotes()).isEmpty()) null
+                else repo.fs.readBytes(path).also { repo.deleteOwned(listOf(path), owner) }
+            }
             snack = Snack("Pièce jointe supprimée") {
                 if (bytes != null) viewModelScope.launch {
                     withContext(io) { repo.fs.writeBytes(path, bytes) }
@@ -539,7 +545,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (d.strokes.isEmpty()) {
                     if (existing != null) {
                         ed.attachments.remove(existing)
-                        withContext(io) { repo.fs.delete(existing) }
+                        withContext(io) { repo.deleteOwned(listOf(existing), ed.base?.path.orEmpty()) }
                     }
                 } else {
                     val svg = app.memento.draw.Drawing(d.strokes).toSvg()
@@ -888,10 +894,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             persistLock.withLock { }
             // Attached since the last save: no note refers to them.
             val unsaved = ed.attachments.filter { it !in ed.base?.attachments.orEmpty() }
-            if (unsaved.isNotEmpty()) withContext(io) { unsaved.forEach { repo.fs.delete(it) } }
+            if (unsaved.isNotEmpty()) withContext(io) { repo.deleteOwned(unsaved, ed.base?.path.orEmpty()) }
             val note = ed.base ?: return@launch
             val files = withContext(io) {
-                (listOfNotNull(note.pdf) + note.attachments).mapNotNull { p -> repo.fs.readBytes(p)?.let { p to it } }
+                NoteRepository.ownedFiles(note, repo.allNotes()).mapNotNull { p -> repo.fs.readBytes(p)?.let { p to it } }
             }
             withContext(io) { repo.delete(note) }
             snack = Snack("Note supprimée") {

@@ -46,19 +46,30 @@ fun tempName(name: String) = ".$name.synctmp-${UUID.randomUUID()}"
 fun isTempName(name: String) = name.startsWith(".") && (name.contains(".synctmp-") || name.endsWith(".tmp"))
 
 class FileFs(val root: File) : Fs {
-    private fun file(path: String) = if (path.isEmpty()) root else File(root, path)
+    /** The file at [path], or null when the path is refused or a symlink carries it out of the root. */
+    fun fileOf(path: String): File? {
+        if (path.isEmpty()) return root
+        SafePath.resolve(path) ?: return null
+        val f = File(root, path)
+        return try {
+            val base = root.canonicalFile.path + File.separator
+            f.takeIf { it.canonicalFile.path.startsWith(base) }
+        } catch (_: java.io.IOException) {
+            null
+        }
+    }
 
     override fun list(dir: String): List<Fs.Entry> =
-        file(dir).listFiles().orEmpty().map { Fs.Entry(it.name, it.isDirectory, it.lastModified()) }
+        fileOf(dir)?.listFiles().orEmpty().map { Fs.Entry(it.name, it.isDirectory, it.lastModified()) }
 
     override fun readBytes(path: String): ByteArray? = try {
-        file(path).takeIf { it.isFile }?.readBytes()
+        fileOf(path)?.takeIf { it.isFile }?.readBytes()
     } catch (_: Exception) {
         null
     }
 
     override fun writeBytes(path: String, bytes: ByteArray) {
-        val target = file(path)
+        val target = fileOf(path)?.takeIf { path.isNotEmpty() } ?: throw java.io.IOException("Chemin refusé : $path")
         target.parentFile?.mkdirs()
         val tmp = File(target.parentFile, tempName(target.name))
         try {
@@ -75,16 +86,16 @@ class FileFs(val root: File) : Fs {
     }
 
     override fun delete(path: String) {
-        file(path).delete()
+        if (path.isNotEmpty()) fileOf(path)?.delete()
     }
 
-    override fun exists(path: String) = file(path).exists()
-    override fun lastModified(path: String) = file(path).lastModified()
+    override fun exists(path: String) = fileOf(path)?.exists() == true
+    override fun lastModified(path: String) = fileOf(path)?.lastModified() ?: 0L
     override fun describe(): String = root.absolutePath
 
     override fun move(from: String, to: String) {
-        val src = file(from)
-        val dst = file(to)
+        val src = fileOf(from)?.takeIf { from.isNotEmpty() } ?: return
+        val dst = fileOf(to)?.takeIf { to.isNotEmpty() } ?: throw java.io.IOException("Chemin refusé : $to")
         dst.parentFile?.mkdirs()
         if (!src.renameTo(dst)) super.move(from, to)
     }
@@ -100,6 +111,7 @@ class SafFs(private val context: Context, private val treeUri: Uri) : Fs {
 
     private fun resolve(path: String): DocumentFile? {
         if (path.isEmpty()) return rootDoc
+        SafePath.resolve(path) ?: return null
         cache[path]?.let { return it }
         val parent = resolve(path.substringBeforeLast('/', ""))
         val doc = parent?.findFile(path.substringAfterLast('/')) ?: return null
@@ -109,6 +121,7 @@ class SafFs(private val context: Context, private val treeUri: Uri) : Fs {
 
     private fun ensureDir(path: String): DocumentFile? {
         if (path.isEmpty()) return rootDoc
+        SafePath.resolve(path) ?: return null
         resolve(path)?.let { return it }
         val parent = ensureDir(path.substringBeforeLast('/', "")) ?: return null
         val doc = parent.createDirectory(path.substringAfterLast('/')) ?: return null
@@ -139,6 +152,7 @@ class SafFs(private val context: Context, private val treeUri: Uri) : Fs {
     }
 
     override fun writeBytes(path: String, bytes: ByteArray) {
+        SafePath.resolve(path) ?: throw java.io.IOException("Chemin refusé : $path")
         val dirPath = path.substringBeforeLast('/', "")
         val name = path.substringAfterLast('/')
         val dir = ensureDir(dirPath) ?: throw java.io.IOException("Cannot open folder $dirPath")
@@ -165,6 +179,7 @@ class SafFs(private val context: Context, private val treeUri: Uri) : Fs {
     }
 
     override fun delete(path: String) {
+        if (path.isEmpty()) return
         resolve(path)?.delete()
         cache.remove(path)
         cache.keys.removeAll { it.startsWith("$path/") }

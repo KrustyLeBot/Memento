@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import app.memento.Note
 import app.memento.NoteFormat
 import app.memento.NoteRepository
+import app.memento.SafePath
 import app.memento.Snack
 import app.memento.record.Recorder
 import kotlinx.coroutines.CoroutineDispatcher
@@ -134,8 +135,8 @@ class ActivityController(
         val info = ActivityInfo.from(sport, a, track, file, altMarker)
         if (replace != null) {
             // the old track and its altitude file go; photos and the description stay
-            val old = listOfNotNull(replace.activity?.file, replace.activity?.alt).filter { it.startsWith("attachments/") }
-            old.filter { it != file }.forEach { repo.fs.delete(it) }
+            val old = listOfNotNull(replace.activity?.file, replace.activity?.alt).filter { SafePath.owned(it) }
+            repo.deleteOwned(old.filter { it != file }, replace.path)
             return repo.save(replace.copy(title = title, activity = info, attachments = listOf(file) + replace.attachments.filter { it !in old }, updated = now))
         }
         return repo.save(
@@ -260,6 +261,8 @@ class ActivityController(
         if (info.alt != null || !info.sport.hasGps) return LookUp(note, Outcome.SKIPPED, "Cette activité a déjà une altitude")
         return try {
             withContext(io) {
+                // the .alt is written next to the track: only in attachments/, whatever the frontmatter says
+                if (!SafePath.owned(file)) throw java.io.IOException("Fichier introuvable")
                 val bytes = repo.fs.readBytes(file) ?: throw java.io.IOException("Fichier introuvable")
                 val track = if (Fit.looksLikeFit(bytes)) Fit.read(bytes) else Gpx.read(String(bytes, Charsets.UTF_8))
                 if (!Elevation.missing(track)) return@withContext LookUp(note, Outcome.SKIPPED, "Cette activité a déjà une altitude")
@@ -399,7 +402,7 @@ class ActivityController(
         scope.launch {
             val saved = withContext(io) {
                 val fresh = repo.activities.value.firstOrNull { it.path == note.path } ?: note
-                repo.fs.delete(path)
+                repo.deleteOwned(listOf(path), fresh.path)
                 repo.save(fresh.copy(attachments = fresh.attachments - path, updated = System.currentTimeMillis()))
             }
             detail = detail?.let { ActivityDetail(saved, it.track, it.analysis, it.error) }
