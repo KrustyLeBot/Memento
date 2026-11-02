@@ -107,7 +107,7 @@ fun LiveMap(
                 MapHost.call("setRoute", payload)
                 route.bbox?.let { MapHost.call("setSquare", MapPayload.bbox(MapSquare.of(it))) }
             } else {
-                MapHost.call("setLiveSquare", "5")
+                MapHost.call("setLiveSquare", "10")
             }
             MapHost.call("setFollow", "true")
             following = true
