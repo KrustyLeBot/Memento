@@ -52,7 +52,7 @@ object MirrorPlan {
                 null, "", PhoneLabels.OTHER -> PhoneKind.OTHER
                 else -> PhoneKind.CUSTOM
             }
-            out.add(MirrorRow.Tel(p.number, kind, if (kind == PhoneKind.CUSTOM) p.label else null))
+            out.add(MirrorRow.Tel(Phones.dialable(p.number), kind, if (kind == PhoneKind.CUSTOM) p.label else null))
         }
         c.emails.forEach { out.add(MirrorRow.Mail(it)) }
         c.address?.takeIf { it.isNotBlank() }?.let { out.add(MirrorRow.Postal(it)) }

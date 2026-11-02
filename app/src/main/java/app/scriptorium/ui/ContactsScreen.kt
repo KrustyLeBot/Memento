@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -189,10 +190,12 @@ private fun ContactRow(contact: Contact, onClick: () -> Unit) {
 private fun LetterScroller(letters: List<String>, modifier: Modifier, onLetter: (String) -> Unit) {
     var height by remember { mutableStateOf(1) }
     var active by remember { mutableStateOf<String?>(null) }
+    // the gesture coroutines outlive recompositions (keyed on the letters): read the latest positions
+    val jump by rememberUpdatedState(onLetter)
     fun at(y: Float): String = letters[((y / height) * letters.size).toInt().coerceIn(0, letters.lastIndex)]
     fun pick(y: Float) {
         val l = at(y)
-        if (l != active) { active = l; onLetter(l) }
+        if (l != active) { active = l; jump(l) }
     }
     Box(modifier.fillMaxHeight()) {
         Column(

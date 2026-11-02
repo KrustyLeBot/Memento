@@ -7,17 +7,32 @@
     {"id": "b5", "first_name": "Luc", "last_name": "", "phones": ["3631"]},
     {"id": "b6", "first_name": "Léa", "last_name": "", "phones": ["3631"]},
     {"id": "b7", "first_name": "Zoé", "last_name": "A", "phones": ["07 11 11 11 11"]},
-    {"id": "b8", "first_name": "Zoe", "last_name": "a", "favorite": true}
+    {"id": "b8", "first_name": "Zoe", "last_name": "a", "favorite": true},
+    {"id": "b9", "first_name": "Anne", "last_name": "Morel", "phones": ["06 99 99 99 99"], "address": "1 rue Haute, Lyon", "birthday": "1970-03-02"},
+    {"id": "b10", "first_name": "Anne", "last_name": "MOREL", "phones": ["+33 6 99 99 99 99"], "address": "2 rue Basse, Lyon", "birthday": "1970-02-03"}
   ],
-  "groups": [["b7", "b8"], ["b1", "b2", "b3", "b4"]],
-  "merge": {
-    "keep": "b1",
-    "others": ["b2", "b4"],
-    "expected": {
-      "first_name": "Marie", "last_name": "Dupont",
-      "phones": ["06 12 34 56 78 (mobile)", "07 00 00 00 07 (travail)"],
-      "emails": ["marie@example.org", "m.dupont@example.com"],
-      "address": null, "birthday": "1980-01-01", "notes": "Travail", "uid": null, "favorite": false
+  "groups": [["b7", "b8"], ["b1", "b2", "b3", "b4"], ["b10", "b9"]],
+  "merges": [
+    {
+      "keep": "b1",
+      "others": ["b2", "b4"],
+      "expected": {
+        "first_name": "Marie", "last_name": "Dupont",
+        "phones": ["06 12 34 56 78 (mobile)", "07 00 00 00 07 (travail)"],
+        "emails": ["marie@example.org", "m.dupont@example.com"],
+        "address": null, "birthday": "1980-01-01", "notes": "Travail\n\nAutre nom : Paul", "uid": null, "favorite": false
+      }
+    },
+    {
+      "keep": "b9",
+      "others": ["b10"],
+      "expected": {
+        "first_name": "Anne", "last_name": "Morel",
+        "phones": ["06 99 99 99 99"],
+        "emails": [],
+        "address": "1 rue Haute, Lyon", "birthday": "1970-03-02",
+        "notes": "Adresse : 2 rue Basse, Lyon\n\nAnniversaire : 1970-02-03", "uid": null, "favorite": false
+      }
     }
-  }
+  ]
 }

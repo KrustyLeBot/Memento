@@ -87,21 +87,28 @@ object VCard {
      */
     private fun unfold(text: String): List<String> {
         val out = ArrayList<String>()
+        // the logical line being built: a photo can be thousands of folded lines, so no string concatenation
+        val cur = StringBuilder()
+        var started = false
         for (line in text.replace("\r\n", "\n").replace('\r', '\n').split('\n')) {
-            val last = out.lastIndex
-            if (last >= 0 && (line.startsWith(" ") || line.startsWith("\t")) && !isQpOpen(out[last])) {
-                out[last] = out[last] + line.substring(1)
-            } else if (last >= 0 && isQpOpen(out[last])) {
-                out[last] = out[last].dropLast(1) + line
+            if (started && isQpOpen(cur)) {
+                cur.setLength(cur.length - 1)
+                cur.append(line)
+            } else if (started && (line.startsWith(" ") || line.startsWith("\t"))) {
+                cur.append(line, 1, line.length)
             } else {
-                out.add(line)
+                if (started) out.add(cur.toString())
+                cur.setLength(0)
+                cur.append(line)
+                started = true
             }
         }
+        if (started) out.add(cur.toString())
         return out.filter { it.isNotBlank() }
     }
 
-    private fun isQpOpen(line: String): Boolean {
-        if (!line.endsWith("=")) return false
+    private fun isQpOpen(line: CharSequence): Boolean {
+        if (line.isEmpty() || line[line.length - 1] != '=') return false
         val colon = line.indexOf(':')
         return colon > 0 && line.substring(0, colon).uppercase().contains("QUOTED-PRINTABLE")
     }
@@ -219,7 +226,7 @@ object VCard {
                 "home", "domicile", "maison" -> PhoneLabels.HOME
                 "work", "travail", "bureau" -> PhoneLabels.WORK
                 "other", "autre", "main" -> PhoneLabels.OTHER
-                else -> l
+                else -> PhoneLabels.clean(l)
             }
         }
         val t = types - setOf("PREF", "VOICE", "INTERNET", "X-INTERNET", "QUOTED-PRINTABLE", "BASE64")
@@ -293,6 +300,11 @@ object VCard {
                 "NOTE" -> unescape(text(p)).trim().takeIf { it.isNotEmpty() }?.let { notes.add(it) }
                 "UID" -> uid = unescape(text(p)).trim().ifEmpty { null }
                 "X-SCRIPTORIUM-FAVORITE" -> favorite = text(p).trim().equals("TRUE", ignoreCase = true)
+                "CATEGORIES" -> {
+                    // Google marks its starred contacts with a "starred" category; the rest is not kept
+                    if (text(p).split(',').any { unescape(it).trim().equals("starred", ignoreCase = true) }) favorite = true
+                    ignored.merge("CATEGORIES", 1, Int::plus)
+                }
                 in READ -> Unit
                 else -> {
                     val key = if (p.name.startsWith("X-")) "X-…" else p.name

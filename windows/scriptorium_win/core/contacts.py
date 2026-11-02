@@ -22,6 +22,15 @@ DIR = "contacts"
 MOBILE, HOME, WORK, OTHER = "mobile", "domicile", "travail", "autre"
 STANDARD_LABELS = [MOBILE, HOME, WORK, OTHER]
 
+
+def clean_label(label: str | None) -> str | None:
+    """A label as it can be stored after a number: without parentheses, and with a letter in it, or (2) would read
+    back as part of the number. None when nothing is left."""
+    if label is None:
+        return None
+    s = " ".join(label.replace("(", " ").replace(")", " ").split())
+    return s if any(c.isalpha() for c in s) else None
+
 _KEYS = {"first_name", "last_name", "phones", "emails", "address", "birthday", "favorite", "uid", "import"}
 _KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):[ \t]*(.*)$")
 _LABEL_RE = re.compile(r"^(.*?)\s*\(([^()]*[^\W\d_][^()]*)\)\s*$")
@@ -44,7 +53,8 @@ class Phone:
         return normalize(self.number)
 
     def encode(self) -> str:
-        return self.number.strip() if not self.label or not self.label.strip() else f"{self.number.strip()} ({self.label})"
+        label = clean_label(self.label)
+        return f"{self.number.strip()} ({label})" if label else self.number.strip()
 
     @staticmethod
     def decode(raw: str) -> "Phone":
@@ -415,8 +425,15 @@ def best(group: list[Contact]) -> Contact:
     return max(group, key=score)
 
 
+def _other_name(o: Contact, c: Contact) -> bool:
+    """[o] has a name with a word [c]'s name lacks ("Paul" against "Marie Dupont"; not "Marie" against it)."""
+    mine, theirs = name_key(c), name_key(o)
+    return bool(mine and theirs) and not set(theirs.split(" ")) <= set(mine.split(" "))
+
+
 def merge(keep: Contact, others: list[Contact]) -> Contact:
-    """[keep] with the union of the others; its id, file and uid stay."""
+    """[keep] with the union of the others; its id, file and uid stay. What has no room left (another name, a second
+    address or birthday) goes to the notes, so a merge never loses a value."""
     c = keep
     for o in others:
         known = {p.normalized for p in c.phones}
@@ -431,10 +448,19 @@ def merge(keep: Contact, others: list[Contact]) -> Contact:
             if e.lower() not in mails:
                 mails.add(e.lower())
                 emails.append(e)
-        if not o.notes.strip() or o.notes.strip() in c.notes:
-            notes = c.notes
-        else:
-            notes = "\n\n".join(x for x in (c.notes.strip(), o.notes.strip()) if x)
+        leftovers = []
+        if _other_name(o, c):
+            leftovers.append(f"Autre nom : {o.name}")
+        if (o.address and o.address.strip() and c.address and c.address.strip()
+                and fmt.fold(o.address.strip()) != fmt.fold(c.address.strip())):
+            leftovers.append(f"Adresse : {o.address.strip()}")
+        if o.birthday and c.birthday and o.birthday != c.birthday:
+            leftovers.append(f"Anniversaire : {o.birthday.encode()}")
+        # appended once: merging or re-importing the same text again changes nothing
+        notes = c.notes
+        for text in [o.notes.strip(), *leftovers]:
+            if text and text not in notes:
+                notes = "\n\n".join(x for x in (notes.strip(), text) if x)
         c = c.copy(first_name=c.first_name if c.first_name.strip() else o.first_name,
                    last_name=c.last_name if c.last_name.strip() else o.last_name,
                    phones=phones, emails=emails,

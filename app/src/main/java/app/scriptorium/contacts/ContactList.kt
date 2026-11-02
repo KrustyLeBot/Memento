@@ -25,6 +25,15 @@ object Phones {
         return if (intl != null) "+$intl" else digits
     }
 
+    /**
+     * What to hand to the dialer, SMS and the phone's contacts: the number as typed, except the `(0)` of
+     * `+33 (0)1…`, which would otherwise be dialled after the country code.
+     */
+    fun dialable(raw: String): String {
+        val s = raw.trim()
+        return if (s.startsWith("+")) s.replace(Regex("""\s*\(0\)\s*"""), " ").trim() else s
+    }
+
     /** Digit strings a number can be found by: its normalised digits and, for a French number, `0…`. */
     fun searchForms(raw: String): List<String> {
         val n = normalize(raw)

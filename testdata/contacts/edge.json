@@ -1,0 +1,25 @@
+{
+  "bad": 0,
+  "empty": 1,
+  "ignored": {"CATEGORIES": 2},
+  "contacts": [
+    {
+      "first_name": "Anne", "last_name": "Morel",
+      "phones": ["06 00 00 00 01", "06 00 00 00 02 (Pro ancien)"],
+      "emails": [], "address": null, "birthday": "1990-05-14",
+      "notes": "Société : Exemple, Service; achats", "uid": null, "favorite": true
+    },
+    {
+      "first_name": "André", "last_name": "Lefèvre",
+      "phones": ["+33 (0)6 11 22 33 44 (mobile)"],
+      "emails": ["a,b@example.org"], "address": null, "birthday": null,
+      "notes": "été à Paris", "uid": null, "favorite": false
+    },
+    {
+      "first_name": "Zoé", "last_name": "",
+      "phones": ["+33-6-55-44-33-22 (mobile)"],
+      "emails": [], "address": "3 chemin des Vignes, 33330 Saint-Émilion, France", "birthday": "--02-29",
+      "notes": "", "uid": null, "favorite": false
+    }
+  ]
+}

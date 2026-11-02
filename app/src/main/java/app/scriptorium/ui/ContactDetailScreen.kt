@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import app.scriptorium.MainViewModel
 import app.scriptorium.Snack
 import app.scriptorium.contacts.Contact
+import app.scriptorium.contacts.Phones
 import app.scriptorium.suite.SuiteTopBar
 
 /** One contact: a row per number and e-mail with its action (dial, SMS, mail, map); long press copies. */
@@ -125,10 +126,10 @@ fun ContactDetailScreen(vm: MainViewModel) {
                         Box {
                             DetailRow(
                                 Icons.Default.Phone, p.number, p.label,
-                                onClick = { launch(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", p.number, null)), "appeler") },
+                                onClick = { launch(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", Phones.dialable(p.number), null)), "appeler") },
                                 onLongClick = { rowMenu = true },
                             ) {
-                                IconButton(onClick = { launch(Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", p.number, null)), "les SMS") }) {
+                                IconButton(onClick = { launch(Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", Phones.dialable(p.number), null)), "les SMS") }) {
                                     Icon(Icons.AutoMirrored.Filled.Message, "SMS")
                                 }
                             }
@@ -136,7 +137,7 @@ fun ContactDetailScreen(vm: MainViewModel) {
                                 DropdownMenuItem({ Text("Copier") }, { rowMenu = false; copy(p.number, "Numéro") })
                                 DropdownMenuItem({ Text("SMS") }, {
                                     rowMenu = false
-                                    launch(Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", p.number, null)), "les SMS")
+                                    launch(Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", Phones.dialable(p.number), null)), "les SMS")
                                 })
                             }
                         }

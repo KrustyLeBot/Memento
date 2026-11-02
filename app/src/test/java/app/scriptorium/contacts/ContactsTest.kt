@@ -25,6 +25,7 @@ class ContactsTest {
     @Test fun android21QuotedPrintable() = vcard("android21")
     @Test fun proton40() = vcard("proton40")
     @Test fun appleGroupedLabels() = vcard("apple")
+    @Test fun edgeCases() = vcard("edge")
 
     @Test
     fun crlfAndWindows1252() {
@@ -78,10 +79,11 @@ class ContactsTest {
         val v = Vectors.json("duplicates.json") as Map<String, Any?>
         val contacts = (v["contacts"] as List<Map<String, Any?>>).map { Vectors.contact(it) }
         assertEquals(v["groups"], Duplicates.groups(contacts).map { g -> g.map { it.id } })
-        val m = v["merge"] as Map<String, Any?>
-        val keep = contacts.first { it.id == m["keep"] }
-        val others = (m["others"] as List<String>).map { id -> contacts.first { it.id == id } }
-        assertEquals(m["expected"], Vectors.fields(Duplicates.merge(keep, others)))
+        (v["merges"] as List<Map<String, Any?>>).forEach { m ->
+            val keep = contacts.first { it.id == m["keep"] }
+            val others = (m["others"] as List<String>).map { id -> contacts.first { it.id == id } }
+            assertEquals(m["expected"], Vectors.fields(Duplicates.merge(keep, others)))
+        }
     }
 
     @Test

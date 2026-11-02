@@ -8,7 +8,7 @@ from __future__ import annotations
 import codecs
 from dataclasses import dataclass, field
 
-from .contacts import HOME, MOBILE, OTHER, WORK, Birthday, Contact, Phone
+from .contacts import HOME, MOBILE, OTHER, WORK, Birthday, Contact, Phone, clean_label
 
 
 @dataclass
@@ -189,7 +189,7 @@ def _phone_label(types: set[str], ab_label: str | None) -> str | None:
         return {"mobile": MOBILE, "cell": MOBILE, "iphone": MOBILE, "portable": MOBILE, "mobile phone": MOBILE,
                 "home": HOME, "domicile": HOME, "maison": HOME,
                 "work": WORK, "travail": WORK, "bureau": WORK,
-                "other": OTHER, "autre": OTHER, "main": OTHER}.get(label.lower(), label)
+                "other": OTHER, "autre": OTHER, "main": OTHER}.get(label.lower(), clean_label(label))
     t = types - {"PREF", "VOICE", "INTERNET", "X-INTERNET", "QUOTED-PRINTABLE", "BASE64"}
     if t & {"CELL", "MOBILE", "IPHONE"}:
         return MOBILE
@@ -269,6 +269,11 @@ def _read_card(lines: list[str], ignored: dict[str, int]) -> Contact | None:
             uid = _unescape(_text(p)).strip() or None
         elif p.name == "X-SCRIPTORIUM-FAVORITE":
             favorite = _text(p).strip().upper() == "TRUE"
+        elif p.name == "CATEGORIES":
+            # Google marks its starred contacts with a "starred" category; the rest is not kept
+            if any(_unescape(x).strip().lower() == "starred" for x in _text(p).split(",")):
+                favorite = True
+            ignored["CATEGORIES"] = ignored.get("CATEGORIES", 0) + 1
         elif p.name not in _READ:
             key = "X-…" if p.name.startswith("X-") else p.name
             ignored[key] = ignored.get(key, 0) + 1

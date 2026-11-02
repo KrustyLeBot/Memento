@@ -13,13 +13,20 @@ object PhoneLabels {
     const val WORK = "travail"
     const val OTHER = "autre"
     val standard = listOf(MOBILE, HOME, WORK, OTHER)
+
+    /**
+     * A label as it can be stored after a number: without parentheses, and with a letter in it, or `(2)` would
+     * read back as part of the number. Null when nothing is left.
+     */
+    fun clean(label: String?): String? =
+        label?.replace("(", " ")?.replace(")", " ")?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { l -> l.any { it.isLetter() } }
 }
 
 /** A phone as typed by the user; [label] is the optional text in parentheses. The number is never rewritten. */
 data class Phone(val number: String, val label: String? = null) {
     val normalized: String get() = Phones.normalize(number)
 
-    fun encode(): String = if (label.isNullOrBlank()) number.trim() else "${number.trim()} ($label)"
+    fun encode(): String = PhoneLabels.clean(label)?.let { "${number.trim()} ($it)" } ?: number.trim()
 
     companion object {
         private val LABEL = Regex("""^(.*?)\s*\(([^()]*\p{L}[^()]*)\)\s*$""")

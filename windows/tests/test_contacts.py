@@ -25,7 +25,7 @@ def contact(d) -> ct.Contact:
                       favorite=d.get("favorite", False), uid=d.get("uid"), notes=d.get("notes", ""))
 
 
-@pytest.mark.parametrize("name", ["google", "android21", "proton40", "apple"])
+@pytest.mark.parametrize("name", ["google", "android21", "proton40", "apple", "edge"])
 def test_vcard_vectors(name):
     expected = load(f"{name}.json")
     result = vcard.parse((VECTORS / f"{name}.vcf").read_bytes())
@@ -76,10 +76,10 @@ def test_duplicates_and_merge():
     v = load("duplicates.json")
     people = [contact(d) for d in v["contacts"]]
     assert [[c.id for c in g] for g in ct.duplicate_groups(people)] == v["groups"]
-    m = v["merge"]
-    keep = next(c for c in people if c.id == m["keep"])
-    others = [next(c for c in people if c.id == i) for i in m["others"]]
-    assert ct.merge(keep, others).fields() == m["expected"]
+    for m in v["merges"]:
+        keep = next(c for c in people if c.id == m["keep"])
+        others = [next(c for c in people if c.id == i) for i in m["others"]]
+        assert ct.merge(keep, others).fields() == m["expected"]
 
 
 def test_file_format_keeps_unknown_keys():
@@ -168,3 +168,9 @@ def test_delete_restore_merge_and_the_notes_list(tmp_path):
     assert files(tmp_path) == before
     assert store.scan() == []  # contacts stay out of the notes list
     assert len(store.scan_contacts()) == 2
+
+
+def test_a_label_never_reads_back_as_part_of_the_number():
+    for label in ("2", "a (b)", "(x)", "  "):
+        assert ct.Phone.decode(ct.Phone("06 00 00 00 03", label).encode()).number == "06 00 00 00 03"
+    assert ct.Phone("06", "Pro (ancien)").encode() == "06 (Pro ancien)"
