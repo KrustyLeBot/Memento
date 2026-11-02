@@ -1,0 +1,42 @@
+# Mémento web on a Synology NAS (docker-compose v1 compatible). Copy to /volume1/docker/memento-web/, next to a
+# `.env` made from .env.example, create the config folder by hand (mkdir /volume1/docker/memento-web/config),
+# then: docker-compose up -d
+#
+# Who the container runs as: the Mémento folder is written both by files copied by hand (your user, 1026:100) and
+# by the WebDAV server (rclone, running as root: 0:0, folders 755 / files 644). Only root can write in both, so
+# PUID/PGID are 0 here, the identity the WebDAV server already writes with; everything else is taken away: no
+# capability but DAC_OVERRIDE, the one that lets root read a 600 file and write in a 700 folder of another owner
+# (checked: without it root gets "Permission denied" there; FOWNER and CHOWN are not needed), no privilege
+# escalation, a read-only image. New files are created 644, folders 755, like rclone does. A note saved here is
+# replaced atomically (new file, then rename), so it becomes root's 644 file, exactly as when the WebDAV server
+# writes it. If every file of the folder has one owner (`ls -lnR`), set PUID/PGID to it instead and drop cap_add.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  memento-web:
+    image: ghcr.io/krustylebot/memento-web:latest
+    container_name: memento-web
+    restart: unless-stopped
+    logging: *logging
+    security_opt: [ "no-new-privileges:true" ]
+    cap_drop: [ ALL ]
+    cap_add: [ DAC_OVERRIDE ]
+    read_only: true
+    tmpfs: [ /tmp ]
+    user: "${PUID}:${PGID}"
+    env_file: .env
+    environment:
+      TZ: Europe/Paris
+    volumes:
+      - ${MEMENTO_DATA_HOST}:/data
+      - /volume1/docker/memento-web/config:/config
+    ports:
+      - "${WEB_PORT}:8080"
+    mem_limit: 256m
+    networks: [ tunnel ]
+
+networks:
+  tunnel:
+    external: true

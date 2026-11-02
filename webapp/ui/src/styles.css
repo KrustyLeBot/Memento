@@ -1,0 +1,98 @@
+/* The suite's burgundy palette, same values as windows/memento_win/ui/theme.py (LIGHT / DARK) and the Android app.
+   Modules use only these variables, so both themes follow. */
+:root, :root[data-theme="light"] {
+  --background: #FFF8F8;
+  --surface: #FCE9EC;
+  --surface-high: #F7E3E7;
+  --outline: #88767A;
+  --outline-variant: #C1ADB1;
+  --on-surface: #3C2F32;
+  --on-surface-variant: #6B5B5E;
+  --primary: #912C52;
+  --on-primary: #FFFFFF;
+  --primary-container: #FAAFC3;
+  --on-primary-container: #622D3E;
+  --secondary-container: #FFD9E1;
+  --on-secondary-container: #674A51;
+  --error: #A8364B;
+  --error-container: #F97386;
+  --on-error-container: #6E0523;
+  --snack: #322F2B;
+  --on-snack: #F4EFE8;
+  --snack-action: #FFB1C6;
+  --note-fg: #202124;
+  --note-red: #F28B82; --note-orange: #FBBC04; --note-yellow: #FFF475; --note-green: #CCFF90;
+  --note-teal: #A7FFEB; --note-blue: #CBF0F8; --note-darkblue: #AECBFA; --note-purple: #D7AEFB;
+  --note-pink: #FDCFE8; --note-brown: #E6C9A8; --note-gray: #E8EAED;
+  --shadow: 0 1px 3px rgba(60, 47, 50, 0.18), 0 4px 12px rgba(60, 47, 50, 0.08);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --background: #130D0E;
+  --surface: #211719;
+  --surface-high: #281D1F;
+  --outline: #837175;
+  --outline-variant: #534447;
+  --on-surface: #F6E0E4;
+  --on-surface-variant: #BAA6AA;
+  --primary: #FFB1C6;
+  --on-primary: #640330;
+  --primary-container: #734552;
+  --on-primary-container: #FFDAE2;
+  --secondary-container: #4E343B;
+  --on-secondary-container: #DBB6BE;
+  --error: #F97386;
+  --error-container: #871C34;
+  --on-error-container: #FF97A3;
+  --snack: #F4EFE8;
+  --on-snack: #322F2B;
+  --snack-action: #912C52;
+  --note-fg: #E8EAED;
+  --note-red: #77172E; --note-orange: #692B17; --note-yellow: #7C4A03; --note-green: #264D3B;
+  --note-teal: #0C625D; --note-blue: #256377; --note-darkblue: #284255; --note-purple: #472E5B;
+  --note-pink: #6C394F; --note-brown: #4B443A; --note-gray: #232427;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--background);
+  color: var(--on-surface);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+#app { height: 100%; }
+button, input, textarea, select { font: inherit; color: inherit; }
+a { color: var(--primary); }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* shared building blocks */
+.btn {
+  border: none; border-radius: 20px; padding: 8px 18px; background: transparent; color: var(--primary);
+  cursor: pointer; font-weight: 600; white-space: nowrap;
+}
+.btn:hover { background: var(--surface); }
+.btn.primary { background: var(--primary); color: var(--on-primary); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { background: var(--error); color: #fff; }
+.btn.tonal { background: var(--secondary-container); color: var(--on-secondary-container); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--outline-variant); border-radius: 8px;
+  padding: 5px 12px; background: transparent; cursor: pointer; white-space: nowrap; font-size: 14px;
+}
+.chip.on { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+.field {
+  width: 100%; border: 1px solid var(--outline-variant); border-radius: 12px; padding: 10px 14px;
+  background: var(--background); outline: none;
+}
+.field:focus { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.section-title {
+  color: var(--on-surface-variant); font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 18px 4px 8px;
+}
+.muted { color: var(--on-surface-variant); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

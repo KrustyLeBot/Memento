@@ -455,6 +455,26 @@ The CI builds `Memento.exe` with `pyinstaller --noconfirm memento.spec` (one fil
 Qt parts the app loads, Qt WebEngine for the map included) and publishes it next to the APK in the
 `latest` release. The exe is not signed, so SmartScreen may warn the first time.
 
+## Web app (self-hosted)
+
+`webapp/` serves the same folder to a browser, from a Docker container on the NAS that holds the synced folder
+(the WebDAV server's data): the Windows client's pure modules (`windows/memento_win/core`) are imported as is, the
+files are written with the same atomic rule, and a change made by a sync shows up live (the folder is polled every
+few seconds, changes are pushed to the page). It has its own login (throttled, sessions of 7 days, revoked at logout
+or when the password changes) on top of whatever sits in front (Cloudflare Access).
+
+```
+webapp/server/memento_web   Starlette + uvicorn: auth, API, live events, map host (one folder per module)
+webapp/ui                   Svelte 4 + Vite: shell, one folder per module (src/modules/<module>)
+webapp/tests                pytest, synthetic data only
+webapp/Dockerfile           built from the repository root: docker build -f webapp/Dockerfile .
+```
+
+Deployment: `webapp/docker-compose.example.yml` and `webapp/.env.example`. The CI tests both halves and publishes
+`ghcr.io/krustylebot/memento-web:latest` (and `:<build>`) from `main`. Development: `python -m memento_web` in
+`webapp/server` (with `MEMENTO_USER`, `MEMENTO_PASSWORD`, `MEMENTO_DATA`, `MEMENTO_CONFIG`) and `npm run dev` in
+`webapp/ui`; `python webapp/tests/synthetic.py <folder>` makes a test folder.
+
 ## Build
 
 ```
