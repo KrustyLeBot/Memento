@@ -1,24 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The account type as the contacts apps read it (AOSP ExternalAccountType + BaseAccountType; Samsung Contacts
-    follows it). Any rule broken below makes the whole account type rejected (DefinitionException), so:
-    - EditSchema must hold "name" and "photo";
-    - "name" must have maxOccurs="1" and ALL of supportsPrefix, supportsMiddleName, supportsSuffix and the three
-      supportsPhonetic* set to true (BaseAccountType.NameKindBuilder: "For now, every thing must be supported");
-    - "photo" and "note" must have maxOccurs="1"; a kind with a type column needs at least one Type.
+    The account type as the contacts apps read it. EditSchema lists the fields the phone's contacts app offers
+    when it creates or edits a Mémento contact: the name and the phone numbers only (the rest is entered in
+    Mémento; rows of other kinds that the files put on the phone are still shown, and kept, by the contacts app).
 
-    EditSchema: declares the fields a contact of the account may hold, which makes the account writable: the
-    phone's contacts app then offers "Mémento" when a contact is created (the "save to" list, default storage)
-    and edits its contacts with these fields, those of a Mémento contact (MirrorPlan.rows). The prefix and the
-    middle name are read into the first name, the suffix into the last name; the phonetic name and a photo stay
-    on the phone (an update keeps them) but are not copied into the files. E-mails and the address carry no
-    type in the files, so a single type is offered for them: a type chosen on the phone would not survive.
+    The rules, from AOSP packages/apps/Contacts (Samsung Contacts is derived from it):
+    https://android.googlesource.com/platform/packages/apps/Contacts/+/refs/heads/main/src/com/android/contacts/model/account/ExternalAccountType.java
+    https://android.googlesource.com/platform/packages/apps/Contacts/+/refs/heads/main/src/com/android/contacts/model/account/BaseAccountType.java
+    - areContactsWritable() is "has a valid EditSchema". Without one, or when the EditSchema breaks a rule
+      (DefinitionException), the type falls back to the name and the photo, read-only: the very symptom seen on
+      Samsung (a name-only editor, then a contact that cannot be edited at all), which the schema of 9f964b3
+      produced (supportsPrefix="false"). A broken rule rejects the whole type, so the schema keeps only kinds
+      DAVx5 also declares, and ContactsRegressionTest.accountTypeFollowsTheAospRules checks the rules below.
+    - "name" (maxOccurs="1") must have supportsPrefix, supportsMiddleName, supportsSuffix and the three
+      supportsPhonetic* all true ("For now, every thing must be supported").
+    - "photo" is mandatory (checkKindExists(Photo.CONTENT_ITEM_TYPE)) with maxOccurs="1": it cannot be left out.
+      Mémento has no photos; one set on the phone stays on the phone (an update keeps it).
+    - a kind with a type column ("phone") needs at least one Type, each a name known to its KindBuilder.
+    Attribute set shaped like DAVx5's, whose writable address books Samsung Contacts edits:
+    https://raw.githubusercontent.com/bitfireAT/davx5-ose/main-ose/core/src/main/res/xml/contacts.xml
+    (supportsFamilyName and supportsDisplayName are not read by AOSP; kept as DAVx5 has them.)
 
-    inviteContactActivity / inviteContactActionLabel (no namespace, also read by ExternalAccountType): on a
+    The prefix and the middle name are read into the first name, the suffix into the last name; the phonetic
+    name stays on the phone (an update writes it back) but is not copied into the files.
+
+    inviteContactActivity / inviteContactActionLabel (no namespace, read by ExternalAccountType.inflate): on a
     contact of ANOTHER account the contacts app may offer "Ajouter à Mémento", which starts MainActivity with
     com.android.contacts.action.INVITE_CONTACT and the contact's lookup URI (an import, ContactRequestFlow).
 -->
-<ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android"
+<ContactsAccountType
     inviteContactActivity="app.memento.MainActivity"
     inviteContactActionLabel="@string/invite_contact_label">
     <EditSchema>
@@ -26,6 +36,7 @@
             kind="name"
             maxOccurs="1"
             supportsDisplayName="true"
+            supportsFamilyName="true"
             supportsPrefix="true"
             supportsMiddleName="true"
             supportsSuffix="true"
@@ -40,15 +51,5 @@
             <Type type="other" />
             <Type type="custom" />
         </DataKind>
-        <DataKind kind="email">
-            <Type type="other" />
-        </DataKind>
-        <DataKind kind="postal" maxOccurs="1" needsStructured="false">
-            <Type type="home" />
-        </DataKind>
-        <DataKind kind="event" maxOccurs="1" dateWithTime="false">
-            <Type type="birthday" maxOccurs="1" yearOptional="true" />
-        </DataKind>
-        <DataKind kind="note" maxOccurs="1" />
     </EditSchema>
 </ContactsAccountType>

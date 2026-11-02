@@ -29,8 +29,9 @@ private class FakeProvider {
     fun apply(ops: List<MirrorOp>) {
         for (op in ops) when (op) {
             is MirrorOp.Insert -> raws[next++] = Raw(op.contact.id, op.hash, false, false, op.contact.favorite, MirrorPlan.rows(op.contact), null)
+            // as ContactsMirror: only the rows of the kinds Mémento owns are replaced
             is MirrorOp.Update -> raws.getValue(op.rawId).apply {
-                rows = MirrorPlan.rows(op.contact); hash = op.hash; dirty = false; starred = op.contact.favorite
+                rows = MirrorPlan.rows(op.contact) + rows.filterIsInstance<MirrorRow.Extra>(); hash = op.hash; dirty = false; starred = op.contact.favorite
             }
             is MirrorOp.Delete -> raws.remove(op.rawId)
             is MirrorOp.Ack -> raws.getValue(op.rawId).apply { sourceId = op.sourceId; hash = op.hash; dirty = false }
@@ -365,6 +366,59 @@ class MirrorSyncTest {
         run()
         assertEquals(c.notes, book.byId(c.id)!!.notes)
         assertSettled()
+    }
+
+    private val samsungExtras = listOf(
+        MirrorRow.Extra("Société", "ACME"), MirrorRow.Extra("Fonction", "Comptable"), MirrorRow.Extra("Site web", "https://acme.example"),
+        MirrorRow.Extra("Date (anniversaire de mariage)", "2010-06-12"), MirrorRow.Extra("E-mail (travail)", "jean@acme.example"),
+    )
+    private val extrasBlock = "Autres informations du téléphone :\n- Société : ACME\n- Fonction : Comptable\n- Site web : https://acme.example\n" +
+        "- Date (anniversaire de mariage) : 2010-06-12\n- E-mail (travail) : jean@acme.example"
+
+    @Test
+    fun fieldsTheFilesDoNotModelGoToTheNotesOnce() {
+        phone.create(
+            listOf(MirrorRow.Name("Jean", "Martin", "Jean Martin"), MirrorRow.Tel("06 11 22 33 44", PhoneKind.MOBILE, null), MirrorRow.Mail("jean@acme.example"), MirrorRow.Note("Voisin")) + samsungExtras,
+            at = late,
+        )
+        run()
+        val c = book.contacts.value.single()
+        assertEquals(listOf("jean@acme.example"), c.emails)
+        assertEquals("Voisin\n\n$extrasBlock", c.notes)
+        assertSettled()
+
+        // edited in Mémento: the update rewrites the owned rows (the note now holds the block) and keeps the others
+        book.save(c.copy(phones = c.phones + Phone("04 00 00 00 00", null)))
+        run()
+        val raw = phone.of(c.id)
+        assertEquals(samsungExtras, raw.rows.filterIsInstance<MirrorRow.Extra>())
+        assertEquals(MirrorRow.Note("Voisin\n\n$extrasBlock"), raw.rows.filterIsInstance<MirrorRow.Note>().single())
+        assertSettled()
+
+        // edited again on the phone: block and rows both read, nothing doubled; a new field is added to the block
+        phone.edit(c.id, late) { rows -> rows + MirrorRow.Extra("Surnom", "Jeannot") }
+        run()
+        assertEquals("Voisin\n\n$extrasBlock\n- Surnom : Jeannot", book.byId(c.id)!!.notes)
+        assertSettled()
+        phone.edit(c.id, late) { rows -> rows.map { if (it is MirrorRow.Tel) it.copy(kind = PhoneKind.WORK) else it } }
+        run()
+        assertEquals("Voisin\n\n$extrasBlock\n- Surnom : Jeannot", book.byId(c.id)!!.notes)
+        assertSettled()
+        assertTrue(phone.of(c.id).rows.containsAll(samsungExtras + MirrorRow.Extra("Surnom", "Jeannot")))
+    }
+
+    @Test
+    fun aContactWithOnlyExtrasOnAnEditKeepsTheFileNotes() {
+        val m = marie()
+        run()
+        // a phone edit that only adds an organisation: the file's notes get the block, the rest is unchanged
+        phone.edit(m.id, late) { rows -> rows + MirrorRow.Extra("Société", "ACME") }
+        run()
+        val c = book.byId(m.id)!!
+        assertEquals("Rencontrée à Lyon.\n\nAutres informations du téléphone :\n- Société : ACME", c.notes)
+        assertEquals(m.copy(notes = c.notes).phones, c.phones)
+        assertSettled()
+        assertEquals(listOf(MirrorRow.Extra("Société", "ACME")), phone.of(m.id).rows.filterIsInstance<MirrorRow.Extra>())
     }
 
     @Test

@@ -138,7 +138,7 @@ class ContactsMirror(private val context: Context) {
 
     private fun inList(ids: List<Long>) = ids.joinToString(",", "(", ")")
 
-    /** The mirrored kinds of data rows of [rawIds], as [MirrorRow]s (other kinds, a photo, are not read). */
+    /** The data rows of [rawIds] as [MirrorRow]s: the mirrored kinds, then [MirrorRow.Extra]s (a photo is not read). */
     private fun dataRows(rawIds: List<Long>): Map<Long, List<MirrorRow>> {
         val out = HashMap<Long, MutableList<MirrorRow>>()
         val cols = arrayOf(Data.RAW_CONTACT_ID, Data.MIMETYPE) + (1..10).map { "data$it" }
@@ -168,7 +168,10 @@ class ContactsMirror(private val context: Context) {
                         CommonDataKinds.Note.CONTENT_ITEM_TYPE -> s(1).takeIf { it.isNotEmpty() }?.let { MirrorRow.Note(it) }
                         else -> null
                     }
-                    if (row != null) out.getOrPut(c.getLong(0)) { ArrayList() }.add(row)
+                    val list = out.getOrPut(c.getLong(0)) { ArrayList() }
+                    if (row != null) list.add(row)
+                    // what the files have no field for (an organisation, an anniversary, an e-mail's type...): into the notes
+                    list.addAll(MirrorPlan.extra(c.getString(1).orEmpty(), (1..10).map { s(it) }))
                 }
             } ?: throw IllegalStateException("Le carnet d'adresses du téléphone ne répond pas")
         }
@@ -251,10 +254,7 @@ class ContactsMirror(private val context: Context) {
     }
 
     /** Rewritten by an Update; of the events only the birthday is mirrored (an anniversary stays on the phone). */
-    private val mirroredMimes = listOf(
-        CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE, CommonDataKinds.Phone.CONTENT_ITEM_TYPE, CommonDataKinds.Email.CONTENT_ITEM_TYPE,
-        CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE, CommonDataKinds.Note.CONTENT_ITEM_TYPE,
-    )
+    private val mirroredMimes = MirrorPlan.OWNED_MIMES
 
     /**
      * The phonetic names (given, middle, family) of [rawIds], typed on the phone: the files have no field for
@@ -359,6 +359,7 @@ class ContactsMirror(private val context: Context) {
             .withValue(CommonDataKinds.Event.TYPE, CommonDataKinds.Event.TYPE_BIRTHDAY)
         is MirrorRow.Note -> b.withValue(Data.MIMETYPE, CommonDataKinds.Note.CONTENT_ITEM_TYPE)
             .withValue(CommonDataKinds.Note.NOTE, row.text)
+        is MirrorRow.Extra -> throw IllegalArgumentException("Extra rows are read from the phone, never written")
     }
 
     companion object {
