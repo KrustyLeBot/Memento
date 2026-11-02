@@ -62,7 +62,8 @@ sealed class LegacyImport {
     data class Failed(val message: String) : LegacyImport()
 }
 
-data class Snack(val text: String, val undo: (() -> Unit)? = null)
+/** [undo] is the snackbar's action, labelled [action]. */
+data class Snack(val text: String, val action: String = "Annuler", val undo: (() -> Unit)? = null)
 
 /** Everything the editor can change, for change detection and autosave. */
 data class EditorSnapshot(
@@ -141,7 +142,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val persistLock = Mutex()
 
     /** The "Activités" folder (import, recording, detail). */
-    val activities = ActivityController(app, repo, viewModelScope, io, { snack = it }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }).also { c ->
+    val activities = ActivityController(app, repo, viewModelScope, io, { snack = it }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }, syncing = { syncing }).also { c ->
         c.onOpen = { screen = Screen.ACTIVITY }
     }
 
@@ -224,6 +225,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repo.onFolderAdded = { viewModelScope.launch { repo.rewatch() } }
         storageReady = checkStorageReady()
         if (storageReady) refresh()
+        restoreDrafts()
     }
 
     // ---- storage ----
@@ -290,6 +292,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onPause() {
         repo.stopWatching()
         flushEditor()
+        agenda.keepDraft()
+        contacts.keepDraft()
     }
 
     fun refresh() {
@@ -647,6 +651,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             snack = Snack(if (error == null) "Ancien dossier Griffonote supprimé" else "Suppression impossible : ${error.message}")
         }
     }
+    /** The record screen scrolls to its offline maps (the map-download notification), then clears this. */
+    var showPreparedRoutes by mutableStateOf(false)
+
     /** The module root the record screen goes back to (the notes' "recording" card, the notification). */
     private var recordReturn = Screen.ACTIVITIES
 
@@ -795,9 +802,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * A notification, a widget or another app takes the user elsewhere: the open note (and its drawing) is
      * saved and closed first, as back would do, instead of being left unsaved behind the new screen.
      */
-    fun leaveNoteEditor() {
-        if (screen == Screen.DRAWING) closeDrawing()
-        if (screen == Screen.EDITOR) closeEditor()
+    fun leaveEditors() {
+        when (screen) {
+            Screen.DRAWING -> { closeDrawing(); if (screen == Screen.EDITOR) closeEditor() }
+            Screen.EDITOR -> closeEditor()
+            Screen.EVENT_EDIT -> agenda.leaveEditor()
+            Screen.CONTACT_EDIT -> contacts.leaveEditorForIntent()
+            else -> {}
+        }
+    }
+
+    /** Event and contact editors left open when the process was killed: back, once the folder was read. */
+    private fun restoreDrafts() {
+        agenda.whenLoaded {
+            contacts.whenScanned {
+                val target = when {
+                    agenda.restoreDraft() -> Screen.EVENT_EDIT
+                    contacts.restoreDraft() -> Screen.CONTACT_EDIT
+                    else -> return@whenScanned
+                }
+                // an intent (notification, widget) already took the user somewhere: offer it instead of taking over
+                if (screen.module != null) screen = target
+                else snack = Snack("Brouillon retrouvé", action = "Reprendre") { screen = target }
+            }
+        }
     }
 
     fun closeEditor() {

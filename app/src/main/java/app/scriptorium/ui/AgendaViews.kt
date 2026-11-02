@@ -261,7 +261,7 @@ private fun MonthGrid(c: AgendaController, sources: AgendaSources, ym: YearMonth
                             Text(
                                 entryTitle(e), color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Clip,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 1.dp, vertical = 1.dp).clip(RoundedCornerShape(3.dp))
-                                    .background(agendaColor(e.color)).padding(horizontal = 2.dp),
+                                    .background(agendaChipColor(e.color)).padding(horizontal = 2.dp),
                             )
                         }
                         if (more > 0) Text("+$more", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 3.dp))
@@ -358,7 +358,7 @@ private fun TimeGridPage(
                     Column(Modifier.weight(1f).padding(horizontal = 1.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         shown.forEach { e ->
                             Text(entryTitle(e), color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(agendaColor(e.color))
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(agendaChipColor(e.color))
                                     .clickable { c.open(e) }.padding(horizontal = 4.dp, vertical = 2.dp))
                         }
                         if (more > 0) Text("+$more", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -411,7 +411,7 @@ private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>,
             val w = width / p.columns
             Column(
                 Modifier.offset(x = w * p.column, y = top).width(w).height(height).padding(1.dp)
-                    .clip(RoundedCornerShape(5.dp)).background(agendaColor(p.entry.color)).clickable { c.open(p.entry) }
+                    .clip(RoundedCornerShape(5.dp)).background(agendaChipColor(p.entry.color)).clickable { c.open(p.entry) }
                     .padding(horizontal = 3.dp, vertical = 2.dp),
             ) {
                 Text(entryTitle(p.entry), color = Color.White, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold,

@@ -86,7 +86,8 @@ class PackDownloadService : Service() {
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "Téléchargement de cartes", NotificationManager.IMPORTANCE_LOW))
         }
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
+            this, 0, Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_MAP_DOWNLOADS)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val cancel = PendingIntent.getService(

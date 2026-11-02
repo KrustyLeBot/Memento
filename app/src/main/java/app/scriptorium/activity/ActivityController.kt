@@ -12,6 +12,7 @@ import app.scriptorium.Snack
 import app.scriptorium.record.Recorder
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -42,7 +43,14 @@ class ActivityController(
     private val say: (Snack) -> Unit,
     private val copyIn: (Uri) -> String,
     private val refineAltitude: () -> Boolean = { false },
+    /** A sync is running: the folder is read-only until it ends (the banner says why). Compose state. */
+    private val syncing: () -> Boolean = { false },
 ) {
+    private fun readOnly(): Boolean {
+        if (syncing()) say(Snack("Synchronisation en cours : réessaie dans un instant"))
+        return syncing()
+    }
+
     val activities = repo.activities
 
     var pending by mutableStateOf<PendingImport?>(null)
@@ -59,7 +67,7 @@ class ActivityController(
 
     /** Reads a FIT or GPX file and asks the user to confirm. Nothing is written yet. */
     fun startImport(uri: Uri) {
-        if (busy) return
+        if (busy || readOnly()) return
         busy = true
         scope.launch {
             try {
@@ -98,6 +106,7 @@ class ActivityController(
 
     fun confirmImport(title: String, sport: Sport, useRelief: Boolean) {
         val p = pending ?: return
+        if (readOnly()) return
         pending = null
         busy = true
         scope.launch {
@@ -155,7 +164,7 @@ class ActivityController(
     /** Edits the distance of an activity without a track (typed after the fact). */
     fun setManualDistance(note: Note, meters: Double) {
         val info = note.activity ?: return
-        if (info.file != null) return
+        if (info.file != null || readOnly()) return
         scope.launch {
             val saved = withContext(io) {
                 repo.save(note.copy(activity = info.copy(distance = meters), updated = System.currentTimeMillis()))
@@ -168,8 +177,14 @@ class ActivityController(
 
     /** Turns the recording log into an activity (FIT file + note). [distance] is for activities without GPS. */
     fun saveRecording(log: String, title: String, distance: Double?) {
+        if (busy) return
         busy = true
         scope.launch {
+            if (syncing()) {
+                // a finished recording is never refused: it waits (its log stays on disk) and is written after the sync
+                say(Snack("Synchronisation en cours : l'activité sera enregistrée dès la fin"))
+                androidx.compose.runtime.snapshotFlow { syncing() }.first { !it }
+            }
             try {
                 val note = withContext(io) {
                     val rec = RecordingLog.parse(log) ?: throw java.io.IOException("Enregistrement illisible")
@@ -220,6 +235,7 @@ class ActivityController(
 
     /** Looks the altitude of a track without one up online (positions go to opentopodata.org). */
     fun fetchAltitude(note: Note) {
+        if (readOnly()) return
         scope.launch {
             val saved = lookUpAltitude(note, quiet = false)
             open(saved)
@@ -269,7 +285,7 @@ class ActivityController(
 
     /** Completes several activities one after the other; stops at the first service failure (quota, offline). */
     fun fillAltitudes(notes: List<Note>) {
-        if (reliefProgress != null) return
+        if (reliefProgress != null || readOnly()) return
         scope.launch {
             var done = 0
             var skipped = 0
@@ -341,6 +357,7 @@ class ActivityController(
 
     /** Title, description and sport; a new sport recomputes the figures from the track. */
     fun update(note: Note, title: String, description: String, sport: Sport) {
+        if (readOnly()) return
         scope.launch {
             val saved = withContext(io) {
                 var info = note.activity
@@ -357,11 +374,13 @@ class ActivityController(
     }
 
     fun delete(note: Note) {
+        if (readOnly()) return
         detail = null
         scope.launch { withContext(io) { repo.delete(note) } }
     }
 
     fun addPhoto(note: Note, uri: Uri) {
+        if (readOnly()) return
         scope.launch {
             try {
                 val saved = withContext(io) {
@@ -376,6 +395,7 @@ class ActivityController(
     }
 
     fun removePhoto(note: Note, path: String) {
+        if (readOnly()) return
         scope.launch {
             val saved = withContext(io) {
                 val fresh = repo.activities.value.firstOrNull { it.path == note.path } ?: note

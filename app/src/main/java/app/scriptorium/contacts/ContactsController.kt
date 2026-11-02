@@ -9,6 +9,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import app.scriptorium.NoteFormat
+import app.scriptorium.ContactEditorDraft
+import app.scriptorium.DraftCodec
+import app.scriptorium.DraftFiles
+import app.scriptorium.PhoneDraft
 import app.scriptorium.NoteRepository
 import app.scriptorium.Screen
 import app.scriptorium.Snack
@@ -216,7 +220,81 @@ class ContactsController(
 
     private fun leaveEditor(shown: Contact?) {
         editor = null
+        drafts.clear(drafts.contact)
         if (shown != null) { openId = shown.id; navigate(Screen.CONTACT) } else { openId = null; navigate(Screen.CONTACTS) }
+    }
+
+    // ---- drafts (process death, leaving for a notification or a widget) ----
+
+    private val drafts = DraftFiles(app.filesDir)
+
+    /** On pause: the open editor's fields go to a private file, so a killed process gives them back. */
+    fun keepDraft() {
+        val ed = editor
+        if (ed == null || !ed.changed) { drafts.clear(drafts.contact); return }
+        val d = ContactEditorDraft(
+            originalPath = ed.original?.path, firstName = ed.firstName, lastName = ed.lastName,
+            phones = ed.phones.map { PhoneDraft(it.number, it.label) }, emails = ed.emails.toList(),
+            address = ed.address, birthDay = ed.birthDay, birthMonth = ed.birthMonth, birthYear = ed.birthYear,
+            notes = ed.notes, favorite = ed.favorite,
+        )
+        try {
+            drafts.write(drafts.contact, DraftCodec.encodeContact(d))
+        } catch (e: java.io.IOException) {
+            android.util.Log.w("ContactsController", "draft not kept", e)
+        }
+    }
+
+    /** After a restart, once the folder was read: the editor left open when the process died (its contact still there). */
+    fun restoreDraft(): Boolean {
+        if (editor != null) return false
+        val text = drafts.read(drafts.contact) ?: return false
+        drafts.clear(drafts.contact)
+        val d = DraftCodec.decodeContact(text) ?: return false
+        val original = d.originalPath?.let { p -> contacts.value.firstOrNull { it.path == p && !it.conflict } ?: return false }
+        editor = ContactEditState(original).apply {
+            firstName = d.firstName
+            lastName = d.lastName
+            phones.clear(); phones.addAll(d.phones.map { PhoneField(it.number, it.label) })
+            emails.clear(); emails.addAll(d.emails)
+            address = d.address
+            birthDay = d.birthDay
+            birthMonth = d.birthMonth
+            birthYear = d.birthYear
+            notes = d.notes
+            favorite = d.favorite
+        }
+        openId = original?.id
+        detailReturn = Screen.CONTACTS
+        return true
+    }
+
+    /**
+     * A notification, a widget or a shared file takes the user elsewhere while the editor is open: saved when
+     * it can be; otherwise kept in memory and the snackbar brings it back.
+     */
+    fun leaveEditorForIntent() {
+        val ed = editor ?: return
+        if (!ed.changed) { editor = null; drafts.clear(drafts.contact); return }
+        val c = ed.toContact()
+        val problem = ed.birthday().exceptionOrNull()?.message
+            ?: (if (c.isEmpty) "contact vide" else null)
+            ?: (if (syncing()) "synchronisation en cours" else null)
+        if (problem != null) {
+            say(Snack("Contact non enregistré ($problem)", action = "Reprendre") { navigate(Screen.CONTACT_EDIT) })
+            return
+        }
+        editor = null
+        drafts.clear(drafts.contact)
+        scope.launch {
+            try {
+                withContext(io) { book.save(c) }
+                say(Snack("Contact enregistré"))
+            } catch (e: Exception) {
+                editor = ed
+                say(Snack("Échec de l'enregistrement : ${e.message}", action = "Reprendre") { navigate(Screen.CONTACT_EDIT) })
+            }
+        }
     }
 
     fun toggleFavorite(c: Contact) {
@@ -239,7 +317,7 @@ class ContactsController(
         scope.launch {
             try {
                 val raw = withContext(io) { book.delete(c) }
-                say(Snack("Contact supprimé", raw?.let { text -> { restore(c.path, text) } }))
+                say(Snack("Contact supprimé", undo = raw?.let { text -> { restore(c.path, text) } }))
             } catch (e: Exception) {
                 say(Snack("Suppression impossible : ${e.message}"))
             }

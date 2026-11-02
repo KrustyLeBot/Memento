@@ -54,6 +54,7 @@ import app.scriptorium.map.OfflinePacks
 import app.scriptorium.suite.ConfirmDialog
 import app.scriptorium.suite.SuiteTopBar
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /** Start, follow and stop an activity. Recording goes on in a service when this screen is left. */
 @Composable
@@ -104,7 +105,15 @@ fun RecordScreen(vm: MainViewModel) {
         Column(Modifier.padding(padding).fillMaxSize()) {
             val l = live
             if (l == null) {
-                Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                val scroll = rememberScrollState()
+                LaunchedEffect(vm.showPreparedRoutes) {
+                    if (!vm.showPreparedRoutes) return@LaunchedEffect
+                    vm.showPreparedRoutes = false
+                    // the offline maps end the screen: wait for its first layout, then go to the end
+                    kotlinx.coroutines.withTimeoutOrNull(2_000) { androidx.compose.runtime.snapshotFlow { scroll.maxValue }.first { it > 0 } }
+                    scroll.animateScrollTo(scroll.maxValue)
+                }
+                Column(Modifier.padding(16.dp).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text("Quelle activité ?", style = MaterialTheme.typography.titleMedium)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(Sport.WALK, Sport.BIKE, Sport.EBIKE).forEach { s -> SportButton(s, sport == s, Modifier.weight(1f)) { sport = s } }

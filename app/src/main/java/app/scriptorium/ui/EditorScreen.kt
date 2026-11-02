@@ -132,7 +132,7 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm.snack) {
         val s = vm.snack ?: return@LaunchedEffect
-        val result = snackbar.showSnackbar(s.text, actionLabel = if (s.undo != null) "Annuler" else null)
+        val result = snackbar.showSnackbar(s.text, actionLabel = if (s.undo != null) s.action else null)
         if (result == SnackbarResult.ActionPerformed) s.undo?.invoke()
         vm.snack = null
     }
