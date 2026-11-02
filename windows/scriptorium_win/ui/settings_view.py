@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QToolButton, QVBoxLayout, QWidget)
 
+from ..core.agenda.frdates import alert_label
 from ..core.settings import ActivitySettings
 from ..core.track import Sport
 from ..services import updater
@@ -20,6 +21,7 @@ class SettingsScreen(QWidget):
     activity_changed = Signal(object)  # ActivitySettings
     module_visibility = Signal(str, bool)
     contacts_order = Signal(bool)  # True: first name first
+    agenda_changed = Signal(dict)  # one key of: week_start, event_zone_times, default_alerts, default_calendar, birthdays
 
     def __init__(self):
         super().__init__()
@@ -127,6 +129,41 @@ class SettingsScreen(QWidget):
         self.first_name_box.toggled.connect(lambda on: None if self._loading else self.contacts_order.emit(on))
         body.addWidget(self.first_name_box)
 
+        section("Agenda")
+        body.addWidget(QLabel("Premier jour de la semaine"))
+        self.week_buttons = {0: self._chip("Lundi"), 6: self._chip("Dimanche")}
+        week_group = QButtonGroup(self)
+        week_group.setExclusive(True)
+        week_row = QHBoxLayout()
+        for value, b in self.week_buttons.items():
+            week_group.addButton(b)
+            week_row.addWidget(b)
+            b.clicked.connect(lambda _=False, v=value: self._agenda({"week_start": v}))
+        week_row.addStretch()
+        body.addLayout(week_row)
+        self.event_zone_box = QCheckBox("Afficher les heures dans le fuseau de l'événement (sinon celui de ce PC)")
+        self.event_zone_box.toggled.connect(lambda on: self._agenda({"event_zone_times": on}))
+        body.addWidget(self.event_zone_box)
+        body.addWidget(QLabel("Agenda par défaut des nouveaux événements (synchronisé)"))
+        self.default_calendar = QComboBox()
+        self.default_calendar.activated.connect(
+            lambda i: self._agenda({"default_calendar": self.default_calendar.itemData(i)}))
+        body.addWidget(self.default_calendar, 0, Qt.AlignmentFlag.AlignLeft)
+        body.addWidget(QLabel("Rappels par défaut des nouveaux événements, avant le début (ils sonnent sur le téléphone)"))
+        self.alert_buttons: dict[int, QPushButton] = {}
+        alerts_row = QHBoxLayout()
+        for minutes in (0, -5, -10, -15, -30, -60, -1440, -10080):
+            b = self._chip(alert_label(minutes).removesuffix(" avant"))
+            b.setMinimumWidth(b.sizeHint().width())
+            b.toggled.connect(lambda _=False: self._agenda({"default_alerts": self._alerts()}))
+            self.alert_buttons[minutes] = b
+            alerts_row.addWidget(b)
+        alerts_row.addStretch()
+        body.addLayout(alerts_row)
+        self.birthdays_box = QCheckBox("Afficher les anniversaires des contacts (synchronisé)")
+        self.birthdays_box.toggled.connect(lambda on: self._agenda({"birthdays": on}))
+        body.addWidget(self.birthdays_box)
+
         section("À propos")
         self.version = QLabel(f"Scriptorium build {updater.current_build()}")
         body.addWidget(self.version)
@@ -160,6 +197,27 @@ class SettingsScreen(QWidget):
             return
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
                                                     {s for s, b in self.total_boxes.items() if b.isChecked()}))
+
+    def _alerts(self) -> list[int]:
+        return sorted(m for m, b in self.alert_buttons.items() if b.isChecked())
+
+    def _agenda(self, change: dict) -> None:
+        if not self._loading:
+            self.agenda_changed.emit(change)
+
+    def load_agenda(self, prefs, calendars) -> None:
+        """prefs: AgendaPrefs (this PC); calendars: CalendarSettings (agenda/calendars.json)."""
+        self._loading = True
+        self.week_buttons.get(prefs.week_start, self.week_buttons[0]).setChecked(True)
+        self.event_zone_box.setChecked(prefs.event_zone_times)
+        for minutes, b in self.alert_buttons.items():
+            b.setChecked(minutes in prefs.default_alerts)
+        self.default_calendar.clear()
+        for cal in calendars.calendars:
+            self.default_calendar.addItem(cal.name, cal.id)
+        self.default_calendar.setCurrentIndex(max(0, self.default_calendar.findData(calendars.default_calendar().id)))
+        self.birthdays_box.setChecked(calendars.layer("birthdays").visible)
+        self._loading = False
 
     def set_contacts_first_name_first(self, value: bool) -> None:
         self._loading = True

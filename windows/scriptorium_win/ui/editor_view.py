@@ -199,6 +199,11 @@ class EditorScreen(QWidget):
         self.pin_button.toggled.connect(self._on_pin)
         top.addWidget(self.back_button)
         top.addStretch()
+        self.date_chip = QPushButton()
+        self.date_chip.setToolTip("Date dans l'agenda")
+        self.date_chip.clicked.connect(self.plan)
+        self.date_chip.hide()
+        top.addWidget(self.date_chip)
         top.addWidget(self.pin_button)
         root.addLayout(top)
 
@@ -305,6 +310,8 @@ class EditorScreen(QWidget):
         tools.addWidget(self._tool("label", "Libellés", self.pick_labels, self.tool_buttons))
         tools.addWidget(self._tool("attach", "Joindre des fichiers", self.add_attachments, self.tool_buttons))
         tools.addWidget(self._tool("brush", "Dessiner", self.new_drawing, self.tool_buttons))
+        self.plan_button = self._tool("event", "Ajouter à l'agenda", self.plan, self.tool_buttons)
+        tools.addWidget(self.plan_button)
         tools.addWidget(self._tool("share", "Copier la note", self.copy_note, self.tool_buttons))
         tools.addStretch()
         self.delete_button = self._tool("delete", "Supprimer la note", self._request_delete, None)
@@ -388,6 +395,8 @@ class EditorScreen(QWidget):
         self.after.setPlainText(parts.after)
         self.banner.setVisible(note.conflict)
         self.pdf_banner.setVisible(bool(note.pdf))
+        self.plan_button.setVisible(not note.path.startswith("agenda/"))  # an event's dates live in the agenda
+        self._show_date()
         self._show_attachments()
         self._refresh_visibility()
         self.dirty = False
@@ -571,6 +580,58 @@ class EditorScreen(QWidget):
         title = self.title.text().strip()
         QGuiApplication.clipboard().setText("\n\n".join(p for p in (title, text) if p))
         self.message.emit("Note copiée dans le presse-papiers")
+
+    # ---- dated notes (agenda, Notes layer) ----
+
+    def _dated(self):
+        from ..core.agenda.model import AgendaFormatError, event_from_note
+        try:
+            return event_from_note(self.current) if self.current is not None else None
+        except AgendaFormatError:
+            return None
+
+    def _show_date(self) -> None:
+        from ..core.agenda.frdates import clock, medium_date
+        from ..core.agenda.model import has_start
+        ev = self._dated() if self.current is not None and not self.current.path.startswith("agenda/") else None
+        if ev is None:
+            unreadable = self.current is not None and has_start(self.current) and not self.current.path.startswith("agenda/")
+            self.date_chip.setVisible(unreadable)
+            self.date_chip.setText("Date illisible")
+            return
+        from datetime import date as _date, datetime as _datetime
+        text = medium_date(ev.start if not isinstance(ev.start, _datetime) else ev.start.date(), _date.today())
+        if isinstance(ev.start, _datetime):
+            text += f", {clock(ev.start)}"
+        self.date_chip.setText(text)
+        self.date_chip.setIcon(icons.icon("event", theme.scheme().primary, 18))
+        self.date_chip.show()
+
+    def plan(self) -> None:
+        """"Ajouter à l'agenda": a date (+ time, + reminder) on the note, or "Retirer de l'agenda"."""
+        if self.current is None:
+            return
+        from datetime import date as _date
+        from ..core.agenda.model import Event, event_to_note, strip_agenda
+        from .agenda_editor import DateNoteDialog
+        current = self._dated()
+        dialog = DateNoteDialog(self, current, _date.today())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.removed:
+            note = strip_agenda(self.current)
+            self.message.emit("Note retirée de l'agenda")
+        else:
+            start = dialog.start()
+            base = current or Event(note=strip_agenda(self.current), start=start)
+            timed = hasattr(start, "hour")
+            note = event_to_note(base.copy(start=start, end=None, alerts=dialog.alerts(), rrule=None, exdate=[],
+                                           tz=base.tz if timed else None))
+            self.message.emit("Note ajoutée à l'agenda")
+        self.current = note
+        self._show_date()
+        self._edited()
+        self.save()
 
     def _request_delete(self) -> None:
         if self.current is None:
