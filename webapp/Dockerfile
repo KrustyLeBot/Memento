@@ -15,7 +15,7 @@ RUN npm run build \
 # ---- the server: python slim (glibc: musl's allocator holds more memory) ----
 FROM python:3.12.8-slim-bookworm@sha256:2199a62885a12290dc9c5be3ca0681d367576ab7bf037da120e564723292a2f0
 ARG BUILD=dev
-LABEL org.opencontainers.image.source="https://github.com/KrustyLeBot/Griffonote" \
+LABEL org.opencontainers.image.source="https://github.com/KrustyLeBot/Memento" \
       org.opencontainers.image.title="memento-web" \
       org.opencontainers.image.description="Mémento (notes, agenda, activités, contacts) in a browser, on the synced folder"
 # MALLOC_ARENA_MAX: two glibc arenas instead of one per thread keep the idle footprint small.

@@ -16,7 +16,7 @@ MIME = {"ortho": "image/jpeg", "dem": "image/png", "osm": "image/png"}
 EXT = {"ortho": "jpg", "dem": "png", "osm": "png"}
 OLD_KINDS = ("plan",)  # browsing-cache folders of former base layers, deleted at startup
 BUILDINGS_Z = 15  # core/buildings.py's cells
-USER_AGENT = "Memento (https://github.com/KrustyLeBot/Griffonote)"
+USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
 IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
              "&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}")

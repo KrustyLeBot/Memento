@@ -323,7 +323,7 @@ class ActivityController(
         val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
         c.connectTimeout = 15000
         c.readTimeout = 30000
-        c.setRequestProperty("User-Agent", "Memento (https://github.com/KrustyLeBot/Griffonote)")
+        c.setRequestProperty("User-Agent", "Memento (https://github.com/KrustyLeBot/Memento)")
         try {
             if (c.responseCode != 200) throw Elevation.ElevationException("Service d'altitude : HTTP ${c.responseCode} (limite atteinte ?)")
             return c.inputStream.use { String(it.readBytes(), Charsets.UTF_8) }

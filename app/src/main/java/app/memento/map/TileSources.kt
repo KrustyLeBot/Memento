@@ -45,7 +45,7 @@ data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
 
 /** Where tiles come from. The IGN orthophotos cover France; elsewhere IGN answers "no data" and OSM takes over. */
 object TileSources {
-    const val USER_AGENT = "Memento (https://github.com/KrustyLeBot/Griffonote)"
+    const val USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
     fun ign(z: Int, x: Int, y: Int) =
         "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS" +

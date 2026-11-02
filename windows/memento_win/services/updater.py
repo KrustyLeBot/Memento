@@ -14,9 +14,9 @@ import requests
 
 from .. import _version
 
-REPO_URL = "https://github.com/KrustyLeBot/Griffonote/releases/tag/latest"
-API = "https://api.github.com/repos/KrustyLeBot/Griffonote/releases/tags/latest"
-_UA = f"Memento-Windows/{_version.BUILD} (https://github.com/KrustyLeBot/Griffonote)"
+REPO_URL = "https://github.com/KrustyLeBot/Memento/releases/tag/latest"
+API = "https://api.github.com/repos/KrustyLeBot/Memento/releases/tags/latest"
+_UA = f"Memento-Windows/{_version.BUILD} (https://github.com/KrustyLeBot/Memento)"
 
 
 @dataclass

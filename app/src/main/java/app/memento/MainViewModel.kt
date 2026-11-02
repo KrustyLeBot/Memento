@@ -193,7 +193,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var storageLabel by mutableStateOf("")
     var storageReady by mutableStateOf(false)
     var pendingStorage by mutableStateOf<StorageConfig?>(null)
-    val updates = SuiteUpdates(app, SuiteUpdater(app, "KrustyLeBot/Griffonote", "${app.packageName}.fileprovider"), viewModelScope)
+    val updates = SuiteUpdates(app, SuiteUpdater(app, "KrustyLeBot/Memento", "${app.packageName}.fileprovider"), viewModelScope)
 
     private var scanJob: Job? = null
     private var externalJob: Job? = null

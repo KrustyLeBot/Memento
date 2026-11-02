@@ -41,7 +41,7 @@ def pick(points: list[TrackPoint]) -> list[TrackPoint]:
 
 
 def http_get(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "Memento (https://github.com/KrustyLeBot/Griffonote)"})
+    request = urllib.request.Request(url, headers={"User-Agent": "Memento (https://github.com/KrustyLeBot/Memento)"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.read().decode("utf-8")
