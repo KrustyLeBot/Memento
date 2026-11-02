@@ -8,6 +8,7 @@
   import { prefs, setPref, showError, showSnack } from '../../lib/ui.js';
   import { MODULES } from '../index.js';
   import Icon from '../../lib/components/Icon.svelte';
+  import AgendaSettings from '../agenda/AgendaSettings.svelte';
   /** @type {import('../../lib/router.js').Route} */
   export let route;
   $: void route;
@@ -111,6 +112,8 @@
           on:change={(e) => toggleModule(m.key, e.currentTarget.checked)} /> {m.label}</label>
       {/each}
     </div>
+
+    {#if !$prefs.hidden.includes('agenda')}<AgendaSettings />{/if}
 
     {#if activity}
       <h2 class="section-title">Activités (synchronisé avec le téléphone)</h2>
