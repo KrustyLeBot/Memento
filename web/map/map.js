@@ -5,7 +5,10 @@
 (function () {
   const params = new URLSearchParams(location.search);
   const BASE = new URL('../', location.href).href;  // the page lives at <base>map/index.html
-  const PITCH = 65;
+  const PITCH = 65;          // the block seen from the side, on a landscape view
+  const PITCH_TALL = 45;     // on a tall narrow view, so the whole square's surface stays in sight
+  const FOLLOW_PITCH = 55;
+  const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
   const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
   const THEMES = {
     light: { bg: '#ffffff', band: '#d6d8da', frame: '#3a3f45', route: '#7d848d', casing: 'rgba(0,0,0,0.55)',
@@ -391,18 +394,28 @@
     glideFrame = requestAnimationFrame(step);
   }
   const FOV = 0.6435011087932844;  // MapLibre's vertical field of view
-  /** Camera that shows the whole block, walls included, centred on screen. The 8 corners of the block (top at
-   *  the highest point, bottom at the floor) are projected the way MapLibre does it (camera looking at the square's
-   *  centre, at its terrain elevation, with the pitch), and the distance is searched until they fit. */
+  /** 65° on a landscape view, down to 50° on a portrait one twice as tall as wide. */
+  function blockPitch(box) {
+    const aspect = box.width / box.height;
+    return Math.max(PITCH_TALL, Math.min(PITCH, PITCH_TALL + (aspect - 0.5) / 0.5 * (PITCH - PITCH_TALL)));
+  }
+  /** Camera that shows the block's whole top surface, centred in the room left by the overlays. The 8 corners of
+   *  the surface (the square at the lowest and the highest elevation of its terrain) are projected the way MapLibre
+   *  does it (camera looking at the square's centre, at its terrain elevation, with the pitch), and the distance is
+   *  searched until they fit. The walls go down to the floor below that, off the bottom of the screen if need be. */
   function blockCamera(sq, r, box, pad) {
-    const latC = (sq[1] + sq[3]) / 2, cos = Math.cos(latC * Math.PI / 180), phi = PITCH * Math.PI / 180;
+    const pitch = blockPitch(box);
+    const latC = (sq[1] + sq[3]) / 2, cos = Math.cos(latC * Math.PI / 180), phi = pitch * Math.PI / 180;
     const lx = (sq[2] - sq[0]) * 111320 * cos, ly = (sq[3] - sq[1]) * 110540;
     const focal = 0.5 * box.height / Math.tan(FOV / 2), sp = Math.sin(phi), cp = Math.cos(phi);
-    const corners = [];
-    for (const x of [-lx / 2, lx / 2]) for (const y of [-ly / 2, ly / 2]) for (const h of [FLOOR, r.max]) corners.push([x, y, (h - r.centre) * exag]);
-    const extent = (D) => {
+    const corners = [], floor = [];
+    for (const x of [-lx / 2, lx / 2]) for (const y of [-ly / 2, ly / 2]) {
+      for (const h of [r.min, r.max]) corners.push([x, y, (h - r.centre) * exag]);
+      floor.push([x, y, (FLOOR - r.centre) * exag]);
+    }
+    const extent = (D, pts = corners) => {
       const e = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
-      for (const [x, y, h] of corners) {
+      for (const [x, y, h] of pts) {
         const depth = y * sp - h * cp + D;
         if (depth <= 1) return null;
         const sx = x / depth * focal, sy = (y * cp + h * sp) / depth * focal;
@@ -410,33 +423,50 @@
       }
       return e;
     };
-    const labels = Math.min(40, box.height * 0.08);  // room above the block for the peaks' labels
-    const fits = (D) => { const e = extent(D); return e && e.x1 - e.x0 <= box.width - 2 * pad && e.y1 - e.y0 <= box.height - 2 * pad - labels; };
+    // room at the top for the legend, the host's 3D/2D switch and the peaks' labels
+    const top = pad + Math.min(56, box.height * 0.12), bottom = pad;
+    const fits = (D) => { const e = extent(D); return e && e.x1 - e.x0 <= box.width - 2 * pad && e.y1 - e.y0 <= box.height - top - bottom; };
     let lo = 10, hi = 4e7;
     for (let i = 0; i < 60; i++) { const mid = Math.sqrt(lo * hi); if (fits(mid)) hi = mid; else lo = mid; }
-    const e = extent(hi), shift = (e.y0 + e.y1) / 2 + labels / 2;  // block middle above the screen middle by this, in px
+    // the whole block centred when it fits, walls included; otherwise the surface just under the top overlays and
+    // the walls running off the bottom
+    const e = extent(hi), all = extent(hi, corners.concat(floor)), room = box.height - top - bottom;
+    const shift = all && all.y1 - all.y0 <= room ? (all.y0 + all.y1) / 2 + (top - bottom) / 2
+      : e.y1 - (box.height / 2 - top);  // how far the drawn centre must move down, in px
     const zoom = Math.min(17, Math.log2(78271.517 * cos / (hi / focal)));
     // padding moves the drawn centre (and MapLibre's perspective centre with it) down by `shift`
     const padding = { top: Math.max(0, 2 * shift), bottom: Math.max(0, -2 * shift), left: 0, right: 0 };
-    return { center: [(sq[0] + sq[2]) / 2, latC], zoom, padding };
+    return { center: [(sq[0] + sq[2]) / 2, latC], zoom, pitch, padding };
+  }
+  /** While following: centred on the position, north up, close enough to see the ground around it. */
+  function followCamera(box, is3d) {
+    const zoom = is3d ? Math.min(17, Math.log2(78271.517 * Math.cos(pos.lat * Math.PI / 180) * box.width / FOLLOW_WIDTH_M))
+      : Math.max(map.getZoom(), 15);
+    return { center: [pos.lon, pos.lat], zoom, pitch: is3d ? FOLLOW_PITCH : 0, bearing: 0, padding: NO_PADDING };
   }
   const NO_PADDING = { top: 0, bottom: 0, left: 0, right: 0 };
+  /** Following: the camera on the position. Otherwise the overview: the block's surface in 3D, the data in 2D. */
   function fit(duration) {
     duration = duration || 0;
     const is3d = mode === '3d';
     const box = map.getContainer().getBoundingClientRect();
     const padding = Math.round(Math.max(8, Math.min(48, Math.min(box.width, box.height) * 0.07)));
-    if (is3d && SQ && !(relief && relief.sq === SQ)) { fitPending = duration; return; }
-    fitPending = null;
-    const block = is3d && SQ ? blockCamera(SQ, relief, box, padding) : null;
-    if (block) map.setMinZoom(Math.max(0, block.zoom - 5));  // the block alone in a white world: no further out
     if (follow && pos) {
+      fitPending = null;
       followFitted = true;
-      const zoom = block ? block.zoom : Math.max(map.getZoom(), 15);
-      move({ center: [pos.lon, pos.lat], zoom, pitch: is3d ? PITCH : 0, bearing: 0, padding: block ? block.padding : NO_PADDING }, duration);
+      const cam = followCamera(box, is3d);
+      map.setMinZoom(is3d ? Math.max(0, cam.zoom - 5) : 0);
+      move(cam, duration);
       return;
     }
-    if (block) { move({ center: block.center, zoom: block.zoom, pitch: PITCH, bearing: 0, padding: block.padding }, duration); return; }
+    if (is3d && SQ && !(relief && relief.sq === SQ)) { fitPending = duration; return; }
+    fitPending = null;
+    if (is3d && SQ) {
+      const block = blockCamera(SQ, relief, box, padding);
+      map.setMinZoom(Math.max(0, block.zoom - 5));  // the block alone in a white world: no further out
+      move({ center: block.center, zoom: block.zoom, pitch: block.pitch, bearing: 0, padding: block.padding }, duration);
+      return;
+    }
     let b = dataBox() || SQ;
     if (!b && pos) b = squareAround(pos.lon, pos.lat, 1);
     if (!b) return;
