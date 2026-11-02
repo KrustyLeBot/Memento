@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QP
 from ..core import note as fmt
 from ..core.note import Note
 from . import icons, theme
+from .scroll_memory import ScrollMemory, restore_area
 
 CARD_MIN_WIDTH = 250
 GAP = 10
@@ -140,6 +141,8 @@ class ListScreen(QWidget):
         self._stale = False  # new notes arrived while the list was hidden: rebuilt when it shows
         self._pending: list[tuple[str, object]] = []  # ("header", text) | ("card", note) still to build
         self._generation = 0  # a newer rebuild drops the chunks an older one scheduled
+        self.memory = ScrollMemory()  # where the list was when a note was opened from it: (value, note id)
+        self._built_for: tuple | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(MARGIN, 12, MARGIN, 0)
@@ -291,6 +294,28 @@ class ListScreen(QWidget):
         super().showEvent(event)
         if self._stale:
             self._apply_notes()
+        self._restore_position()
+
+    def _card_clicked(self, note: Note) -> None:
+        self.memory.remember(self.scroll.verticalScrollBar().value(), note.id)
+        self.open_note.emit(note)
+
+    def card_of(self, note_id: str) -> "NoteCard | None":
+        return next((w for kind, w in self._items if kind == "card" and w.note.id == note_id), None)
+
+    def _restore_position(self) -> None:
+        """Back from a note: the list where it was, and that note's card in view."""
+        if not self.memory.pending:
+            return
+        value, note_id = self.memory.take()
+        self._build_down_to(value or 0, note_id)
+        restore_area(self.scroll, value, self.card_of(note_id))
+
+    def _build_down_to(self, value: int, note_id: str | None = None) -> None:
+        """Builds now, not chunk by chunk, the cards down to that scroll position (and that note's card)."""
+        bottom = value + self.scroll.viewport().height()
+        while self._pending and ((note_id is not None and self.card_of(note_id) is None) or self.canvas.height() < bottom + 150):
+            self._build_batch(self._generation, BATCH)
 
     def _apply_notes(self) -> None:
         self._stale = False
@@ -340,6 +365,10 @@ class ListScreen(QWidget):
         return out
 
     def rebuild(self) -> None:
+        # a rescan (a save, a sync) keeps the list where it is; another search or label starts at the top
+        shown_for = (self.search.text(), self.label, self.grid)
+        keep = self.scroll.verticalScrollBar().value() if shown_for == self._built_for else 0
+        self._built_for = shown_for
         for _kind, widget in self._items:
             widget.hide()  # not setParent(None): that turns each card into a window first, slow by the hundred
             widget.deleteLater()
@@ -364,6 +393,9 @@ class ListScreen(QWidget):
         self._generation += 1
         self._pending = plan
         self._build_batch(self._generation, FIRST_BATCH)
+        if keep:
+            self._build_down_to(keep)
+            self.scroll.verticalScrollBar().setValue(keep)
 
     def _build_batch(self, generation: int, count: int) -> None:
         if generation != self._generation:
@@ -379,7 +411,7 @@ class ListScreen(QWidget):
                 continue
             c = NoteCard(value)
             c.setParent(self.canvas)
-            c.clicked.connect(self.open_note)
+            c.clicked.connect(self._card_clicked)
             c.open_pdf.connect(self.open_pdf)
             c.reveal.connect(self.reveal)
             c.show()

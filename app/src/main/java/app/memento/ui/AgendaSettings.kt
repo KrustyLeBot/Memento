@@ -93,7 +93,7 @@ fun AgendaSettings(vm: MainViewModel) {
                 c.updateCalendars { it.withLayer(CalendarSettings.LAYER_BIRTHDAYS) { l -> l.copy(visible = v) } }
             })
         }
-        OutlinedButton(onClick = { vm.calendarsReturn = Screen.SETTINGS; vm.screen = Screen.AGENDA_CALENDARS }) { Text("Agendas et calques…") }
+        OutlinedButton(onClick = { vm.screen = Screen.AGENDA_CALENDARS }) { Text("Agendas et calques…") }
         SettingsHint("Agendas, couleurs, agenda et rappels par défaut sont synchronisés avec le PC (agenda/calendars.json).")
     }
 

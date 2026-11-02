@@ -27,6 +27,7 @@ from ..core.agenda.model import Event, event_to_note, new_event
 from . import icons, overwrite, theme
 from .agenda_data import AgendaData, AgendaPrefs
 from .agenda_editor import EventDetailDialog, EventDialog, ask_scope, color_icon, french_locale
+from .scroll_memory import ScrollMemory, restore_view
 from .agenda_import import CalendarsDialog, ExportDialog, ImportDialog, PastImportsDialog, palette_menu, plural
 from .agenda_views import (MonthView, Row, ScheduleView, TimeGridView, grid_start, schedule_rows, search_rows,
                            time_text, week_start_of)
@@ -176,6 +177,7 @@ class AgendaScreen(QWidget):
         self.anchor = date.today()
         self._schedule_end: date | None = None
         self._schedule_anchor: date | None = None
+        self.memory = ScrollMemory()  # where the list (or the results) was when an entry opened another page
         self._problems: list[str] = []
         self._rendered: tuple | None = None
         self._calendar_rows: dict[str, LayerRow] = {}
@@ -348,6 +350,22 @@ class AgendaScreen(QWidget):
         super().showEvent(event)
         if not self.isAncestorOf(QApplication.focusWidget() or self):
             self.stack.currentWidget().setFocus()  # so T and the arrows work right after opening the module
+        self._restore_position()
+
+    def _leaving_for(self, entry: Entry) -> None:
+        """An entry opens another page (a note, an activity, a contact): the list's place is kept for the way back."""
+        view = self.stack.currentWidget()
+        if view in (self.schedule, self.results):
+            self.memory.remember(view.verticalScrollBar().value(), (view, entry.key))
+
+    def _restore_position(self) -> None:
+        if not self.memory.pending:
+            return
+        value, (view, key) = self.memory.take()
+        if view is not self.stack.currentWidget():
+            return  # another view or a new search meanwhile
+        row = next((i for i, r in enumerate(view.model_.rows) if r.entry is not None and r.entry.key == key), -1)
+        restore_view(view, value, view.model_.index(row) if row >= 0 else None)
 
     def focus_search(self) -> None:
         self.search.setFocus()
@@ -551,12 +569,15 @@ class AgendaScreen(QWidget):
         if entry.kind == EntryKind.ACTIVITY:
             note = self.data.activity(entry.target_id)
             if note is not None:
+                self._leaving_for(entry)
                 self.open_activity.emit(note)
         elif entry.kind == EntryKind.BIRTHDAY:
+            self._leaving_for(entry)
             self.open_contact.emit(entry.target_id)
         elif entry.kind == EntryKind.NOTE:
             note = self.data.note(entry.target_id)
             if note is not None:
+                self._leaving_for(entry)
                 self.open_note.emit(note)
         else:
             self.show_event(entry)

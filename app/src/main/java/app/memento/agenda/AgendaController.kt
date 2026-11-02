@@ -75,7 +75,9 @@ class AgendaController(
     contacts: StateFlow<List<Contact>>,
     private val say: (Snack) -> Unit,
     private val navigate: (Screen) -> Unit,
-    private val openNote: (Note, Screen) -> Unit,
+    /** Back to the screen the detail or the editor was opened from. */
+    private val goBack: () -> Unit,
+    private val openNote: (Note) -> Unit,
     private val openActivity: (Note) -> Unit,
     private val openContact: (String) -> Unit,
     /** A sync is running: the folder is read-only until it ends (the banner says why). */
@@ -104,7 +106,6 @@ class AgendaController(
         private set
     var editor by mutableStateOf<EventEditor?>(null)
         private set
-    private var editorReturn: Screen = Screen.AGENDA
     var importState by mutableStateOf<IcsImportState?>(null)
         private set
 
@@ -196,7 +197,7 @@ class AgendaController(
 
     private fun openNoteById(id: String) {
         val n = repo.notes.value.firstOrNull { it.id == id && !it.conflict }
-        if (n == null) say(Snack("Note introuvable (pas encore synchronisée ?)")) else openNote(n, Screen.AGENDA)
+        if (n == null) say(Snack("Note introuvable (pas encore synchronisée ?)")) else openNote(n)
     }
 
     /** Runs [action] once the folder was read (an intent can arrive before the first scan). */
@@ -226,14 +227,14 @@ class AgendaController(
 
     fun closeDetail() {
         detailId = null
-        navigate(Screen.AGENDA)
+        goBack()
     }
 
     fun event(id: String?): Event? = id?.let { i -> repo.agenda.value.events.firstOrNull { it.id == i } }
 
     /** The description is the event's note: the note editor edits it (checklists, photos, drawings). */
     fun editDescription(e: Event) {
-        openNote(EventFormat.toNote(e), Screen.EVENT)
+        openNote(EventFormat.toNote(e))
     }
 
     // ---- editor ----
@@ -250,7 +251,6 @@ class AgendaController(
         val start = at ?: AgendaLayout.defaultStart(day, LocalDateTime.now())
         val draft = EventDraft.new(start, allDay, device, settings.defaultCalendar().id, settings.defaultAlerts(allDay))
         val base = EventFormat.newEvent("", Stamp.of(start))
-        editorReturn = Screen.AGENDA
         editor = EventEditor(EditMode.New, base, draft)
         navigate(Screen.EVENT_EDIT)
     }
@@ -260,7 +260,6 @@ class AgendaController(
         if (readOnly()) return
         val e = event(entry.targetId) ?: return say(Snack("Événement introuvable"))
         val o = entry.occurrence
-        editorReturn = Screen.EVENT
         editor = if (e.isSeries && scope == SeriesScope.THIS && o != null) {
             val exc = repo.agendaStore.makeException(e, o.start, o.end)
             EventEditor(EditMode.Occurrence(e), exc, EventDraft.fromEvent(exc))
@@ -271,14 +270,13 @@ class AgendaController(
     fun editSeriesOf(exception: Event) {
         if (readOnly()) return
         val s = event(exception.recurrenceOf) ?: return say(Snack("Série introuvable"))
-        editorReturn = Screen.EVENT
         editor = EventEditor(EditMode.File, s, EventDraft.fromEvent(s))
         navigate(Screen.EVENT_EDIT)
     }
 
     fun cancelEditor() {
         closeEditorState()
-        navigate(editorReturn)
+        goBack()
     }
 
     private fun closeEditorState() {
@@ -325,7 +323,6 @@ class AgendaController(
             }
             else -> return false
         }
-        editorReturn = Screen.AGENDA
         editor = EventEditor(mode, base, d.draft, d.initial)
         return true
     }
@@ -392,7 +389,9 @@ class AgendaController(
                 // a whole series edited from one of its occurrences stays on that occurrence when it still exists
                 if (!(ed.mode == EditMode.File && ed.base.isSeries && detailId == saved.id)) detailAt = startInstant(saved)
                 detailId = saved.id
-                if (thenDescription) editDescription(saved) else navigate(Screen.EVENT)
+                // the description's editor goes back to the event, as when it is opened from the event
+                navigate(Screen.EVENT)
+                if (thenDescription) editDescription(saved)
             } catch (e: Exception) {
                 say(Snack("Échec de l'enregistrement : ${e.message}"))
             }
@@ -441,7 +440,7 @@ class AgendaController(
         val e = event(entry.targetId) ?: return
         val o = entry.occurrence
         detailId = null
-        navigate(Screen.AGENDA)
+        goBack()
         this.scope.launch {
             try {
                 val text = withContext(io) {

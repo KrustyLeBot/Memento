@@ -66,7 +66,7 @@ private fun totals(list: List<ActivityInfo>, included: Set<Sport>): Totals {
 fun ActivitiesScreen(vm: MainViewModel) {
     val all by vm.activities.activities.collectAsState()
     val live by Recorder.state.collectAsState()
-    var filter by remember { mutableStateOf<Sport?>(null) }
+    var filter by vm.lists::activitySport
     var selected by remember { mutableStateOf(setOf<String>()) }
     var askRelief by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
@@ -88,13 +88,22 @@ fun ActivitiesScreen(vm: MainViewModel) {
     val month = remember(infos, cfg) { totals(infos.map { it.second }.filter { it.start >= startOfMonth() }, cfg.totals) }
     val overall = remember(infos, cfg) { totals(infos.map { it.second }, cfg.totals) }
     val shown = infos.filter { filter == null || it.second.sport == filter }
+    val busy = vm.activities.busy || vm.activities.reliefProgress != null
+    val tapped = vm.lists.activityTapped
+    val tappedAt = tapped?.let { id -> shown.indexOfFirst { it.first.id == id } }
+    // the rows come after the buttons, the selection line, the live card, the progress, the figures and the chips
+    val leading = 4 + (if (live != null) 1 else 0) + (if (busy) 1 else 0)
+    RevealOnReturn(vm.lists.activities, tappedAt?.let { if (it >= 0) shown[it].first.path else tapped }, tappedAt?.let { if (it < 0) -1 else leading + it }) {
+        vm.lists.activityTapped = null
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = { SuiteTopBar("Activités") },
     ) { padding ->
         LazyColumn(
-            Modifier.padding(padding).fillMaxSize(),
+            state = vm.lists.activities,
+            modifier = Modifier.padding(padding).fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -135,7 +144,7 @@ fun ActivitiesScreen(vm: MainViewModel) {
                     }
                 }
             }
-            if (vm.activities.busy || vm.activities.reliefProgress != null) {
+            if (busy) {
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator()
@@ -166,7 +175,7 @@ fun ActivitiesScreen(vm: MainViewModel) {
             items(shown, key = { it.first.path }) { (note, info) ->
                 ActivityRow(
                     note, info, selecting, note.path in selected,
-                    onClick = { if (selecting) selected = if (note.path in selected) selected - note.path else selected + note.path else vm.openActivity(note) },
+                    onClick = { if (selecting) selected = if (note.path in selected) selected - note.path else selected + note.path else { vm.lists.activityTapped = note.id; vm.openActivity(note) } },
                     onLongClick = { selected = selected + note.path },
                 )
             }

@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         MapRuntime.init(this)
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null) handleIntent(intent, coldStart = true)
         setContent { App() }
     }
 
@@ -67,19 +67,24 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    /**
+     * At a [coldStart], the screen behind the one an intent opens was never seen: back from it goes to the module
+     * root of what was opened (the agenda for an event), not to the module the app happened to start on.
+     */
+    private fun handleIntent(intent: Intent?, coldStart: Boolean = false) {
         // Reopened from the recents after the task was left with back: Android hands the first intent again
         // (the shared text, the .ics...), which was already handled.
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         if (intent.action == ACTION_OPEN_RECORD || intent.action == ACTION_MAP_DOWNLOADS) {
             vm.leaveEditors()
+            if (coldStart) vm.openedFromOutside()
             vm.openRecord()
             // the record screen lists the offline maps ("Itinéraires préparés") and their downloads
             if (intent.action == ACTION_MAP_DOWNLOADS) vm.showPreparedRoutes = true
             intent.action = null
             return
         }
-        if (handleAgendaIntent(intent)) {
+        if (handleAgendaIntent(intent, coldStart)) {
             intent?.action = null // not again on configuration changes
             return
         }
@@ -99,12 +104,13 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Reminder notifications, widget rows and buttons, and `.ics` files opened or shared from other apps. */
-    private fun handleAgendaIntent(intent: Intent?): Boolean {
+    private fun handleAgendaIntent(intent: Intent?, coldStart: Boolean): Boolean {
         intent ?: return false
         if (intent.action in listOf(ACTION_OPEN_ENTRY, ACTION_AGENDA_TODAY, ACTION_NEW_EVENT)) vm.leaveEditors()
         when (intent.action) {
             ACTION_OPEN_ENTRY -> {
                 app.memento.reminders.Reminders.dismiss(this, intent.getStringExtra(app.memento.reminders.Reminders.EXTRA_NOTIFY_KEY))
+                if (coldStart) vm.openedFromOutside()
                 vm.agenda.openExternal(
                     intent.getStringExtra(app.memento.reminders.Reminders.EXTRA_KIND),
                     intent.getStringExtra(app.memento.reminders.Reminders.EXTRA_TARGET),

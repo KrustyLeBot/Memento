@@ -95,6 +95,8 @@ class ContactsController(
     private val io: CoroutineDispatcher,
     private val say: (Snack) -> Unit,
     private val navigate: (Screen) -> Unit,
+    /** Back to the screen the detail was opened from (the list, the agenda for a birthday). */
+    private val goBack: () -> Unit,
     /** A sync is running: the folder is read-only until it ends (the banner says why). */
     private val syncing: () -> Boolean = { false },
 ) {
@@ -155,12 +157,8 @@ class ContactsController(
 
     // ---- navigation ----
 
-    /** Where the detail goes back to: the list, or the agenda for a birthday opened there. */
-    private var detailReturn = Screen.CONTACTS
-
-    fun open(c: Contact, returnTo: Screen = Screen.CONTACTS) {
+    fun open(c: Contact) {
         openId = c.id
-        detailReturn = returnTo
         navigate(Screen.CONTACT)
     }
 
@@ -184,8 +182,8 @@ class ContactsController(
     fun back() {
         when {
             editor != null -> closeEditor(save = true)
-            openId != null -> { openId = null; navigate(detailReturn); detailReturn = Screen.CONTACTS }
-            else -> navigate(Screen.CONTACTS)
+            openId != null -> { openId = null; goBack() }
+            else -> goBack()
         }
     }
 
@@ -265,7 +263,6 @@ class ContactsController(
             favorite = d.favorite
         }
         openId = original?.id
-        detailReturn = Screen.CONTACTS
         return true
     }
 
@@ -312,8 +309,7 @@ class ContactsController(
     fun delete(c: Contact) {
         if (readOnly()) return
         openId = null
-        navigate(detailReturn)
-        detailReturn = Screen.CONTACTS
+        goBack()
         scope.launch {
             try {
                 val raw = withContext(io) { book.delete(c) }
