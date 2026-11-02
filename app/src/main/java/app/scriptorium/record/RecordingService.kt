@@ -24,6 +24,9 @@ import app.scriptorium.MainActivity
 import app.scriptorium.Settings
 import app.scriptorium.activity.Fmt
 import app.scriptorium.activity.Sport
+import app.scriptorium.map.MapRuntime
+import app.scriptorium.map.NetState
+import app.scriptorium.map.OfflinePacks
 
 /**
  * Keeps the GPS (and the barometer) running while the screen is off. It only feeds [Recorder]: the
@@ -36,6 +39,14 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
     private var pressure: Double? = null
     private var pressureAt = 0L
     private var lastNotified = 0L
+    /** Where the recording started, until the 2D zone pack around it has been asked for. */
+    private var zoneStart: Pair<Double, Double>? = null
+    private var zoneAsked = false
+
+    override fun onCreate() {
+        super.onCreate()
+        MapRuntime.init(this)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -116,11 +127,30 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
             loc.time.takeIf { it > 0 } ?: now, loc.latitude, loc.longitude,
             if (loc.hasAltitude()) loc.altitude else null,
             if (loc.hasAccuracy()) loc.accuracy else null, p, if (loc.hasSpeed()) loc.speed else null,
+            if (loc.hasBearing()) loc.bearing else null,
         )
+        askZonePack(loc.latitude, loc.longitude)
         if (now - lastNotified > 20_000) {
             lastNotified = now
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(Recorder.state.value?.paused == true))
         }
+    }
+
+    /**
+     * Without a route, a 2D map of the 20 km around the start is downloaded once, so the map still shows
+     * something if the network goes. Offline at the start: asked again as soon as the network is back,
+     * still around the start, never around where the user has got to.
+     */
+    private fun askZonePack(lat: Double, lon: Double) {
+        if (zoneAsked) return
+        val live = Recorder.state.value ?: return
+        if (live.fixes == 0) return
+        if (zoneStart == null) zoneStart = lat to lon
+        if (Recorder.route() != null) { zoneAsked = true; return }
+        if (!NetState.online.value) return
+        zoneAsked = true
+        val (la, lo) = zoneStart!!
+        OfflinePacks.prepareZone(lo, la)
     }
 
     override fun onSensorChanged(event: SensorEvent) {

@@ -6,6 +6,9 @@ import app.scriptorium.activity.Geo
 import app.scriptorium.activity.RecordingLog
 import app.scriptorium.activity.Sport
 import app.scriptorium.activity.TrackPoint
+import app.scriptorium.map.Route
+import app.scriptorium.map.RouteProgress
+import app.scriptorium.map.RouteStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -27,6 +30,13 @@ data class Live(
     val lat: Double? = null,
     val lon: Double? = null,
     val fixes: Int = 0,
+    /** Time spent moving (faster than [Recorder.MOVING_SPEED] between two fixes), for the arrival estimate. */
+    val movingMs: Long = 0,
+    /** Degrees from north, when the GPS knows it (it does only while moving). */
+    val heading: Float? = null,
+    val accuracy: Float? = null,
+    /** Where the user is on the followed route, or null without one. */
+    val route: RouteStatus? = null,
     /** Stopped: the log waits to become an activity (or to be discarded). */
     val finished: Boolean = false,
 ) {
@@ -52,10 +62,44 @@ object Recorder {
     private var lastPoint: TrackPoint? = null
     private val trailLat = ArrayList<Double>()
     private val trailLon = ArrayList<Double>()
+    private val trailSpeed = ArrayList<Double>()
+    private var follow: RouteProgress? = null
+    /** Bumped when the trail is thinned or cleared: indices into the old one are no longer valid. */
+    private var trailEpoch = 0
 
-    /** The positions so far (thinned past 3000), for the live map. */
+    const val MOVING_SPEED = 0.5 // m/s
+
+    /** The positions so far (thinned past 3000) and their speeds in m/s, for the live map. */
+    class Trail(val lats: DoubleArray, val lons: DoubleArray, val speeds: DoubleArray, val epoch: Int)
+
     @Synchronized
-    fun trail(): Pair<DoubleArray, DoubleArray> = trailLat.toDoubleArray() to trailLon.toDoubleArray()
+    fun trail(): Trail = Trail(trailLat.toDoubleArray(), trailLon.toDoubleArray(), trailSpeed.toDoubleArray(), trailEpoch)
+
+    /** Trail points from index [from] on, or null when the trail changed under that index (thinned). */
+    @Synchronized
+    fun trailSince(from: Int, epoch: Int): Trail? {
+        if (epoch != trailEpoch || from > trailLat.size) return null
+        val n = trailLat.size
+        return Trail(
+            DoubleArray(n - from) { trailLat[from + it] }, DoubleArray(n - from) { trailLon[from + it] },
+            DoubleArray(n - from) { trailSpeed[from + it] }, trailEpoch,
+        )
+    }
+
+    /** The route followed during this recording, set right after [begin]. */
+    @Synchronized
+    fun followRoute(route: Route?) {
+        follow = route?.let { RouteProgress(it) }
+        val s = _state.value ?: return
+        _state.value = s.copy(route = follow?.status)
+    }
+
+    @Synchronized
+    fun route(): Route? = follow?.route
+
+    /** The offline pack prepared for the followed route, to show its download progress. */
+    @Volatile
+    var routePack: String? = null
 
     fun logFile(dir: File) = File(dir, "recording/current.log")
 
@@ -72,7 +116,9 @@ object Recorder {
         fusion = AltitudeFusion()
         climb = ClimbCounter()
         lastPoint = null
-        trailLat.clear(); trailLon.clear()
+        follow = null
+        routePack = null
+        clearTrail()
         _state.value = Live(sport, now)
     }
 
@@ -121,7 +167,9 @@ object Recorder {
         close()
         logFile?.delete()
         logFile = null
-        trailLat.clear(); trailLon.clear()
+        follow = null
+        routePack = null
+        clearTrail()
         _state.value = null
     }
 
@@ -132,7 +180,7 @@ object Recorder {
      * Fixes less accurate than 35 m are ignored.
      */
     @Synchronized
-    fun onFix(time: Long, lat: Double, lon: Double, gpsAlt: Double?, accuracy: Float?, pressure: Double?, speed: Float?) {
+    fun onFix(time: Long, lat: Double, lon: Double, gpsAlt: Double?, accuracy: Float?, pressure: Double?, speed: Float?, bearing: Float? = null) {
         val s = _state.value ?: return
         if (s.paused || s.finished) return
         if (accuracy != null && accuracy > 35f) return
@@ -140,23 +188,38 @@ object Recorder {
         val p = TrackPoint(time, lat, lon, alt, null, gpsAlt, pressure)
         append(RecordingLog.point(p))
         var distance = s.distance
+        var moving = s.movingMs
+        var segSpeed: Double? = null
         lastPoint?.let { prev ->
             val d = Geo.distance(prev, p)
             val dt = (time - prev.time) / 1000.0
             // ignore jitter at a standstill and impossible jumps
             if (d >= 3.0 && dt > 0 && d / dt < 50.0) distance += d
+            if (dt > 0 && dt <= 60) {
+                segSpeed = d / dt
+                if (d / dt >= MOVING_SPEED && d / dt < 50.0) moving += time - prev.time
+            }
         }
         lastPoint = p
-        trailLat.add(lat); trailLon.add(lon)
+        trailLat.add(lat); trailLon.add(lon); trailSpeed.add(speed?.toDouble() ?: segSpeed ?: 0.0)
         if (trailLat.size > 3000) { // keep every other point
-            val la = trailLat.filterIndexed { i, _ -> i % 2 == 0 }; val lo = trailLon.filterIndexed { i, _ -> i % 2 == 0 }
-            trailLat.clear(); trailLat.addAll(la); trailLon.clear(); trailLon.addAll(lo)
+            val la = trailLat.filterIndexed { i, _ -> i % 2 == 0 }
+            val lo = trailLon.filterIndexed { i, _ -> i % 2 == 0 }
+            val sp = trailSpeed.filterIndexed { i, _ -> i % 2 == 0 }
+            trailLat.clear(); trailLat.addAll(la); trailLon.clear(); trailLon.addAll(lo); trailSpeed.clear(); trailSpeed.addAll(sp)
+            trailEpoch++
         }
         alt?.let { climb.add(it) }
         _state.value = s.copy(
             distance = distance, ascent = climb.ascent, speed = (speed ?: 0f).toDouble(),
-            altitude = alt ?: s.altitude, lat = lat, lon = lon, fixes = s.fixes + 1,
+            altitude = alt ?: s.altitude, lat = lat, lon = lon, fixes = s.fixes + 1, movingMs = moving,
+            heading = bearing, accuracy = accuracy, route = follow?.update(lat, lon),
         )
+    }
+
+    private fun clearTrail() {
+        trailLat.clear(); trailLon.clear(); trailSpeed.clear()
+        trailEpoch++
     }
 
     private fun open(f: File) {

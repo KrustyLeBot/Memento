@@ -514,7 +514,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.LIST
     }
 
-    fun openSettings() { screen = Screen.SETTINGS }
+    fun openSettings() { checkLegacyLeft(); screen = Screen.SETTINGS }
 
     fun changeActivitySettings(s: app.scriptorium.activity.ActivitySettings) {
         repo.activitySettings.value.let { if (it == s) return }
@@ -558,6 +558,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The former Griffonote folder still exists and every file of it has a copy here. */
+    var legacyFolderLeft by mutableStateOf(false)
+        private set
+
+    fun checkLegacyLeft() {
+        viewModelScope.launch {
+            legacyFolderLeft = withContext(Dispatchers.IO) {
+                val old = Settings.legacyDir()
+                old.isDirectory && settings.storage is StorageConfig.Default && !LegacyFolder.needsImport(old, Settings.defaultDir())
+            }
+        }
+    }
+
     fun dismissLegacyImport() {
         if (legacyImport is LegacyImport.Offer) settings.legacyImportDismissed = true
         legacyImport = null
@@ -587,6 +600,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             settings.legacyImportDismissed = true
             legacyImport = null
+            checkLegacyLeft()
             snack = Snack(if (error == null) "Ancien dossier Griffonote supprimé" else "Suppression impossible : ${error.message}")
         }
     }

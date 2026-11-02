@@ -33,11 +33,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,6 +50,7 @@ import app.scriptorium.activity.Sport
 import app.scriptorium.record.Live
 import app.scriptorium.record.Recorder
 import app.scriptorium.record.RecordingService
+import app.scriptorium.map.OfflinePacks
 import app.scriptorium.suite.ConfirmDialog
 import app.scriptorium.suite.SuiteTopBar
 import kotlinx.coroutines.delay
@@ -63,9 +64,26 @@ fun RecordScreen(vm: MainViewModel) {
     var mode by remember { mutableStateOf(vm.settings.gpsMode) }
     var confirmStop by remember { mutableStateOf(false) }
     var showMap by remember { mutableStateOf(false) }
+    var follow by remember { mutableStateOf<RouteChoice?>(null) }
+    val scope = rememberCoroutineScope()
 
     fun begin() {
         Recorder.begin(context.filesDir, sport, System.currentTimeMillis())
+        val f = follow?.takeIf { sport.hasGps }
+        if (f != null) {
+            Recorder.followRoute(f.route)
+            Recorder.routePack = f.packId
+            showMap = true
+            val pack = f.packId?.let { id -> OfflinePacks.packs.value.firstOrNull { it.id == id } }
+            when {
+                pack == null -> prepareRoute(vm, scope, f.route) { Recorder.routePack = it }
+                !pack.complete && !OfflinePacks.isRunning(pack.id) -> try {
+                    OfflinePacks.resume(pack.id)
+                } catch (e: OfflinePacks.PackException) {
+                    vm.snack = app.scriptorium.Snack("Carte hors ligne incomplète : ${e.message}")
+                }
+            }
+        }
         if (sport.hasGps) RecordingService.start(context)
     }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -112,12 +130,14 @@ fun RecordScreen(vm: MainViewModel) {
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (sport.hasGps) FollowRouteRow(vm, follow) { follow = it }
                     Button(onClick = { start() }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Démarrer", fontSize = 18.sp) }
                     if (sport.hasGps) {
                         TextButton(onClick = {
                             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         }) { Text("Samsung tue l'enregistrement ? Désactiver l'optimisation batterie") }
                     }
+                    PreparedRoutesSection(vm)
                 }
             } else {
                 LiveView(vm, l, showMap, { showMap = it }, onStop = { confirmStop = true })
@@ -194,13 +214,6 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
             delay(1000)
         }
     }
-    var tick by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(showMap) {
-        while (showMap) {
-            tick++
-            delay(4000)
-        }
-    }
     val elapsed = l.elapsed(now) / 1000
 
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -210,38 +223,36 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
             color = if (l.paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         )
         if (l.sport.hasGps) {
-            val items = ArrayList<Pair<String, String>>()
-            items.add("Distance" to Fmt.distance(l.distance))
-            when (l.sport) {
-                Sport.WALK -> {
-                    items.add("Allure" to Fmt.pace(l.speed))
-                    items.add("Dénivelé +" to "${Math.round(l.ascent)} m")
-                    items.add("Allure moyenne" to if (elapsed > 0) Fmt.pace(l.distance / elapsed) else "–")
+            if (l.route != null) {
+                RouteFigures(l, elapsed)
+                RoutePackProgress()
+            } else {
+                val items = ArrayList<Pair<String, String>>()
+                items.add("Distance" to Fmt.distance(l.distance))
+                when (l.sport) {
+                    Sport.WALK -> {
+                        items.add("Allure" to Fmt.pace(l.speed))
+                        items.add("Dénivelé +" to "${Math.round(l.ascent)} m")
+                        items.add("Allure moyenne" to if (elapsed > 0) Fmt.pace(l.distance / elapsed) else "–")
+                    }
+                    Sport.SKI -> {
+                        items.add("Vitesse" to Fmt.speed(l.speed))
+                        items.add("Altitude" to (l.altitude?.let { "${Math.round(it)} m" } ?: "–"))
+                    }
+                    else -> {
+                        items.add("Vitesse" to Fmt.speed(l.speed))
+                        items.add("Vitesse moyenne" to if (elapsed > 0) Fmt.speed(l.distance / elapsed) else "–")
+                        items.add("Dénivelé +" to "${Math.round(l.ascent)} m")
+                    }
                 }
-                Sport.SKI -> {
-                    items.add("Vitesse" to Fmt.speed(l.speed))
-                    items.add("Altitude" to (l.altitude?.let { "${Math.round(it)} m" } ?: "–"))
-                }
-                else -> {
-                    items.add("Vitesse" to Fmt.speed(l.speed))
-                    items.add("Vitesse moyenne" to if (elapsed > 0) Fmt.speed(l.distance / elapsed) else "–")
-                    items.add("Dénivelé +" to "${Math.round(l.ascent)} m")
-                }
+                StatGrid(items)
             }
-            StatGrid(items)
             if (l.fixes == 0) {
                 Text("En attente du signal GPS…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedButton(onClick = { setMap(!showMap) }) { Text(if (showMap) "Masquer la carte" else "Afficher la carte") }
             if (showMap) {
-                val line = remember(tick) { Recorder.trail() }
-                val me = if (l.lat != null && l.lon != null) MapDot(l.lat, l.lon, Color(0xFF2E7DF6)) else null
-                Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp))) {
-                    TrackMap(
-                        if (line.first.size >= 2) listOf(MapLine(line.first, line.second, Color(0xFF2E7DF6))) else emptyList(),
-                        listOfNotNull(me), Modifier.fillMaxSize(), interactive = true, follow = me, fitKey = showMap,
-                    )
-                }
+                LiveMap(vm.settings, l, Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)))
             }
         }
         Box(Modifier.weight(if (showMap) 0.001f else 1f))

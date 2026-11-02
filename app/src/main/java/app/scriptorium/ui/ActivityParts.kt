@@ -136,6 +136,9 @@ private fun speedColor(f: Float): Color = if (f < 0.5f) lerp(Slow, Mid, f * 2) e
 
 enum class SkiMap { BOTH, DOWN, ALL }
 
+/** A coloured polyline on the map. */
+class MapLine(val lats: DoubleArray, val lons: DoubleArray, val color: Color)
+
 private val Climb = Color(0xFF00B0FF)
 
 /**

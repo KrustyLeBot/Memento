@@ -49,7 +49,7 @@ fun LegacyImportDialog(vm: MainViewModel) {
                 Text(
                     "${s.files} fichiers copiés et vérifiés. Supprimer l'ancien dossier Documents/Griffonote ?\n\n" +
                         "Attention : si Synchrotron synchronise encore ce dossier, la suppression sera aussi faite " +
-                        "dans le cloud. Change d'abord le dossier dans Synchrotron.",
+                        "dans le cloud. Change d'abord le dossier dans Synchrotron ; tu pourras aussi le supprimer plus tard depuis les Paramètres.",
                 )
             },
             confirmButton = { Button(onClick = { vm.deleteLegacyFolder() }) { Text("Supprimer l'ancien dossier") } },

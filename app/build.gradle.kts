@@ -59,6 +59,9 @@ android {
         jvmTarget = "17"
     }
 
+    // the shared map page (web/map/) is served from the APK at assets/map/
+    sourceSets["main"].assets.srcDirs("src/main/assets", "../web")
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }

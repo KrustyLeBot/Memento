@@ -68,6 +68,24 @@ fun SettingsScreen(vm: MainViewModel, onPickFolder: () -> Unit) {
                 }
             }
 
+            if (vm.legacyFolderLeft) {
+                var confirm by remember { mutableStateOf(false) }
+                SettingsCard {
+                    Text("Ancien dossier Griffonote", fontWeight = FontWeight.SemiBold)
+                    SettingsHint("Documents/Griffonote est toujours là ; tout son contenu a été copié ici. Change d'abord le dossier dans Synchrotron, sinon la suppression partira aussi dans le cloud.")
+                    OutlinedButton(onClick = { confirm = true }) { Text("Supprimer l'ancien dossier") }
+                }
+                if (confirm) {
+                    AlertDialog(
+                        onDismissRequest = { confirm = false },
+                        title = { Text("Supprimer Documents/Griffonote ?") },
+                        text = { Text("Synchrotron ne doit plus synchroniser ce dossier. La suppression est définitive.") },
+                        confirmButton = { TextButton(onClick = { confirm = false; vm.deleteLegacyFolder() }) { Text("Supprimer") } },
+                        dismissButton = { TextButton(onClick = { confirm = false }) { Text("Annuler") } },
+                    )
+                }
+            }
+
             SectionTitle("Modules")
             SettingsCard {
                 SettingsHint("Les modules masqués disparaissent de la barre du bas ; leurs fichiers restent dans le dossier.")

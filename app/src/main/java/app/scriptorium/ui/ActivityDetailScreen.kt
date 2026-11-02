@@ -25,8 +25,6 @@ import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -76,22 +74,11 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
     }
     val analysis = detail.analysis
     val ski = detail.sport == Sport.SKI
-    val lines = remember(analysis, skiMap) { analysis?.let { mapLines(it, ski, skiMap) }.orEmpty() }
-    val dots = remember(analysis) {
-        val s = analysis?.samples.orEmpty()
-        if (s.size < 2) emptyList() else listOf(MapDot(s.first().lat, s.first().lon, Color(0xFF00C853)), MapDot(s.last().lat, s.last().lon, Color(0xFFFF1744)))
-    }
+    val hasMap = (analysis?.samples?.size ?: 0) >= 2
+    ActivityMapContent(detail, skiMap)
 
-    if (fullMap && analysis != null) {
-        Box(Modifier.fillMaxSize()) {
-            TrackMap(lines, dots, Modifier.fillMaxSize())
-            Surface(
-                shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                modifier = Modifier.align(Alignment.TopEnd).padding(top = 40.dp, end = 12.dp),
-            ) {
-                IconButton(onClick = { fullMap = false }) { Icon(Icons.Default.FullscreenExit, "Réduire la carte") }
-            }
-        }
+    if (fullMap && hasMap) {
+        ActivityMapView(vm.settings, detail, full = true, onFull = { fullMap = it }, modifier = Modifier.fillMaxSize())
         return
     }
 
@@ -120,16 +107,11 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                 info?.file != null && analysis == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             }
 
-            if (analysis != null && lines.isNotEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(260.dp).clip(RoundedCornerShape(16.dp))) {
-                    TrackMap(lines, dots, Modifier.fillMaxSize(), interactive = false)
-                    Surface(
-                        shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                    ) {
-                        IconButton(onClick = { fullMap = true }) { Icon(Icons.Default.Fullscreen, "Agrandir la carte") }
-                    }
-                }
+            if (analysis != null && hasMap) {
+                ActivityMapView(
+                    vm.settings, detail, full = false, onFull = { fullMap = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(300.dp).clip(RoundedCornerShape(16.dp)),
+                )
                 if (ski) {
                     Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = skiMap == SkiMap.BOTH, onClick = { skiMap = SkiMap.BOTH }, label = { Text("Descentes + montées") })

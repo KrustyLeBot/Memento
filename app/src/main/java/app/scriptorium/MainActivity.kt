@@ -29,11 +29,15 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.Modifier
-import app.scriptorium.ui.ActivitiesScreen
 import app.scriptorium.ui.AgendaScreen
 import app.scriptorium.ui.ContactsScreen
 import app.scriptorium.ui.LegacyImportDialog
 import app.scriptorium.ui.ModuleBar
+import app.scriptorium.map.MapHost
+import app.scriptorium.map.MapRuntime
+import app.scriptorium.ui.ActivitiesScreen
+import app.scriptorium.ui.isDarkTheme
+import kotlinx.coroutines.delay
 import app.scriptorium.ui.ActivityDetailScreen
 import app.scriptorium.ui.DrawingScreen
 import app.scriptorium.ui.RecordScreen
@@ -50,6 +54,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        MapRuntime.init(this)
         if (savedInstanceState == null) handleIntent(intent)
         setContent { App() }
     }
@@ -108,6 +113,12 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) { vm.updates.checkOnOpen() }
 
         ScriptoriumTheme(vm.theme) {
+            val dark = isDarkTheme()
+            LaunchedEffect(Unit) {
+                // the map page loads once in the background, so the first map opens at once
+                delay(1500)
+                MapHost.warmUp(applicationContext, dark, vm.settings.map3d)
+            }
             BackHandler(enabled = vm.screen != Screen.LIST || vm.query.isNotEmpty() || vm.labelFilter != null) {
                 vm.back()
             }

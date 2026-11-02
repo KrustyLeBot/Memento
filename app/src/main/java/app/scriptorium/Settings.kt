@@ -56,6 +56,10 @@ class Settings(context: Context) {
     var legacyImportDismissed: Boolean
         get() = prefs.getBoolean("legacy_import_dismissed", false)
         set(v) = prefs.edit().putBoolean("legacy_import_dismissed", v).apply()
+    /** Maps open in 3D (relief) unless the user chose 2D; the choice is kept for the next map. */
+    var map3d: Boolean
+        get() = prefs.getBoolean("map_3d", true)
+        set(v) = prefs.edit().putBoolean("map_3d", v).apply()
 
     val storage: StorageConfig
         get() = storageUri?.let { StorageConfig.Tree(Uri.parse(it)) } ?: StorageConfig.Default
