@@ -1,0 +1,25 @@
+{
+  "bad": 1,
+  "empty": 1,
+  "ignored": {"PHOTO": 1, "X-…": 1},
+  "contacts": [
+    {
+      "first_name": "Hélène", "last_name": "Lefèvre",
+      "phones": ["0612345678 (mobile)", "+33698765432 (mobile)", "0145678901 (domicile)"],
+      "emails": ["helene@example.net"],
+      "address": null, "birthday": null,
+      "notes": "Première ligne\nDeuxième ligne très longue qui continue après un saut doux",
+      "uid": null, "favorite": false
+    },
+    {
+      "first_name": "Paul", "last_name": "",
+      "phones": ["01 40 00 00 00 (travail)"],
+      "emails": [], "address": null, "birthday": null, "notes": "", "uid": null, "favorite": false
+    },
+    {
+      "first_name": "Luc", "last_name": "Martin",
+      "phones": ["06 00 00 00 01 (mobile)"],
+      "emails": [], "address": null, "birthday": "1985-12-31", "notes": "", "uid": null, "favorite": false
+    }
+  ]
+}

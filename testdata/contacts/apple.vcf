@@ -1,0 +1,15 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Apple Inc.//iPhone OS 17.0//EN
+N:Durand;Léa;;;
+FN:Léa Durand
+item1.TEL;type=pref:06 98 76 54 32
+item1.X-ABLabel:_$!<Mobile>!$_
+item2.TEL:01 11 22 33 44
+item2.X-ABLabel:_$!<Home>!$_
+TEL;type=IPHONE;type=CELL;type=VOICE:07 00 11 22 33
+item3.EMAIL;type=INTERNET:lea@example.org
+item3.X-ABLabel:_$!<Home>!$_
+BDAY;X-APPLE-OMIT-YEAR=1604:1604-12-25
+X-SOCIALPROFILE;type=twitter:x-apple:lea
+END:VCARD

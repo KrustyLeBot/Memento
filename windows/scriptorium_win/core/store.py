@@ -10,6 +10,7 @@ from . import atomic
 from . import elevation, fit, gpx
 from . import note as fmt
 from .activity import ActivityInfo
+from .contacts import DIR as CONTACTS_DIR, Contact, ContactBook
 from .analysis import analyze
 from .note import Note
 from .settings import PATH as SETTINGS_PATH, ActivitySettings
@@ -39,6 +40,7 @@ class Store:
     def __init__(self, root: Path):
         self.root = Path(root)
         self._cache: dict[str, tuple[int, Note]] = {}  # path -> (mtime_ns, note)
+        self.contacts = ContactBook(self.root)  # contacts/, kept out of the regular list
 
     # ---- reading ----
 
@@ -101,6 +103,10 @@ class Store:
                 del self._cache[stale]
         return notes
 
+    def scan_contacts(self) -> list[Contact]:
+        """The contacts (contacts/*.md); also what the agenda reads for the birthdays."""
+        return self.contacts.scan()
+
     def activity_settings(self) -> ActivitySettings:
         text = self.read_raw(SETTINGS_PATH)
         return ActivitySettings.parse(text) if text else ActivitySettings()
@@ -127,7 +133,12 @@ class Store:
                           for e in os.scandir(self.root / ACTIVITIES_DIR) if e.is_file() and not e.name.startswith("."))
         except OSError:
             acts = []
-        return tuple(files), tuple(acts)
+        try:
+            people = sorted((e.name, e.stat().st_mtime_ns, e.stat().st_size)
+                            for e in os.scandir(self.root / CONTACTS_DIR) if e.is_file() and not e.name.startswith("."))
+        except OSError:
+            people = []
+        return tuple(files), tuple(acts), tuple(people)
 
     def labels(self) -> list[str]:
         return sorted({lbl for n in self.scan() for lbl in n.labels}, key=fmt.fold)

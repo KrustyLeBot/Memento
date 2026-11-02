@@ -1,0 +1,23 @@
+{
+  "contacts": [
+    {"id": "b1", "first_name": "Marie", "last_name": "Dupont", "phones": ["06 12 34 56 78 (mobile)"], "emails": ["marie@example.org"]},
+    {"id": "b2", "first_name": "Marie", "last_name": "Dupont", "emails": ["MARIE@example.org", "m.dupont@example.com"], "notes": "Travail"},
+    {"id": "b3", "first_name": "Dupont", "last_name": "Marie"},
+    {"id": "b4", "first_name": "Paul", "last_name": "", "phones": ["+33 6 12 34 56 78", "07 00 00 00 07 (travail)"], "birthday": "1980-01-01"},
+    {"id": "b5", "first_name": "Luc", "last_name": "", "phones": ["3631"]},
+    {"id": "b6", "first_name": "Léa", "last_name": "", "phones": ["3631"]},
+    {"id": "b7", "first_name": "Zoé", "last_name": "A", "phones": ["07 11 11 11 11"]},
+    {"id": "b8", "first_name": "Zoe", "last_name": "a", "favorite": true}
+  ],
+  "groups": [["b7", "b8"], ["b1", "b2", "b3", "b4"]],
+  "merge": {
+    "keep": "b1",
+    "others": ["b2", "b4"],
+    "expected": {
+      "first_name": "Marie", "last_name": "Dupont",
+      "phones": ["06 12 34 56 78 (mobile)", "07 00 00 00 07 (travail)"],
+      "emails": ["marie@example.org", "m.dupont@example.com"],
+      "address": null, "birthday": "1980-01-01", "notes": "Travail", "uid": null, "favorite": false
+    }
+  }
+}

@@ -19,6 +19,7 @@ class SettingsScreen(QWidget):
     check_updates = Signal()
     activity_changed = Signal(object)  # ActivitySettings
     module_visibility = Signal(str, bool)
+    contacts_order = Signal(bool)  # True: first name first
 
     def __init__(self):
         super().__init__()
@@ -121,6 +122,11 @@ class SettingsScreen(QWidget):
         self.refine_box.toggled.connect(lambda _=False: self._activity_edited())
         body.addWidget(self.refine_box)
 
+        section("Contacts")
+        self.first_name_box = QCheckBox("Prénom d'abord (trie et regroupe la liste par prénom plutôt que par nom)")
+        self.first_name_box.toggled.connect(lambda on: None if self._loading else self.contacts_order.emit(on))
+        body.addWidget(self.first_name_box)
+
         section("À propos")
         self.version = QLabel(f"Scriptorium build {updater.current_build()}")
         body.addWidget(self.version)
@@ -154,6 +160,11 @@ class SettingsScreen(QWidget):
             return
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
                                                     {s for s, b in self.total_boxes.items() if b.isChecked()}))
+
+    def set_contacts_first_name_first(self, value: bool) -> None:
+        self._loading = True
+        self.first_name_box.setChecked(value)
+        self._loading = False
 
     def load(self, folder: str, grid: bool, theme_mode: str, activity: ActivitySettings | None = None,
              hidden: set[str] | None = None) -> None:

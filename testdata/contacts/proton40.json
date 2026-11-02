@@ -1,0 +1,25 @@
+{
+  "bad": 0,
+  "empty": 0,
+  "blank": 1,
+  "ignored": {"REV": 1},
+  "contacts": [
+    {
+      "first_name": "Camille", "last_name": "Bernard",
+      "phones": ["+33-6-11-22-33-44 (mobile)", "+33 1 22 33 44 55 (travail)"],
+      "emails": ["camille@example.org", "camille.bernard@example.com"],
+      "address": "3 place du Marché, Bâtiment B, 69002 Lyon, France",
+      "birthday": "1985-03-02", "notes": "", "uid": "proton-web-1234-abcd", "favorite": false
+    },
+    {
+      "first_name": "Sam", "last_name": "",
+      "phones": [], "emails": ["sam@example.org"], "address": null, "birthday": null,
+      "notes": "Seulement un e-mail", "uid": null, "favorite": false
+    },
+    {
+      "first_name": "", "last_name": "",
+      "phones": [], "emails": ["anonyme@example.org"], "address": null, "birthday": null,
+      "notes": "", "uid": null, "favorite": false
+    }
+  ]
+}

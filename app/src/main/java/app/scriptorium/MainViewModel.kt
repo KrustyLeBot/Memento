@@ -31,12 +31,13 @@ import app.scriptorium.scan.ScanImages
 import app.scriptorium.scan.ScanPdf
 import app.scriptorium.scan.PdfPages
 import app.scriptorium.activity.ActivityController
+import app.scriptorium.contacts.ContactsController
 import app.scriptorium.record.Recorder
 import app.scriptorium.sync.SkipReason
 import app.scriptorium.sync.SyncState
 import app.scriptorium.sync.SynchrotronClient
 
-enum class Screen { LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS }
+enum class Screen { LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS, CONTACT, CONTACT_EDIT, CONTACT_DUPLICATES }
 
 /** Screens that carry the bottom bar: the home screen of each module. */
 val Screen.module: Module?
@@ -136,6 +137,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val activities = ActivityController(app, repo, viewModelScope, io, { snack = it }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }).also { c ->
         c.onOpen = { screen = Screen.ACTIVITY }
     }
+
+    /** The Contacts module (list, detail, editor, import, mirror into the phone). */
+    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it })
 
     var screen by mutableStateOf(rootOf(settings.lastModule.takeUnless { it in settings.hiddenModules } ?: Module.NOTES))
     var hiddenModules by mutableStateOf(settings.hiddenModules)
@@ -257,6 +261,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             withContext(io) {
                 (repo.fs as? FileFs)?.root?.mkdirs()
                 repo.scan()
+                contacts.scan()
                 storageLabel = repo.fs.describe()
             }
         }
@@ -600,6 +605,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             Screen.ACTIVITIES, Screen.AGENDA, Screen.CONTACTS -> openModule(Module.NOTES)
             Screen.ACTIVITY -> { activities.close(); screen = Screen.ACTIVITIES }
             Screen.RECORD -> screen = Screen.ACTIVITIES
+            Screen.CONTACT, Screen.CONTACT_EDIT, Screen.CONTACT_DUPLICATES -> contacts.back()
             Screen.DRAWING -> closeDrawing()
             Screen.PDF -> { viewingPdf = null; screen = if (editor != null) Screen.EDITOR else Screen.LIST }
             Screen.LIST -> when {

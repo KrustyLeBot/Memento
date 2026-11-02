@@ -1,0 +1,43 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Marie Dupont
+N:Dupont;Marie;;;
+EMAIL;TYPE=INTERNET;TYPE=HOME:marie.dupont@example.org
+TEL;TYPE=CELL:06 12 34 56 78
+TEL;TYPE=CELL:+33 7 98 76 54 32
+TEL;TYPE=HOME:01 23 45 67 89
+item1.TEL:+33 4 11 22 33 44
+item1.X-ABLabel:Maison de campagne
+ADR;TYPE=HOME:;;12 rue de la Paix;Paris;;75002;France
+BDAY:1990-05-14
+NOTE:Rencontrée au club de lecture\, très sympa.\nCode portail : 1234
+ORG:Exemple SARL
+TITLE:Ingénieure
+CATEGORIES:myContacts
+PHOTO:https://example.org/photo.jpg
+UID:a1b2c3d4@example.org
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Jean-François O'Neill
+N:O'Neill;Jean-François;;;
+TEL;TYPE=WORK:+33 (0)1 98 76 54 32
+item1.EMAIL;TYPE=INTERNET:jf.oneill@example.com
+item1.X-ABLabel:_$!<Other>!$_
+URL:https://example.com
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Boulangerie Exemple
+N:;;;;
+ORG:Boulangerie Exemple
+TEL;TYPE=WORK:04 00 00 00 01
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Zoé Écrivain-Longuenommée
+N:Écrivain-Longuenommée;Zoé;;;
+NOTE:Une note assez longue pour être repliée sur plusieurs lignes par l'expor
+ tateur\, comme le fait Google pour les lignes de plus de 75 octets.
+BDAY:--05-14
+END:VCARD

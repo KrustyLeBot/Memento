@@ -1,0 +1,12 @@
+{
+  "bad": 0,
+  "empty": 0,
+  "ignored": {"X-…": 1},
+  "contacts": [
+    {
+      "first_name": "Léa", "last_name": "Durand",
+      "phones": ["06 98 76 54 32 (mobile)", "01 11 22 33 44 (domicile)", "07 00 11 22 33 (mobile)"],
+      "emails": ["lea@example.org"], "address": null, "birthday": "--12-25", "notes": "", "uid": null, "favorite": false
+    }
+  ]
+}

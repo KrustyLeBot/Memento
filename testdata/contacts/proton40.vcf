@@ -1,0 +1,25 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//ProtonMail//ProtonMail vCard 1.0.0//EN
+UID:proton-web-1234-abcd
+FN;PREF=1:Camille Bernard
+N:Bernard;Camille;;;
+TEL;TYPE="cell,voice";VALUE=uri:tel:+33-6-11-22-33-44
+TEL;TYPE=work:+33 1 22 33 44 55
+EMAIL;PREF=1:camille@example.org
+EMAIL:camille.bernard@example.com
+BDAY:19850302
+ADR;TYPE=home:;;3 place du Marché\nBâtiment B;Lyon;;69002;France
+KIND:individual
+REV:20260101T120000Z
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Sam
+EMAIL:sam@example.org
+NOTE:Seulement un e-mail
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+EMAIL:anonyme@example.org
+END:VCARD

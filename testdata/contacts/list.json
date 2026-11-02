@@ -1,0 +1,31 @@
+{
+  "contacts": [
+    {"id": "a1", "first_name": "Émile", "last_name": "Zola", "favorite": true, "phones": ["01 00 00 00 01 (domicile)"]},
+    {"id": "a2", "first_name": "", "last_name": "Ångström"},
+    {"id": "a3", "first_name": "Marie", "last_name": "Dupont", "notes": "Amie de l'École des Beaux-Arts", "birthday": "1990-05-14"},
+    {"id": "a4", "first_name": "Jean", "last_name": "dupont", "emails": ["jean@example.net"], "birthday": "--02-29"},
+    {"id": "a5", "first_name": "", "last_name": "", "phones": ["+33 6 00 00 00 99"]},
+    {"id": "a6", "first_name": "Éva", "last_name": "", "birthday": "2001-01-03"},
+    {"id": "a7", "first_name": "Ozan", "last_name": "Ötzi"},
+    {"id": "a8", "first_name": "Bob", "last_name": "123 Société"}
+  ],
+  "sections_last_first": [
+    ["Favoris", ["a1"]], ["A", ["a2"]], ["D", ["a4", "a3"]], ["E", ["a6"]], ["O", ["a7"]], ["Z", ["a1"]], ["#", ["a5", "a8"]]
+  ],
+  "sections_first_first": [
+    ["Favoris", ["a1"]], ["A", ["a2"]], ["B", ["a8"]], ["E", ["a1", "a6"]], ["J", ["a4"]], ["M", ["a3"]], ["O", ["a7"]], ["#", ["a5"]]
+  ],
+  "search": [
+    ["dupont", ["a4", "a3"]],
+    ["DUPONT marie", ["a3"]],
+    ["zola emile", ["a1"]],
+    ["ecole", ["a3"]],
+    ["example.net", ["a4"]],
+    ["0600", ["a5"]],
+    ["33 6 00", ["a5"]],
+    ["angstrom", ["a2"]],
+    ["0100", ["a1"]],
+    ["inconnu", []]
+  ],
+  "birthdays": [["a6", "Éva", "2001-01-03"], ["a4", "Jean dupont", "--02-29"], ["a3", "Marie Dupont", "1990-05-14"]]
+}
