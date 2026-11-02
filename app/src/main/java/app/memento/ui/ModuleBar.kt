@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
@@ -34,14 +35,20 @@ fun ModuleBar(modules: List<Module>, current: Module?, onSelect: (Module) -> Uni
                 selected = m == current,
                 onClick = { if (m != current) onSelect(m) },
                 icon = { Icon(m.icon, null) },
-                label = { Text(m.label, maxLines = 1) },
+                label = { BarLabel(m.label) },
             )
         }
         NavigationBarItem(
             selected = current == null,
             onClick = { if (current != null) onSettings() },
             icon = { Icon(Icons.Default.Settings, null) },
-            label = { Text("Paramètres", maxLines = 1) },
+            label = { BarLabel("Réglages") },
         )
     }
+}
+
+/** Five entries on a narrow phone: a slightly smaller label that never wraps or gets cut mid-word. */
+@Composable
+private fun BarLabel(text: String) {
+    Text(text, maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelSmall)
 }
