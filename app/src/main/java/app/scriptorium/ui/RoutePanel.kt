@@ -287,7 +287,7 @@ fun FollowRouteRow(vm: MainViewModel, choice: RouteChoice?, onChoice: (RouteChoi
                 HorizontalDivider()
             }
             Text(
-                "Un fichier ou une activité est préparé pour le hors ligne pendant l'enregistrement.",
+                "Un parcours pris dans un fichier ou une activité est préparé pour le hors ligne au démarrage de l'enregistrement.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
