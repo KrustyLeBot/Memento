@@ -179,6 +179,7 @@ class EditorScreen(QWidget):
         self.current: Note | None = None
         self.loaded_raw: str | None = None
         self.dirty = False
+        self._asking = False  # the "modified elsewhere" question is on screen
         self._loading = False
         self._color = fmt.DEFAULT_COLOR
         self._fg = theme.scheme().on_surface
@@ -438,6 +439,14 @@ class EditorScreen(QWidget):
         edited = self.collect()
         if not edited.path and self._is_blank(edited):
             return  # nothing worth a file yet
+        if edited.path and self.loaded_raw is not None:
+            # The autosave runs before the folder watcher (700 ms against 800 ms): a version the sync brought
+            # meanwhile would be overwritten without a word. Ask first, as when the watcher sees it.
+            raw = self.store.read_raw(edited.path)
+            if raw is not None and raw != self.loaded_raw:
+                if not self._asking:
+                    self.on_disk_changed(self.store.scan())
+                return
         edited = edited.copy(updated=now_ms())
         try:
             saved = self.store.save(edited)
@@ -666,7 +675,7 @@ class EditorScreen(QWidget):
                 self.back_requested.emit()
             return
         disk = next((n for n in notes if n.path == self.current.path), None)
-        if disk is None:
+        if disk is None or self._asking:
             return
         if not self.dirty:
             self.current, self.loaded_raw = disk, raw
@@ -677,7 +686,11 @@ class EditorScreen(QWidget):
         box.setText("Ce fichier a changé sur le disque (synchronisation ou autre éditeur) pendant que tu le modifiais.")
         mine = box.addButton("Garder ma version", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Recharger", QMessageBox.ButtonRole.DestructiveRole)
-        box.exec()
+        self._asking = True
+        try:
+            box.exec()
+        finally:
+            self._asking = False
         if box.clickedButton() is mine:
             self.loaded_raw = raw
             self.current = self.current.copy(extra=disk.extra)

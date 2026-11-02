@@ -189,6 +189,35 @@ def test_external_change_reloads_when_there_is_no_local_edit(window, tmp_path):
     assert window.editor.body.document().toPlainText() == "v2 depuis le PC"
 
 
+@pytest.mark.parametrize("choice", ["Recharger", "Garder ma version"])
+def test_autosave_does_not_overwrite_a_version_the_sync_just_brought(window, tmp_path, monkeypatch, choice):
+    """The autosave (700 ms) runs before the watcher (800 ms): it used to write over the synced file silently."""
+    from PySide6.QtWidgets import QMessageBox
+    note = add(window.store, "Partagée", "v1")
+    window.refresh()
+    window.open_note(note)
+    path = tmp_path / note.path
+    window.editor.title.setText("Partagée (PC)")  # a local edit, not saved yet
+    path.write_text(path.read_text(encoding="utf-8").replace("v1", "v2 du téléphone"), encoding="utf-8")
+    asked = []
+
+    def answer(box):
+        asked.append(box.text())
+        next(b for b in box.buttons() if b.text() == choice).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", answer)
+    window.editor.save()  # the autosave timer, before any watcher event
+    assert len(asked) == 1
+    text = path.read_text(encoding="utf-8")
+    if choice == "Recharger":
+        assert "v2 du téléphone" in text and "Partagée (PC)" not in text
+        assert window.editor.title.text() == "Partagée"
+    else:
+        assert "Partagée (PC)" in text and "v2 du téléphone" not in text  # the user chose this PC's version
+    window._on_disk_changed()  # the watcher's tick afterwards asks nothing more
+    assert len(asked) == 1
+
+
 def test_external_note_appears_in_the_list(window, tmp_path):
     (tmp_path / "du-pc.md").write_text("Bonjour")
     window._on_disk_changed()
