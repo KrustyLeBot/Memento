@@ -154,6 +154,8 @@ fun SettingsScreen(vm: MainViewModel, onPickFolder: () -> Unit) {
                 SettingsHint("Distance, durée et dénivelé de l'écran Activités. Réglage synchronisé avec le PC.")
             }
 
+            ContactsSettings(vm)
+
             if (vm.settings.storage is StorageConfig.Default) SyncSettings(Settings.defaultDir().path)
             UpdateSettings(vm.updates)
             AboutSettings("Scriptorium ${BuildConfig.VERSION_NAME}", "Des notes en Markdown, une par fichier, lisibles par n'importe quel éditeur.")

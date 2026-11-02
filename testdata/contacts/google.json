@@ -1,0 +1,33 @@
+{
+  "bad": 0,
+  "empty": 0,
+  "ignored": {"CATEGORIES": 1, "PHOTO": 1, "URL": 1},
+  "contacts": [
+    {
+      "first_name": "Marie", "last_name": "Dupont",
+      "phones": ["06 12 34 56 78 (mobile)", "+33 7 98 76 54 32 (mobile)", "01 23 45 67 89 (domicile)", "+33 4 11 22 33 44 (Maison de campagne)"],
+      "emails": ["marie.dupont@example.org"],
+      "address": "12 rue de la Paix, 75002 Paris, France",
+      "birthday": "1990-05-14",
+      "notes": "Société : Exemple SARL — Ingénieure\n\nRencontrée au club de lecture, très sympa.\nCode portail : 1234",
+      "uid": "a1b2c3d4@example.org", "favorite": false
+    },
+    {
+      "first_name": "Jean-François", "last_name": "O'Neill",
+      "phones": ["+33 (0)1 98 76 54 32 (travail)"],
+      "emails": ["jf.oneill@example.com"],
+      "address": null, "birthday": null, "notes": "", "uid": null, "favorite": false
+    },
+    {
+      "first_name": "Boulangerie Exemple", "last_name": "",
+      "phones": ["04 00 00 00 01 (travail)"],
+      "emails": [], "address": null, "birthday": null, "notes": "", "uid": null, "favorite": false
+    },
+    {
+      "first_name": "Zoé", "last_name": "Écrivain-Longuenommée",
+      "phones": [], "emails": [], "address": null, "birthday": "--05-14",
+      "notes": "Une note assez longue pour être repliée sur plusieurs lignes par l'exportateur, comme le fait Google pour les lignes de plus de 75 octets.",
+      "uid": null, "favorite": false
+    }
+  ]
+}

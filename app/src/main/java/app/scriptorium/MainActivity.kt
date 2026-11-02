@@ -65,6 +65,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        app.scriptorium.ui.vcardUri(intent)?.let { uri ->
+            vm.contacts.startImport(uri)
+            intent?.action = null
+            return
+        }
         if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
             vm.handleShare(
                 intent.getStringExtra(Intent.EXTRA_SUBJECT),
@@ -157,6 +162,9 @@ class MainActivity : ComponentActivity() {
             Screen.DRAWING -> vm.drawing?.let { DrawingScreen(vm, it) }
             Screen.AGENDA -> AgendaScreen(vm)
             Screen.CONTACTS -> ContactsScreen(vm)
+            Screen.CONTACT -> app.scriptorium.ui.ContactDetailScreen(vm)
+            Screen.CONTACT_EDIT -> app.scriptorium.ui.ContactEditScreen(vm)
+            Screen.CONTACT_DUPLICATES -> app.scriptorium.ui.ContactDuplicatesScreen(vm)
                 }
     }
 

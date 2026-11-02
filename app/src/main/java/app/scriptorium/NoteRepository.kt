@@ -117,6 +117,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         observers = listOfNotNull(
             observe(dir),
             java.io.File(dir, ACTIVITIES_DIR).takeIf { it.isDirectory }?.let { observe(it) },
+            java.io.File(dir, app.scriptorium.contacts.ContactFormat.DIR).takeIf { it.isDirectory }?.let { observe(it) },
         ) + agendaDirs.filter { it.isDirectory }.map { d ->
             observe(d) { name -> !isTempName(name) && (isNoteFile(name) || name.endsWith(".json") || '.' !in name) }
         }

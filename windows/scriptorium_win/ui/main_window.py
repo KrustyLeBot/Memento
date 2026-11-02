@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         self.activities.open_file.connect(self.open_attachment)
         self.activities.reveal_file.connect(self.reveal_attachment)
         self.activities.message.connect(self.show_snack)
+        self.contacts.message.connect(self.show_snack)
+        self.contacts.set_first_name_first(bool(getattr(config, "contacts_first_name_first", False)))
+        self.settings.contacts_order.connect(self._contacts_order_changed)
         self.settings.back_requested.connect(lambda: self.show_module(self.module))
         self.settings.choose_folder.connect(self.choose_workdir)
         self.settings.grid_changed.connect(self._grid_changed)
@@ -179,6 +182,7 @@ class MainWindow(QMainWindow):
     def show_settings(self) -> None:
         self.settings.load(str(self.store.root), self.list_screen.grid, self.config.theme, self.store.activity_settings(),
                            self.config.hidden_modules)
+        self.settings.set_contacts_first_name_first(self.contacts.first_name_first)
         self.rail.set_current(None)
         self.stack.setCurrentWidget(self.settings)
 
@@ -189,12 +193,19 @@ class MainWindow(QMainWindow):
         elif current is self.activities:
             if self.activities.current is not None:
                 self.activities.show_list()
+        elif current is self.contacts:
+            if self.contacts.current is not None:
+                self.contacts.show_list()
+            elif self.contacts.search.text():
+                self.contacts.search.clear()
         elif current is self.list_screen and self.list_screen.search.text():
             self.list_screen.search.clear()
 
     def _focus_search(self) -> None:
         if self.stack.currentWidget() is self.list_screen:
             self.list_screen.focus_search()
+        elif self.stack.currentWidget() is self.contacts:
+            self.contacts.focus_search()
 
     # ---- store / list ----
 
@@ -215,9 +226,10 @@ class MainWindow(QMainWindow):
         root = str(self.store.root)
         if root not in self.watcher.directories():
             self.watcher.addPath(root)
-        acts = str(self.store.root / "activities")
-        if (self.store.root / "activities").is_dir() and acts not in self.watcher.directories():
-            self.watcher.addPath(acts)
+        for sub in ("activities", "contacts"):
+            path = str(self.store.root / sub)
+            if (self.store.root / sub).is_dir() and path not in self.watcher.directories():
+                self.watcher.addPath(path)
 
     def choose_workdir(self) -> None:
         path = ask_workdir(self, first_run=False, start=self.store.root)
@@ -253,6 +265,10 @@ class MainWindow(QMainWindow):
         self.store.save_activity_settings(settings)
         self.activities.set_included(settings.totals)
 
+    def _contacts_order_changed(self, first_name_first: bool) -> None:
+        self.config.contacts_first_name_first = first_name_first
+        self.contacts.set_first_name_first(first_name_first)
+
     def _grid_changed(self, grid: bool) -> None:
         self.config.grid = grid
         self.list_screen.set_grid(grid)
@@ -260,7 +276,7 @@ class MainWindow(QMainWindow):
     def _theme_changed(self, mode: str) -> None:
         self.config.theme = mode
         theme.apply_theme(QApplication.instance(), mode)
-        for screen in (self.list_screen, self.settings, self.activities, self.rail):
+        for screen in (self.list_screen, self.settings, self.activities, self.contacts, self.rail):
             screen.restyle()
         self.list_screen.rebuild()
 

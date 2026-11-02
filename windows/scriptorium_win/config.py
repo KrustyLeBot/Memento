@@ -56,6 +56,16 @@ class Config:
         self._settings.sync()
 
     @property
+    def contacts_first_name_first(self) -> bool:
+        """Contacts sorted and grouped by first name ("Prénom d'abord"); a setting of this PC."""
+        return str(self._settings.value("contacts_first_name_first", "false")).lower() == "true"
+
+    @contacts_first_name_first.setter
+    def contacts_first_name_first(self, value: bool) -> None:
+        self._settings.setValue("contacts_first_name_first", "true" if value else "false")
+        self._settings.sync()
+
+    @property
     def hidden_modules(self) -> set[str]:
         value = str(self._settings.value("hidden_modules", ""))
         return {k for k in value.split(",") if k}

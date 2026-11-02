@@ -1,0 +1,13 @@
+{
+  "id": "p4x8q1",
+  "first_name": "Marie", "last_name": "Dupont",
+  "phones": ["+33 6 12 34 56 78 (mobile)", "+33 1 23 45 67 89 (domicile)"],
+  "emails": ["marie@example.org", "m.dupont@example.com"],
+  "address": "12 rue de la Paix, 75002 Paris",
+  "birthday": "--05-14",
+  "favorite": true,
+  "uid": "8c1f00aa@google",
+  "import": "20261101-101200-abcdef",
+  "notes": "Rencontrée au club de lecture.\n\n- [ ] lui rendre son livre",
+  "extra": ["aliases: [Marie D.]"]
+}
