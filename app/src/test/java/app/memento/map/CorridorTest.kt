@@ -209,7 +209,7 @@ class CorridorManifestTest {
         val plan = TilePlans.forRoute(outAndBack())!!
         val pack = Pack(
             "r-1", "Aller-retour", created, plan.square, plan.orthoZooms.last,
-            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
+            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         val back = Pack.parse(pack.toJson())
         assertEquals(pack.corridor, back.corridor)

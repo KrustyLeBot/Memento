@@ -3,13 +3,14 @@ package app.memento.map
 /**
  * A tile the map page asks for: `/t/{kind}/{z}/{x}/{y}`, kind "ortho" (the IGN aerial photo, JPEG) or "dem"
  * (Terrarium relief, PNG). "osm" is never asked for: it is where the photo's OpenStreetMap stand-in is cached,
- * in its own folder so a file's type follows its folder.
+ * in its own folder so a file's type follows its folder. "buildings" is a z15 cell of [Buildings] (JSON), asked for
+ * as `/buildings/15/{x}/{y}`.
  */
 data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
     /** Relative path in a cache or pack folder. */
-    val path: String get() = "$kind/$z/$x/$y.${if (kind == KIND_ORTHO) "jpg" else "png"}"
+    val path: String get() = "$kind/$z/$x/$y.${when (kind) { KIND_ORTHO -> "jpg"; KIND_BUILDINGS -> "json"; else -> "png" }}"
 
-    val mime: String get() = if (kind == KIND_ORTHO) "image/jpeg" else "image/png"
+    val mime: String get() = when (kind) { KIND_ORTHO -> "image/jpeg"; KIND_BUILDINGS -> "application/json"; else -> "image/png" }
 
     fun fallback() = TileKey(KIND_OSM, z, x, y)
 
@@ -17,9 +18,19 @@ data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
         const val KIND_ORTHO = "ortho"
         const val KIND_DEM = "dem"
         const val KIND_OSM = "osm"
+        const val KIND_BUILDINGS = "buildings"
         /** Browsing-cache folders of former base layers, deleted at startup. */
         val OLD_KINDS = listOf("plan")
         private val PATH = Regex("""^/t/(ortho|dem)/(\d{1,2})/(\d{1,7})/(\d{1,7})(?:\.png|\.jpg)?$""")
+        private val BUILDINGS_PATH = Regex("""^/buildings/(\d{1,2})/(\d{1,7})/(\d{1,7})$""")
+
+        /** `/buildings/15/{x}/{y}`: only z15 cells exist. */
+        fun parseBuildings(path: String): TileKey? {
+            val m = BUILDINGS_PATH.matchEntire(path) ?: return null
+            val (z, x, y) = m.destructured.toList().map { it.toInt() }
+            if (z != Buildings.Z || x >= (1 shl z) || y >= (1 shl z)) return null
+            return TileKey(KIND_BUILDINGS, z, x, y)
+        }
 
         fun parse(path: String): TileKey? {
             val m = PATH.matchEntire(path) ?: return null

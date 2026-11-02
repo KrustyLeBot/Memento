@@ -102,8 +102,8 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–13 over a square whose
   side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps); the map still zooms to z19,
   showing that photo enlarged (blurry) while the relief keeps its full precision. An optional 3D zone adds relief z6–13 (130 KB a
-  tile, the full precision of the elevation data) and peaks over its own square (5–80 km, 40 km by default; about
-  30 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
+  tile, the full precision of the elevation data), buildings and peaks over its own square (5–80 km, 40 km by default; about
+  40 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
   without imagery. Réglages → Cartes says whether it is asked (default: an inline question once the recording has
   started, never delaying it; unanswered means no), always or never downloaded, with the live estimate of each size.
   A 2D zone pack is turned into the 3D one in place (its tiles kept). Zone packs are capped at 250 MB (the plan lowers
@@ -112,6 +112,16 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   missing from the packs is cut from its nearest ancestor and enlarged, so zooming in off the band shows the
   medium-definition photo instead of nothing (MapLibre does not overzoom a raster tile it could not get). `tools/mapdev.py` serves
   the page with these endpoints for development (`python tools/mapdev.py`, then drive `window.SMap`).
+- In 3D, close up (zoom 14.5, or a screen spanning 2 km or less), the buildings stand on the block as extruded blocks:
+  IGN BD TOPO V3 `batiment` from the Géoplateforme WFS (Licence Ouverte Etalab 2.0), height from `hauteur`, else the
+  roof's top minus the ground, else 3 m a floor, else 6 m. The host serves them one z15 cell at a time
+  (`buildings/15/{x}/{y}`: footprints rounded to 1e-6°, heights, a few tens of KB for a town's cell), fetched on demand
+  and kept in the same disk cache as the tiles; offline and not cached, there are none (404). The page draws the 16
+  cells nearest the camera's centre (15 000 buildings at most), only inside the block, light stone walls, and gives
+  each roof the colour of the aerial photo under it (the median of its sunlit half, sampled on the z17 tiles in idle
+  time; neutral until then). Route packs and 3D zone packs hold the cells of their relief square, at most 600 (past
+  that, those within 1 km of the route or nearest the start), estimated at 16 KB a cell (measured 33 KB around
+  Annecy, 14 KB around Chamonix, 3 KB in the Vanoise).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
 

@@ -1,6 +1,7 @@
 """Host side of the map page (web/map) on Windows: the `scr://app/` scheme serving the page, the tiles (fetched
-once, then from a 300 MB disk cache) and the peaks. Everything runs on the GUI thread with asynchronous network
-calls; only the cache purge runs in a worker thread. The rules themselves live in core/mapcache.py and core/peaks.py."""
+once, then from a 300 MB disk cache), the peaks and the buildings. Everything runs on the GUI thread with asynchronous
+network calls; only the cache purge runs in a worker thread. The rules themselves live in core/mapcache.py,
+core/peaks.py and core/buildings.py."""
 from __future__ import annotations
 
 import json
@@ -21,7 +22,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWebEngineCore import (QWebEngineProfile, QWebEngineUrlRequestJob, QWebEngineUrlScheme,
                                      QWebEngineUrlSchemeHandler)
 
-from ..core import mapcache, peaks
+from ..core import buildings, mapcache, peaks
 
 SCHEME = b"scr"
 BASE_URL = "scr://app/"
@@ -84,6 +85,7 @@ class TileStore(QObject):
         self._nam = QNetworkAccessManager(self)
         self._waiting: dict[str, list[Callable[[bytes | None], None]]] = {}
         self._peaks_waiting: dict[tuple, list[Callable[[list | None], None]]] = {}
+        self._cells_waiting: dict[tuple[int, int], list[Callable[[bytes | None], None]]] = {}
         self._written = 0
         self._purge_lock = threading.Lock()
         self.purge_async()
@@ -251,6 +253,53 @@ class TileStore(QObject):
             done(candidates or [])
 
 
+    # ---- buildings ----
+
+    def buildings(self, req: mapcache.BuildingsRequest, done: Callable[[bytes | None], None]) -> None:
+        """The cell's slim JSON: from the cache, else from the WFS page by page; None offline or on a WFS error."""
+        path = buildings.cache_path(self.root, req.x, req.y)
+        try:
+            data = path.read_bytes()
+            os.utime(path)
+            done(data)
+            return
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            _log(f"{path}: {error}")
+        if self.backoff.blocked(time.monotonic()):
+            done(None)
+            return
+        key = (req.x, req.y)
+        if key in self._cells_waiting:
+            self._cells_waiting[key].append(done)
+            return
+        self._cells_waiting[key] = [done]
+        self._cell_page(key, [])
+
+    def _cell_page(self, key: tuple[int, int], features: list) -> None:
+        reply = self._nam.get(_request(buildings.wfs_url(*key, len(features))))
+        reply.finished.connect(partial(self._cell_page_done, reply, key, features))
+
+    def _cell_page_done(self, reply: QNetworkReply, key: tuple[int, int], features: list) -> None:
+        text = self._text(reply)
+        data = None
+        if text is not None:
+            try:
+                page = buildings.parse_page(text)
+                features += page
+                if not buildings.is_last_page(page) and len(features) < buildings.PAGE * buildings.MAX_PAGES:
+                    self._cell_page(key, features)
+                    return
+                data = buildings.encode(*key, buildings.slim(features, *key))
+            except Exception:  # any malformed answer: logged, the waiting pages get a 404
+                _log(f"buildings {key}: unreadable answer: {traceback.format_exc()}")
+        if data is not None:
+            self._store(buildings.cache_path(self.root, *key), data)
+        for done in self._cells_waiting.pop(key, []):
+            done(data)
+
+
 class SchemeHandler(QWebEngineUrlSchemeHandler):
     """Answers every `scr://app/...` request: each job is replied to or failed, never left hanging."""
 
@@ -274,6 +323,8 @@ class SchemeHandler(QWebEngineUrlSchemeHandler):
             self.store.get(req, partial(self._answer_tile, job))
         elif isinstance(req, mapcache.PeaksRequest):
             self.store.peaks(req, lambda found, j=job: self._answer(j, b"application/json", json.dumps(found).encode()))
+        elif isinstance(req, mapcache.BuildingsRequest):
+            self.store.buildings(req, lambda found, j=job: self._answer(j, b"application/json", found))
         else:
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
 

@@ -147,3 +147,39 @@ def test_concurrent_requests_for_one_tile_share_a_fetch(tmp_path):
     for t in threads:
         t.join()
     assert len(calls) == 1 and all(r == ("image/png", b"png") for r in results)
+
+
+def _cell_page(n: int) -> bytes:
+    from memento_web.core import mapcache  # noqa: F401 (puts memento_win on the path)
+    from memento_win.core import buildings
+    w, s, e, nn = buildings.cell_box(16941, 11670)
+    lon, lat = (w + e) / 2, (s + nn) / 2
+    ring = [[lon, lat], [lon + 1e-4, lat], [lon + 1e-4, lat + 1e-4], [lon, lat + 1e-4], [lon, lat]]
+    return json.dumps({"features": [{"id": f"b{i}", "properties": {"hauteur": 9.5},
+                                     "geometry": {"type": "Polygon", "coordinates": [ring]}} for i in range(n)]}).encode()
+
+
+def test_buildings_cell_is_fetched_slimmed_cached_and_served(client, net, folders):
+    net.answers["https://data.geopf.fr/wfs"] = (200, "application/json", _cell_page(2))
+    response = client.get("/buildings/15/16941/11670")
+    assert response.status_code == 200 and response.headers["content-type"] == "application/json"
+    doc = response.json()
+    assert (doc["v"], doc["z"], doc["x"], doc["y"]) == (1, 15, 16941, 11670) and [b[0] for b in doc["b"]] == [9.5, 9.5]
+    assert len(net.calls) == 1 and "TYPENAMES=BDTOPO_V3:batiment" in net.calls[0]
+    assert client.get("/buildings/15/16941/11670").content == response.content and len(net.calls) == 1
+    assert (folders[1] / "tiles" / "buildings" / "15" / "16941" / "11670.json").is_file()
+
+
+def test_buildings_errors_are_not_cached_and_offline_is_a_404(client, net):
+    net.answers["https://data.geopf.fr/wfs"] = (200, "text/xml", b"<ows:ExceptionReport/>")
+    assert client.get("/buildings/15/16941/11670").status_code == 404
+    net.answers["https://data.geopf.fr/wfs"] = (200, "application/json", _cell_page(1))
+    assert client.get("/buildings/15/16941/11670").status_code == 200  # fetched again: the error was not kept
+    net.offline = True
+    assert client.get("/buildings/15/16941/11671").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/buildings/14/1/1", "/buildings/15/32768/0", "/buildings/15/a/1"])
+def test_invalid_building_cells_are_refused(client, path, net):
+    assert client.get(path).status_code == 404
+    assert net.calls == []

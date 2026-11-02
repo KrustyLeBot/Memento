@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Offline packs in `filesDir/packs/<id>/` (private storage the system does not purge mid-hike, never the
- * synced Documents folder): `manifest.json`, `ortho/` and `dem/` tiles, `peaks.json`, `route.json`.
+ * synced Documents folder): `manifest.json`, `ortho/` and `dem/` tiles, `buildings/` cells, `peaks.json`, `route.json`.
  * Downloads run in a process-wide scope, so they go on while the recording service keeps the process
  * alive with no screen. A pack whose download stopped stays incomplete and can be resumed; every pack is
  * deleted 24 h after it was started.
@@ -138,13 +138,13 @@ object OfflinePacks {
 
     /**
      * Starts downloading what [route] needs offline: the aerial photo of its square (high definition along the track),
-     * relief and peaks. Returns the pack id.
+     * relief, buildings and peaks. Returns the pack id.
      */
     fun prepareRoute(route: Route, plan: TilePlan = planRoute(route)): String {
         val pack = Pack(
             newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), plan.square, plan.orthoZooms.last,
             // a route too wide for its relief gets a flat (2D) pack: the kinds say so, and the map stays 2D offline
-            if (plan.demZooms != null) setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS) else setOf(Pack.KIND_ORTHO, Pack.KIND_PEAKS),
+            if (plan.demZooms != null) setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS) else setOf(Pack.KIND_ORTHO, Pack.KIND_PEAKS),
             0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
@@ -304,7 +304,7 @@ object OfflinePacks {
     }
 
     /**
-     * Relief first (the 3D view needs it), then the aerial photo zoom by zoom, the square then the corridor. Should the
+     * Relief first (the 3D view needs it), the buildings, then the aerial photo zoom by zoom, the square then the corridor. Should the
      * real tiles outgrow the budget, the zoom being fetched is dropped and the pack stops at the one below (the
      * corridor's top zoom goes first): the budget (500 MB a route, [TilePlans.ZONE_BUDGET] a zone) holds even when the estimate was low.
      */

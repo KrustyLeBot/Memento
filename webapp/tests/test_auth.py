@@ -49,7 +49,8 @@ def test_session_gives_access_and_logout_revokes_it(make_client):
 
 @pytest.mark.parametrize("path", ["/api/notes", "/api/notes/courses-abc123.md", "/api/files/courses-abc123.md",
                                   "/api/events", "/api/conflicts", "/api/settings/activities", "/api/me",
-                                  "/t/dem/1/0/0", "/peaks?w=6&s=45&e=6.1&n=45.1", "/map/index.html",
+                                  "/t/dem/1/0/0", "/peaks?w=6&s=45&e=6.1&n=45.1", "/buildings/15/16941/11670",
+                                  "/map/index.html",
                                   "/api/drawings/drawings/dessin-aaaaaa.svg", "/api/unknown"])
 def test_everything_but_the_login_needs_a_session(make_client, path):
     client = make_client()

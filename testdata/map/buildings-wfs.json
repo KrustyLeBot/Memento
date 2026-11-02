@@ -1,0 +1,414 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "batiment.1",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.12158203,
+        45.89994813,
+        450.25
+       ],
+       [
+        6.12179203,
+        45.89994813,
+        450.25
+       ],
+       [
+        6.12179203,
+        45.90007813,
+        450.25
+       ],
+       [
+        6.12158203,
+        45.90007813,
+        450.25
+       ],
+       [
+        6.12158203,
+        45.89994813,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": 21.5,
+    "altitude_minimale_sol": 450.6,
+    "altitude_maximale_toit": 474,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.2",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.12487793,
+        45.9014772,
+        450.25
+       ],
+       [
+        6.12507793,
+        45.90147725,
+        450.0
+       ],
+       [
+        6.12527793,
+        45.9014772,
+        450.25
+       ],
+       [
+        6.12527793,
+        45.9017772,
+        450.25
+       ],
+       [
+        6.12487793,
+        45.9017772,
+        450.25
+       ],
+       [
+        6.12487793,
+        45.9014772,
+        450.25
+       ]
+      ],
+      [
+       [
+        6.12497793,
+        45.9015772,
+        450.25
+       ],
+       [
+        6.12497793,
+        45.9016772,
+        450.25
+       ],
+       [
+        6.12507793,
+        45.9016772,
+        450.25
+       ],
+       [
+        6.12507793,
+        45.9015772,
+        450.25
+       ],
+       [
+        6.12497793,
+        45.9015772,
+        450.25
+       ]
+      ]
+     ],
+     [
+      [
+       [
+        6.12509766,
+        45.9016301,
+        450.25
+       ],
+       [
+        6.12517766,
+        45.9016301,
+        450.25
+       ],
+       [
+        6.12517766,
+        45.9016901,
+        450.25
+       ],
+       [
+        6.12509766,
+        45.9016901,
+        450.25
+       ],
+       [
+        6.12509766,
+        45.9016301,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": null,
+    "altitude_minimale_sol": 450.6,
+    "altitude_maximale_toit": 462.37,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.3",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       6.1270752,
+       45.89841907,
+       450.25
+      ],
+      [
+       6.1271252,
+       45.89841907,
+       450.25
+      ],
+      [
+       6.1271252,
+       45.89845907,
+       450.25
+      ],
+      [
+       6.1270752,
+       45.89845907,
+       450.25
+      ],
+      [
+       6.1270752,
+       45.89841907,
+       450.25
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": null,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": 4
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.4",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.12817383,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.12820383,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.12820383,
+        45.90380079,
+        450.25
+       ],
+       [
+        6.12817383,
+        45.90380079,
+        450.25
+       ],
+       [
+        6.12817383,
+        45.90377079,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": null,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.1",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.12158203,
+        45.89994813,
+        450.25
+       ],
+       [
+        6.12179203,
+        45.89994813,
+        450.25
+       ],
+       [
+        6.12179203,
+        45.90007813,
+        450.25
+       ],
+       [
+        6.12158203,
+        45.90007813,
+        450.25
+       ],
+       [
+        6.12158203,
+        45.89994813,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": 21.5,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.5",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.13035109,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.13045109,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.13045109,
+        45.90382079,
+        450.25
+       ],
+       [
+        6.13035109,
+        45.90382079,
+        450.25
+       ],
+       [
+        6.13035109,
+        45.90377079,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": 7,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.6",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.13028109,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.13038109,
+        45.90377079,
+        450.25
+       ],
+       [
+        6.13038109,
+        45.90382079,
+        450.25
+       ],
+       [
+        6.13028109,
+        45.90382079,
+        450.25
+       ],
+       [
+        6.13028109,
+        45.90377079,
+        450.25
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": 7.04,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": null
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "batiment.7",
+   "geometry": {
+    "type": "MultiPolygon",
+    "coordinates": [
+     [
+      [
+       [
+        6.128173828125,
+        45.90377079266775
+       ],
+       [
+        6.128173828125,
+        45.90377079266775
+       ],
+       [
+        6.128173828125,
+        45.90377079266775
+       ]
+      ]
+     ]
+    ]
+   },
+   "geometry_name": "geometrie",
+   "properties": {
+    "hauteur": 3,
+    "altitude_minimale_sol": null,
+    "altitude_maximale_toit": null,
+    "nombre_d_etages": null
+   }
+  }
+ ],
+ "totalFeatures": 8,
+ "numberMatched": 8,
+ "numberReturned": 8
+}

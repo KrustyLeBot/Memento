@@ -24,7 +24,7 @@ from .errors import ApiError
 MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 PUBLIC_API = {"/api/login", "/api/logout", "/healthz"}
 # Everything that reads the data, or spends the server's bandwidth (tiles), needs a session.
-PROTECTED_PREFIXES = ("/api/", "/t/", "/peaks", "/map/")
+PROTECTED_PREFIXES = ("/api/", "/t/", "/peaks", "/buildings/", "/map/")
 
 _BASE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
              "font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; child-src 'self' blob:; "

@@ -15,6 +15,7 @@ MAX_ZOOM = {"ortho": 19, "dem": 15}
 MIME = {"ortho": "image/jpeg", "dem": "image/png", "osm": "image/png"}
 EXT = {"ortho": "jpg", "dem": "png", "osm": "png"}
 OLD_KINDS = ("plan",)  # browsing-cache folders of former base layers, deleted at startup
+BUILDINGS_Z = 15  # core/buildings.py's cells
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Griffonote)"
 
 IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
@@ -52,12 +53,19 @@ class PeaksRequest:
 
 
 @dataclass(frozen=True)
+class BuildingsRequest:
+    x: int
+    y: int  # of the z15 cell (core/buildings.py)
+
+
+@dataclass(frozen=True)
 class FileRequest:
     path: str  # relative to web/, e.g. "map/index.html"
 
 
-def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | FileRequest | None:
-    """`path` is the URL path under the base (`/t/ortho/12/2120/1460`, `/peaks`, `/map/map.js`); None = not served."""
+def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | BuildingsRequest | FileRequest | None:
+    """`path` is the URL path under the base (`/t/ortho/12/2120/1460`, `/peaks`, `/buildings/15/16941/11670`,
+    `/map/map.js`); None = not served."""
     parts = [p for p in path.split("/") if p]
     if len(parts) == 5 and parts[0] == "t" and parts[1] in MAX_ZOOM:
         try:
@@ -67,6 +75,9 @@ def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | Fi
         if not 0 <= z <= MAX_ZOOM[parts[1]] or not (0 <= x < 2 ** z and 0 <= y < 2 ** z):
             return None
         return TileRequest(parts[1], z, x, y)
+    if len(parts) == 4 and parts[0] == "buildings" and all(p.isdigit() and len(p) <= 7 for p in parts[1:]):
+        z, x, y = (int(p) for p in parts[1:])
+        return BuildingsRequest(x, y) if z == BUILDINGS_Z and x < 2 ** z and y < 2 ** z else None
     if parts == ["peaks"]:
         q = parse_qs(query)
         try:
@@ -206,12 +217,14 @@ class _Bits:
 
 
 def purge(root: Path, limit: int = CACHE_LIMIT, target: int = PURGE_TARGET) -> tuple[int, int]:
-    """Deletes the least recently used tiles (oldest mtime: reads touch the file) once the cache is over
-    `limit`, down to `target`. Returns (bytes left, files deleted). A file vanishing meanwhile is not an error."""
+    """Deletes the least recently used tiles and building cells (oldest mtime: reads touch the file) once the cache
+    is over `limit`, down to `target`. Returns (bytes left, files deleted). A file vanishing meanwhile is not an
+    error. The summits' answers are not counted: a few hundred bytes each."""
     entries = []
     for dirpath, _dirs, names in os.walk(root):
+        cells = os.path.basename(os.path.dirname(os.path.dirname(dirpath))) == "buildings"
         for name in names:
-            if not name.endswith((".png", ".jpg")):
+            if not (name.endswith((".png", ".jpg")) or cells and name.endswith(".json")):
                 continue
             path = os.path.join(dirpath, name)
             try:

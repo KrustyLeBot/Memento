@@ -19,7 +19,7 @@ data class ZoneSpec(val lon: Double, val lat: Double, val side2dKm: Int, val sid
 }
 
 object Zones {
-    val KINDS_3D = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS)
+    val KINDS_3D = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS)
 
     fun name(with3d: Boolean) = if (with3d) "Zone autour du départ (3D)" else "Zone autour du départ (2D)"
 
@@ -39,7 +39,7 @@ object Zones {
 
     /**
      * [p] as a 3D zone: its creation time (so its expiry) and its photo tiles kept, the photo widened to the 3D square
-     * when that is larger, relief, peaks and the z16 disc around the start left to fetch.
+     * when that is larger, relief, peaks, buildings and the z16 disc around the start left to fetch.
      */
     fun upgrade(p: Pack, z: ZoneSpec): Pack {
         val plan = z.plan(true)
