@@ -31,34 +31,30 @@ class ZoneTest {
     }
 
     @Test
-    fun default2dZoneIs40kmAndAbout45Mb() {
+    fun default2dZoneIs40kmAndAbout12Mb() {
         val p = TilePlans.forZone(lon, lat)
         assertEquals(40_000.0, p.square.widthM, 1.0)
         assertEquals(40_000.0, p.square.heightM, 1.0)
-        assertEquals(8..15, p.orthoZooms)
+        assertEquals(8..14, p.orthoZooms)
         assertNull(p.demZooms)
         assertNull(p.corridor)
-        assertTrue("${p.tileCount}", p.tileCount in 2_600..3_300)
-        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 38 * mb..50 * mb)
+        assertTrue("${p.tileCount}", p.tileCount in 650..950)
+        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 9 * mb..15 * mb)
     }
 
     @Test
-    fun default3dZoneAddsReliefAndAZ16DiscOfAbout5km() {
+    fun default3dZoneAddsOnlyTheRelief() {
         val p2 = TilePlans.forZone(lon, lat)
         val p3 = TilePlans.forZone3d(lon, lat)
         assertEquals(p2.square, p3.square)
         assertEquals(p2.orthoRanges, p3.orthoRanges)
         assertEquals(TilePlans.DEM_ZOOMS, p3.demZooms)
-        val disc = p3.corridor!!
-        assertEquals(16..16, disc.zooms)
-        assertEquals(5_000.0, disc.bufferM, 0.0)
-        // a 5 km disc is ~78.5 km², a z16 tile at 45.5° ~0.18 km²: ~430 tiles plus the rim
-        assertTrue("${disc.tileCount}", disc.tileCount in 420..600)
+        assertNull(p3.corridor)
         val dem = p3.demRanges.sumOf { it.count }
         assertTrue("$dem", dem in 200..320)
         val extra = TilePlans.zone3dExtraBytes(lon, lat)
-        assertEquals(dem * TilePlans.DEM_TILE_BYTES + disc.tileCount * TilePlans.ORTHO_TILE_BYTES, extra)
-        assertTrue("$extra", extra in 15 * mb..30 * mb)
+        assertEquals(dem * TilePlans.DEM_TILE_BYTES, extra)
+        assertTrue("$extra", extra in 25 * mb..40 * mb)
     }
 
     @Test
@@ -75,18 +71,15 @@ class ZoneTest {
         assertEquals(40_000.0, p.square.widthM, 1.0)
         assertEquals(10_000.0, p.demSquare!!.widthM, 1.0)
         assertTrue(p.demRanges.sumOf { it.count } < TilePlans.forZone3d(lon, lat, 40, 40).demRanges.sumOf { it.count })
-        // the disc never reaches past the relief: a 5 km square gets a 2.5 km disc
-        assertEquals(2_500.0, TilePlans.forZone3d(lon, lat, 40, 5).corridor!!.bufferM, 0.0)
     }
 
     @Test
     fun largestZonesStayWithinTheBudgetAtFullDefinition() {
         val p2 = TilePlans.forZone(lon, lat, 80)
-        assertEquals(15, p2.orthoZooms.last)
-        assertTrue("${p2.estimatedBytes}", p2.estimatedBytes in 140 * mb..TilePlans.ZONE_BUDGET)
+        assertEquals(14, p2.orthoZooms.last)
+        assertTrue("${p2.estimatedBytes}", p2.estimatedBytes in 30 * mb..TilePlans.ZONE_BUDGET)
         val p3 = TilePlans.forZone3d(lon, lat, 80, 80)
-        assertEquals(15, p3.orthoZooms.last)
-        assertNotNull(p3.corridor)
+        assertEquals(14, p3.orthoZooms.last)
         assertTrue("${p3.estimatedBytes}", p3.estimatedBytes <= TilePlans.ZONE_BUDGET)
     }
 

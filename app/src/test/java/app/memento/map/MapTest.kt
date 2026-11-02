@@ -84,11 +84,15 @@ class TilePlanTest {
 
         // a 200 km ride: lower zmax, still within budget, and one zoom more would not be
         val big = MapSquare.of(LON0, LAT0, LON0 + 200_000 / K_LON, LAT0 + 20_000 / MapSquare.M_PER_DEG_LAT)
+        // its relief alone is over the budget (~3 500 tiles of 130 KB at z13): a 2D-only plan, not a refusal
         val q = TilePlans.squareOnly(big)!!
-        assertTrue(q.orthoZooms.last in 8..13)
+        assertNull(q.demZooms)
+        assertTrue(q.orthoZooms.last in 11..TilePlans.MID_Z)
         assertTrue(q.estimatedBytes <= TilePlans.ROUTE_BUDGET)
-        val next = TilePlan(big, 8..q.orthoZooms.last + 1, TilePlans.DEM_ZOOMS)
-        assertTrue(next.estimatedBytes > TilePlans.ROUTE_BUDGET)
+        if (q.orthoZooms.last < TilePlans.MID_Z) {
+            val next = TilePlan(big, 8..q.orthoZooms.last + 1, null)
+            assertTrue(next.estimatedBytes > TilePlans.ROUTE_BUDGET)
+        }
     }
 
     @Test
@@ -97,11 +101,11 @@ class TilePlanTest {
     }
 
     @Test
-    fun zonePackIsAbout2900Tiles() {
+    fun zonePackIsAbout800Tiles() {
         val z = TilePlans.forZone(LON0, LAT0)
-        assertEquals(8..15, z.orthoZooms)
+        assertEquals(8..14, z.orthoZooms)
         assertNull(z.demZooms)
-        assertTrue("${z.tileCount}", z.tileCount in 2_500..3_300)
+        assertTrue("${z.tileCount}", z.tileCount in 650..950)
         assertEquals(40_000.0, z.square.widthM, 1.0)
     }
 }

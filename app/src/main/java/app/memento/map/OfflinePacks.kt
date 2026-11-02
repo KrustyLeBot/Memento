@@ -143,7 +143,9 @@ object OfflinePacks {
     fun prepareRoute(route: Route, plan: TilePlan = planRoute(route)): String {
         val pack = Pack(
             newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), plan.square, plan.orthoZooms.last,
-            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
+            // a route too wide for its relief gets a flat (2D) pack: the kinds say so, and the map stays 2D offline
+            if (plan.demZooms != null) setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS) else setOf(Pack.KIND_ORTHO, Pack.KIND_PEAKS),
+            0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
         return pack.id

@@ -71,7 +71,7 @@ object TilePlans {
      * a 22 KB estimate. 15 KB keeps the shown estimate close to the download; the real bytes are checked anyway.
      */
     const val ORTHO_TILE_BYTES = 15L * 1024
-    const val DEM_TILE_BYTES = 60L * 1024
+    const val DEM_TILE_BYTES = 130L * 1024  // Terrarium tiles measured at z10–13 in the Alps: 124–148 KB
     const val ROUTE_BUDGET = 500L * 1024 * 1024
     const val ORTHO_MIN_Z = 8
     const val ORTHO_MAX_Z = 17
@@ -87,10 +87,12 @@ object TilePlans {
     val CORRIDOR_STEPS = listOf(1000.0 to 17, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
 
     /**
-     * The zone pack recorded around the start without a route: the photo z8–15 over a square whose side is a setting
-     * ([ZONE_2D_KM], 40 km by default).
+     * The zone pack recorded around the start without a route: the photo z8–14 over a square whose side is a setting
+     * ([ZONE_2D_KM], 40 km by default). Not z15: that level alone is three quarters of the photo; deeper zooms show
+     * the z14 photo enlarged (the tile server's overzoom), and the relief, which is what one zooms in for, keeps its
+     * full precision (it stops at z13 anyway).
      */
-    val ZONE_ZOOMS = 8..15
+    val ZONE_ZOOMS = 8..14
     const val ZONE_KM_DEFAULT = 40
     const val ZONE_KM_STEP = 5
     val ZONE_2D_KM = 10..80
@@ -152,15 +154,22 @@ object TilePlans {
         return squareOnly(square, budget)
     }
 
-    /** The square alone, from z8 up to the highest zoom ≤ [MID_Z] that fits. */
+    /**
+     * The square alone, from z8 up to the highest zoom ≤ [MID_Z] that fits; when even the relief does not fit (a route
+     * spanning a few hundred km), a 2D-only plan rather than none: offline, the map is then drawn flat.
+     */
     fun squareOnly(square: Bbox, budget: Long = ROUTE_BUDGET): TilePlan? {
-        var best: TilePlan? = null
-        for (zmax in ORTHO_MIN_Z..MID_Z) {
-            val p = TilePlan(square, ORTHO_MIN_Z..zmax, DEM_ZOOMS)
-            if (p.estimatedBytes > budget) break
-            best = p
+        for (dem in listOf(DEM_ZOOMS, null)) {
+            var best: TilePlan? = null
+            for (zmax in ORTHO_MIN_Z..MID_Z) {
+                val p = TilePlan(square, ORTHO_MIN_Z..zmax, dem)
+                if (p.estimatedBytes > budget) break
+                best = p
+            }
+            // a flat pack that cannot even reach z11 (a "route" across a continent) is no use on the ground
+            if (best != null) return best.takeIf { dem != null || it.orthoZooms.last >= 11 }
         }
-        return best
+        return null
     }
 
     /** "1,5 km", "500 m". */
@@ -184,8 +193,8 @@ object TilePlans {
     fun forZone3d(lon: Double, lat: Double, side2dKm: Int = ZONE_KM_DEFAULT, side3dKm: Int = ZONE_KM_DEFAULT): TilePlan {
         val sq2 = zoneSquare(lon, lat, side2dKm)
         val sq3 = zoneSquare(lon, lat, side3dKm)
-        val disc = Corridor(listOf(round6(lon)), listOf(round6(lat)), minOf(ZONE_HD_M, side3dKm * 500.0), ZONE_HD_Z..ZONE_HD_Z)
-        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, disc, sq3))
+        // no high-definition photo around the start: the owner zooms in for the relief, not the photo
+        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, null, sq3))
     }
 
     /** What answering yes to the 3D zone adds to the 2D zone already on its way: the figure asked about. */
