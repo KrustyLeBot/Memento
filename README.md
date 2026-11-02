@@ -470,6 +470,13 @@ webapp/tests                pytest, synthetic data only
 webapp/Dockerfile           built from the repository root: docker build -f webapp/Dockerfile .
 ```
 
+Activités on the web: the list reads only the notes' `activity:` summaries; a track is parsed and analysed (core
+`analysis.py`) only when it is opened, and what the page draws (figures, charts, map data thinned to 5000 points)
+is cached as JSON, a few in memory (dropped when idle) and the rest in `/config/cache/activities`. FIT / GPX
+imports and the optional altitude completion (opentopodata.org, asked for explicitly) run in the background with
+their progress shown. The map is the shared page in an `<iframe>` of the same site, driven through `postMessage`
+(`{target: 'smap', call, args}` in, `{source: 'smap', …event}` out, same origin only), one frame kept for every activity.
+
 Deployment: `webapp/docker-compose.example.yml` and `webapp/.env.example`. The CI tests both halves and publishes
 `ghcr.io/krustylebot/memento-web:latest` (and `:<build>`) from `main`. Development: `python -m memento_web` in
 `webapp/server` (with `MEMENTO_USER`, `MEMENTO_PASSWORD`, `MEMENTO_DATA`, `MEMENTO_CONFIG`) and `npm run dev` in

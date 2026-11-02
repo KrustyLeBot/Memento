@@ -59,6 +59,18 @@
     if (bridge !== 'ready') { outbox.push(text); return; }
     const host = window.SMapHost;
     if (host && typeof host.post === 'function') host.post(text);
+    else if (framed) window.parent.postMessage({ source: 'smap', ...obj }, location.origin);
+  }
+  // Web: the page is an <iframe> of the same site (webapp, Activités). Events go to the parent; the parent calls
+  // the API with postMessage({ target: 'smap', call, args }). Only this very origin is heard. Android and Windows
+  // load the page at the top level, where none of this applies.
+  const framed = window.parent !== window;
+  if (framed) {
+    window.addEventListener('message', (e) => {
+      const d = e.data;
+      if (e.origin !== location.origin || e.source !== window.parent || !d || d.target !== 'smap') return;
+      if (API.includes(d.call)) window.SMap[d.call](...(Array.isArray(d.args) ? d.args : []));
+    });
   }
   function connectHost() {
     if (window.SMapHost || !(window.qt && window.qt.webChannelTransport)) return;

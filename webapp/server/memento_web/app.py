@@ -21,6 +21,7 @@ from .data import Data
 from .errors import ApiError
 from .modules.agenda import Agenda
 from .modules.agenda_ics import AgendaIcs
+from .modules.activities import Activities
 from .modules.common import Common
 from .modules.contacts import Contacts
 from .modules.maphost import MapHost
@@ -72,6 +73,7 @@ class SpaFiles(StaticFiles):
 def create_app(config: Config, fetch=None) -> Starlette:
     data = Data(config)
     auth = Auth(config)
+    activities = Activities(data)
     maphost = MapHost(config.tiles_dir, config.map_dir, **({"fetch": fetch} if fetch else {}))
 
     async def healthz(request: Request) -> Response:
@@ -92,6 +94,7 @@ def create_app(config: Config, fetch=None) -> Starlette:
         *Contacts(data).routes(),
         *agenda.routes(),
         *AgendaIcs(data, agenda).routes(),
+        *activities.routes(),
         *maphost.routes(),
     ]
 
@@ -134,5 +137,6 @@ def create_app(config: Config, fetch=None) -> Starlette:
     app.state.data = data
     app.state.auth = auth
     app.state.maphost = maphost
+    app.state.activities = activities
     app.add_middleware(Guard, auth=auth, on_request=data.touch)
     return app
