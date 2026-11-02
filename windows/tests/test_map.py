@@ -45,7 +45,7 @@ def test_peaks_and_files_are_parsed():
 def test_cache_path_and_urls(tmp_path):
     t = mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.tile_path(tmp_path, t) == tmp_path / "ortho" / "14" / "8501" / "5850.jpg"
-    assert mapcache.tile_path(tmp_path, t.fallback()) == tmp_path / "osm" / "14" / "8501" / "5850.png"
+    assert mapcache.tile_path(tmp_path, t.fallback()) == tmp_path / "osmfb" / "14" / "8501" / "5850.png"
     assert (t.mime, t.fallback().mime, mapcache.TileRequest("dem", 1, 0, 0).mime) == ("image/jpeg", "image/png", "image/png")
     assert "LAYER=ORTHOIMAGERY.ORTHOPHOTOS" in mapcache.upstream_url(t)
     assert "FORMAT=image/jpeg" in mapcache.upstream_url(t)
@@ -68,6 +68,9 @@ def test_ortho_falls_back_to_osm_outside_ign_coverage():
     assert mapcache.ortho_needs_fallback(404, "text/xml; charset=UTF-8", (TESTDATA / "ign-ortho-nodata.xml").read_bytes())
     assert mapcache.ortho_needs_fallback(200, "text/xml", b"<x/>")
     assert mapcache.ortho_needs_fallback(200, "image/jpeg", b"")
+    # refusals and hiccups inside France: an OSM tile cached for them would replace the photo for good
+    for status in (0, 403, 408, 429, 500, 502, 503):
+        assert not mapcache.ortho_needs_fallback(status, "text/html", b"<html/>")
 
 
 def test_flat_jpeg_detection():

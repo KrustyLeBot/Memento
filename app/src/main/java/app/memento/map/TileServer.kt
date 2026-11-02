@@ -20,7 +20,7 @@ import java.net.URL
 /** One HTTP answer, body read in full. */
 class HttpResult(val code: Int, val contentType: String?, val body: ByteArray)
 
-/** A fetched tile: [key] says what it really is (an aerial-photo request answered by OpenStreetMap is an "osm" PNG). */
+/** A fetched tile: [key] says what it really is (an aerial-photo request answered by OpenStreetMap is an "osmfb" PNG). */
 class FetchedTile(val key: TileKey, val bytes: ByteArray)
 
 /**

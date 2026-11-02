@@ -12,9 +12,9 @@ from urllib.parse import parse_qs
 CACHE_LIMIT = 300 * 1024 * 1024
 PURGE_TARGET = int(CACHE_LIMIT * 0.8)  # purge down to this so the next purge is not one tile away
 MAX_ZOOM = {"ortho": 19, "dem": 15}
-MIME = {"ortho": "image/jpeg", "dem": "image/png", "osm": "image/png"}
-EXT = {"ortho": "jpg", "dem": "png", "osm": "png"}
-OLD_KINDS = ("plan",)  # browsing-cache folders of former base layers, deleted at startup
+MIME = {"ortho": "image/jpeg", "dem": "image/png", "osmfb": "image/png"}
+EXT = {"ortho": "jpg", "dem": "png", "osmfb": "png"}
+OLD_KINDS = ("plan", "osm")  # deleted at startup: a former base layer; OSM stand-ins cached for IGN errors (build 73)
 BUILDINGS_Z = 15  # core/buildings.py's cells
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
@@ -26,7 +26,7 @@ TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}
 
 @dataclass(frozen=True)
 class TileRequest:
-    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (Terrarium PNG), or "osm" (the photo's fallback, PNG)
+    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (Terrarium PNG), or "osmfb" (the photo's OpenStreetMap stand-in, PNG)
     z: int
     x: int
     y: int
@@ -41,7 +41,7 @@ class TileRequest:
 
     def fallback(self) -> "TileRequest":
         """Where the photo's OpenStreetMap stand-in is cached: its own folder, so the file type follows the folder."""
-        return TileRequest("osm", self.z, self.x, self.y)
+        return TileRequest("osmfb", self.z, self.x, self.y)
 
 
 @dataclass(frozen=True)
@@ -105,10 +105,15 @@ def fallback_url(tile: TileRequest) -> str:
 
 
 def ortho_needs_fallback(status: int, content_type: str, data: bytes) -> bool:
-    """IGN answers 404 "No data found" outside its photo coverage (abroad, at sea, from z13 or so); at the edge of
-    the coverage it answers a uniform white JPEG instead. Both mean "no photo here". A uniform non-white tile (the
-    sea's dark blue at low zoom) is a real answer and kept."""
-    if status != 200 or not content_type.startswith("image/") or not data:
+    """IGN answers 404 "No data found" outside its photo coverage (abroad, at sea, from z13 or so), 400 past the edge
+    of its tile matrix, and a uniform white JPEG at the edge of the coverage. Only those mean "no photo here": a 403,
+    408, 429, 5xx or a dropped connection is a refusal or a hiccup inside France, and an OSM tile cached for it would
+    stand in for the photo for good. A uniform non-white tile (the sea's dark blue at low zoom) is a real answer."""
+    if status in (400, 404, 204):
+        return True
+    if status != 200:
+        return False
+    if not content_type.startswith("image/") or not data:
         return True
     colour = jpeg_uniform_colour(data)
     return colour is not None and colour[0] >= 248 and all(abs(c - 128) <= 4 for c in colour[1:])

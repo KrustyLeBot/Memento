@@ -424,7 +424,7 @@ class TileSourcesTest {
         val t = TileKey("ortho", 12, 2116, 1466)
         assertEquals("ortho/12/2116/1466.jpg", t.path)
         assertEquals("image/jpeg", t.mime)
-        assertEquals("osm/12/2116/1466.png", t.fallback().path)
+        assertEquals("osmfb/12/2116/1466.png", t.fallback().path)
         assertEquals("image/png", t.fallback().mime)
         assertEquals("image/png", TileKey("dem", 3, 7, 0).mime)
     }

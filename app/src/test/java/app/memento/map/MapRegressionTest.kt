@@ -14,6 +14,8 @@ class MapRegressionTest {
         // read as "no tile", a pack download skipped the tile and called itself complete
         assertFalse(TileSources.ignHasNoTile(429, "text/html", ByteArray(100)))
         assertFalse(TileSources.ignHasNoTile(408, null, ByteArray(0)))
+        assertFalse(TileSources.ignHasNoTile(403, "text/html", ByteArray(100)))
+        assertFalse(TileSources.ignHasNoTile(401, "text/html", ByteArray(100)))
         assertTrue(TileSources.ignHasNoTile(404, "text/xml", ByteArray(137)))
     }
 

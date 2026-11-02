@@ -2,7 +2,7 @@ package app.memento.map
 
 /**
  * A tile the map page asks for: `/t/{kind}/{z}/{x}/{y}`, kind "ortho" (the IGN aerial photo, JPEG) or "dem"
- * (Terrarium relief, PNG). "osm" is never asked for: it is where the photo's OpenStreetMap stand-in is cached,
+ * (Terrarium relief, PNG). "osmfb" is never asked for: it is where the photo's OpenStreetMap stand-in is cached,
  * in its own folder so a file's type follows its folder. "buildings" is a z15 cell of [Buildings] (JSON), asked for
  * as `/buildings/15/{x}/{y}`.
  */
@@ -17,10 +17,10 @@ data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
     companion object {
         const val KIND_ORTHO = "ortho"
         const val KIND_DEM = "dem"
-        const val KIND_OSM = "osm"
+        const val KIND_OSM = "osmfb"
         const val KIND_BUILDINGS = "buildings"
-        /** Browsing-cache folders of former base layers, deleted at startup. */
-        val OLD_KINDS = listOf("plan")
+        /** Browsing-cache folders deleted at startup: a former base layer; OSM stand-ins once cached for IGN refusals. */
+        val OLD_KINDS = listOf("plan", "osm")
         private val PATH = Regex("""^/t/(ortho|dem)/(\d{1,2})/(\d{1,7})/(\d{1,7})(?:\.png|\.jpg)?$""")
         private val BUILDINGS_PATH = Regex("""^/buildings/(\d{1,2})/(\d{1,7})/(\d{1,7})$""")
 
@@ -56,14 +56,16 @@ object TileSources {
     fun dem(z: Int, x: Int, y: Int) = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/$z/$x/$y.png"
 
     /**
-     * IGN has no photo there: a 4xx (its "No data found" report, abroad and at sea from z13 or so), an empty body,
+     * IGN has no photo there: a 404 (its "No data found" report, abroad and at sea from z13 or so), a 400 (past the edge
+     * of its tile matrix), an empty body,
      * a non-image answer, or the uniform white JPEG it sends at the edge of its coverage. A flat non-white tile
      * (the sea's dark blue at low zoom) is a real answer. Server errors are not "no photo": the map shows nothing
      * instead of quietly switching style, and the next request tries IGN again. Nor are a rate limit (429) or a
-     * request timeout (408): read as "no tile", a pack download would mark itself complete with holes.
+     * request timeout (408) or a refusal (403): read as "no tile", browsing caches an OSM stand-in in the middle of
+     * France for good, and a pack download marks itself complete with holes.
      */
     fun ignHasNoTile(code: Int, contentType: String?, body: ByteArray): Boolean =
-        (code in 400..499 && code != 408 && code != 429) || code == 204 ||
+        code == 400 || code == 404 || code == 204 ||
             (code == 200 && (body.isEmpty() || contentType?.startsWith("image/") == false || FlatJpeg.isWhite(body)))
 }
 

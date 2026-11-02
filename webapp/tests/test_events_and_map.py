@@ -183,3 +183,20 @@ def test_buildings_errors_are_not_cached_and_offline_is_a_404(client, net):
 def test_invalid_building_cells_are_refused(client, path, net):
     assert client.get(path).status_code == 404
     assert net.calls == []
+
+
+def test_an_ign_refusal_is_not_replaced_by_a_cached_osm_tile(tmp_path):
+    from memento_web.core import mapcache
+    (tmp_path / "osm" / "17").mkdir(parents=True)  # stand-ins cached by build 73 for IGN refusals
+    answers = {"ign": (429, "text/html", b"slow down")}
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return answers["ign"] if "geopf" in url else (200, "image/png", b"osm")
+    store = TileStore(tmp_path, fetch)
+    assert not (tmp_path / "osm").exists()
+    tile = mapcache.TileRequest("ortho", 17, 67764, 46682)
+    assert store.get(tile) is None and len(calls) == 1
+    answers["ign"] = (200, "image/jpeg", b"\xff\xd8photo")
+    assert store.get(tile) == ("image/jpeg", b"\xff\xd8photo")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import shutil
 import threading
 import time
 import urllib.error
@@ -85,6 +86,8 @@ class TileStore:
         self._locks_guard = threading.Lock()
         self._written = 0
         self._purge_lock = threading.Lock()
+        for kind in mapcache.OLD_KINDS:
+            shutil.rmtree(root / kind, ignore_errors=True)
 
     def _lock_for(self, key: str) -> threading.Lock:
         with self._locks_guard:
@@ -284,7 +287,9 @@ class MapHost:
         if found is None:
             return Response(status_code=404, headers={"Cache-Control": "no-store"})
         mime, data = found
-        return Response(data, media_type=mime, headers={"Cache-Control": "private, max-age=86400"})
+        # a stand-in is only as good as the IGN answer that caused it: let the browser ask again soon
+        age = 86400 if mime == mapcache.MIME[req.kind] else 3600
+        return Response(data, media_type=mime, headers={"Cache-Control": f"private, max-age={age}"})
 
     async def summits(self, request: Request) -> JSONResponse:
         req = mapcache.parse_request("/peaks", request.url.query)
