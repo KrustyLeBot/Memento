@@ -91,7 +91,7 @@ fun ActivitiesScreen(vm: MainViewModel) {
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { SuiteTopBar("Activités", onBack = { vm.back() }) },
+        topBar = { SuiteTopBar("Activités") },
     ) { padding ->
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),

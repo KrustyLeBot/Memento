@@ -54,7 +54,7 @@ import app.scriptorium.scan.ScanFormat
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(vm: MainViewModel, onPickFolder: () -> Unit) {
-    Scaffold(topBar = { SuiteTopBar("Paramètres", onBack = { vm.back() }) }) { padding ->
+    Scaffold(topBar = { SuiteTopBar("Paramètres") }) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             SectionTitle("Stockage")
             SettingsCard {

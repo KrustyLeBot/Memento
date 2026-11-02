@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -21,17 +22,26 @@ private val Module.icon: ImageVector
         Module.CONTACTS -> Icons.Default.Person
     }
 
-/** Bottom bar between the modules; shown on the home screen of each module only. */
+/**
+ * Bottom bar between the modules, with the settings as its last entry; shown on the home screen of
+ * each module and on the settings. [current] null means the settings are shown.
+ */
 @Composable
-fun ModuleBar(modules: List<Module>, current: Module, onSelect: (Module) -> Unit) {
+fun ModuleBar(modules: List<Module>, current: Module?, onSelect: (Module) -> Unit, onSettings: () -> Unit) {
     NavigationBar {
         modules.forEach { m ->
             NavigationBarItem(
                 selected = m == current,
                 onClick = { if (m != current) onSelect(m) },
                 icon = { Icon(m.icon, null) },
-                label = { Text(m.label) },
+                label = { Text(m.label, maxLines = 1) },
             )
         }
+        NavigationBarItem(
+            selected = current == null,
+            onClick = { if (current != null) onSettings() },
+            icon = { Icon(Icons.Default.Settings, null) },
+            label = { Text("Paramètres", maxLines = 1) },
+        )
     }
 }

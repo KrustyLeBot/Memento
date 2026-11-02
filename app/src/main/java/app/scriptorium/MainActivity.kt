@@ -131,11 +131,11 @@ class MainActivity : ComponentActivity() {
             } else {
                 LegacyImportDialog(vm)
                 val module = vm.screen.module
-                if (module != null) {
+                if (module != null || vm.screen == Screen.SETTINGS) {
                     Column(Modifier.fillMaxSize()) {
                         // The bar takes the navigation-bar inset; screens above must not pad for it again.
                         Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.navigationBars)) { Screens() }
-                        ModuleBar(vm.visibleModules, module) { vm.openModule(it) }
+                        ModuleBar(vm.visibleModules, module, onSelect = { vm.openModule(it) }, onSettings = { vm.openSettings() })
                     }
                 } else {
                     Screens()

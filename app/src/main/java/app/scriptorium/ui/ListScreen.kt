@@ -155,7 +155,6 @@ fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
                             if (vm.gridView) "Vue liste" else "Vue grille",
                         )
                     }
-                    IconButton(onClick = { vm.openSettings() }) { Icon(Icons.Default.Settings, "Paramètres") }
                 }
             }
 
