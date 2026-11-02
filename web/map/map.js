@@ -216,6 +216,23 @@
   const rasterPaint = () => ({ 'raster-fade-duration': 0 });
   const lineLayout = { 'line-cap': 'round', 'line-join': 'round' };
   const solid = (c) => ['interpolate', ['linear'], ['line-progress'], 0, c, 1, c];
+  // Small black chevrons spaced along a line show which way the track was travelled.
+  const arrows = (id, source) => ({
+    id, type: 'symbol', source,
+    layout: { 'symbol-placement': 'line', 'symbol-spacing': 140, 'icon-image': 'smap-arrow', 'icon-size': 0.8,
+              'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+  });
+  // Pointing east: line placement turns the icon along the line, in the line's direction.
+  function arrowImage() {
+    const n = 48, c = document.createElement('canvas');
+    c.width = c.height = n;
+    const g = c.getContext('2d');
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    const chevron = () => { g.beginPath(); g.moveTo(15, 12); g.lineTo(33, 24); g.lineTo(15, 36); g.stroke(); };
+    g.strokeStyle = '#ffffff'; g.lineWidth = 13; chevron();
+    g.strokeStyle = '#111111'; g.lineWidth = 7; chevron();
+    return g.getImageData(0, 0, n, n);
+  }
   function style() {
     const t = T(), geo = (extra) => Object.assign({ type: 'geojson', data: EMPTY }, extra || {});
     return {
@@ -234,12 +251,15 @@
         // the route to follow: white on a dark casing, under the coloured trail that runs along it
         { id: 'route-case', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 11 } },
         { id: 'route', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 6.5, 'line-opacity': 0.9 } },
+        arrows('route-arrows', 'route'),
         { id: 'lines-halo', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'lines-case', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'lines', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': ['get', 'color'], 'line-width': 5 } },
+        arrows('lines-arrows', 'lines'),
         { id: 'track-halo', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'track', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-width': 5, 'line-gradient': solid('#d7191c') } },
+        arrows('track-arrows', 'track'),
         { id: 'live-halo', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 12 } },
         { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 9.5 } },
         { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
@@ -269,6 +289,10 @@
     report(`map: ${e && e.message ? e.message : e}`);
     return;
   }
+  // Added on demand: also after a style rebuild, which drops images added earlier.
+  map.on('styleimagemissing', (e) => {
+    if (e.id === 'smap-arrow' && !map.hasImage('smap-arrow')) map.addImage('smap-arrow', arrowImage(), { pixelRatio: 2 });
+  });
   map.on('error', (e) => {
     // tiles the host could not get (offline, outside the coverage) are expected: a blank tile, no report
     if (e.sourceId || e.tile || (e.source && e.source.type)) return;
