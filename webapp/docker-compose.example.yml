@@ -33,6 +33,8 @@ services:
     volumes:
       - ${MEMENTO_DATA_HOST}:/data
       - /volume1/docker/memento-web/config:/config
+      # the login, as for the Synchrotron server: auth/htpasswd (see .env.example)
+      - /volume1/docker/memento-web/auth:/auth:ro
     ports:
       - "${WEB_PORT}:8080"
     mem_limit: 256m

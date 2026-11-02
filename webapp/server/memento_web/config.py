@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import htpasswd
+
 
 class ConfigError(Exception):
     """Startup refused; the message is printed as is."""
@@ -17,7 +19,7 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Config:
     user: str
-    password: str
+    password: str  # from MEMENTO_PASSWORD; empty when the login comes from an htpasswd file
     data: Path
     config_dir: Path
     session_secret: bytes
@@ -32,6 +34,7 @@ class Config:
     static_dir: Path | None = None  # the built UI (webapp/ui/dist)
     map_dir: Path | None = None  # web/map of the repository
     tiles_fetch: object = field(default=None, compare=False)  # tests replace the network
+    password_hash: str = ""  # the user's line of the htpasswd file (bcrypt, apr1 or {SHA})
 
     @property
     def tiles_dir(self) -> Path:
@@ -101,13 +104,37 @@ def _session_secret(env: dict, config_dir: Path) -> bytes:
     return value
 
 
-def from_env(env: dict | None = None) -> Config:
-    env = dict(os.environ if env is None else env)
-    user, password = env.get("MEMENTO_USER", ""), env.get("MEMENTO_PASSWORD", "")
-    if not user.strip() or not password:
-        raise ConfigError("MEMENTO_USER et MEMENTO_PASSWORD sont obligatoires (voir .env.example).")
+def _login(env: dict) -> tuple[str, str, str]:
+    """(user, password, hash): the htpasswd file when it is there (as for the Synchrotron server), else
+    MEMENTO_USER / MEMENTO_PASSWORD. Never both, so a forgotten password in .env cannot keep working."""
+    user, password = env.get("MEMENTO_USER", "").strip(), env.get("MEMENTO_PASSWORD", "")
+    file = Path(env.get("MEMENTO_HTPASSWD", "/auth/htpasswd"))
+    if file.is_file():
+        if password:
+            raise ConfigError(f"{file} est présent : retirer MEMENTO_PASSWORD du .env (l'un ou l'autre, pas les deux).")
+        try:
+            entries = htpasswd.read(file)
+        except htpasswd.HtpasswdError as error:
+            raise ConfigError(str(error)) from None
+        if user:
+            if user not in entries:
+                raise ConfigError(f"MEMENTO_USER « {user} » n'est pas dans {file}.")
+        elif len(entries) == 1:
+            user = next(iter(entries))
+        else:
+            raise ConfigError(f"{file} contient plusieurs utilisateurs : choisir le sien avec MEMENTO_USER.")
+        return user, "", entries[user]
+    if not user or not password:
+        raise ConfigError(f"Identifiants manquants : un fichier {file} (htpasswd -B), ou MEMENTO_USER et "
+                          "MEMENTO_PASSWORD (voir .env.example).")
     if len(password) < 12:
         raise ConfigError("MEMENTO_PASSWORD doit faire au moins 12 caractères.")
+    return user, password, ""
+
+
+def from_env(env: dict | None = None) -> Config:
+    env = dict(os.environ if env is None else env)
+    user, password, password_hash = _login(env)
     data = Path(env.get("MEMENTO_DATA", "/data"))
     check_data(data)
     config_dir = Path(env.get("MEMENTO_CONFIG", "/config"))
@@ -135,7 +162,7 @@ def from_env(env: dict | None = None) -> Config:
     static = env.get("MEMENTO_STATIC")
     map_dir = env.get("MEMENTO_MAP")
     return Config(
-        user=user.strip(), password=password, data=data, config_dir=config_dir,
+        user=user, password=password, password_hash=password_hash, data=data, config_dir=config_dir,
         session_secret=_session_secret(env, config_dir), session_days=days, cookie_secure=secure,
         trust_proxy=trust, trusted_proxies=proxies, warm=warm,
         poll_seconds=max(poll, 0.5), static_dir=Path(static) if static else None, map_dir=Path(map_dir) if map_dir else None,

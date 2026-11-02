@@ -3,7 +3,8 @@
 Sessions are opaque random tokens (32 bytes) kept server side, not signed cookies: logout really revokes one, there
 is no cryptography of our own to get wrong, and only a SHA-256 of each token is written to /config/sessions.json, so
 that file is useless to a thief. Each session carries a fingerprint of the configured user and password (an HMAC
-under the session secret): changing MEMENTO_PASSWORD (or the user) closes every session. A session lives exactly
+under the session secret): changing the password (MEMENTO_PASSWORD or the htpasswd line) or the user closes every
+session. A session lives exactly
 MEMENTO_SESSION_DAYS from the login, never extended.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import htpasswd
 from .config import Config
 from .errors import ApiError
 
@@ -37,7 +39,8 @@ MAX_SESSIONS = 50
 
 
 def password_fingerprint(config: Config) -> str:
-    message = b"memento-web-credentials\0" + config.user.encode() + b"\0" + config.password.encode()
+    secret = config.password_hash or config.password
+    message = b"memento-web-credentials\0" + config.user.encode() + b"\0" + secret.encode()
     return hmac.new(config.session_secret, message, hashlib.sha256).hexdigest()
 
 
@@ -251,7 +254,11 @@ class Auth:
         except (ValueError, KeyError, TypeError):
             raise ApiError(400, "Identifiant et mot de passe requis") from None
         # Both comparisons always run, so the time taken does not tell whether the user name was right.
-        ok = _same(user, self.config.user) & _same(password, self.config.password)
+        if self.config.password_hash:
+            known = htpasswd.verify(password, self.config.password_hash)
+        else:
+            known = _same(password, self.config.password)
+        ok = _same(user, self.config.user) & known
         if not ok:
             self.throttle.failed(ip, device)
             print(f"memento-web: failed login from {ip}{' (known device)' if device else ''}", flush=True)

@@ -1,5 +1,6 @@
 # Runtime of the web server, pinned with its transitive dependencies. The Windows core it imports needs
-# python-dateutil (recurrence) and tzdata (zoneinfo on slim images).
+# python-dateutil (recurrence) and tzdata (zoneinfo on slim images). bcrypt checks the htpasswd login.
+bcrypt==4.3.0
 starlette==1.10.0
 anyio==4.16.0
 idna==3.20
