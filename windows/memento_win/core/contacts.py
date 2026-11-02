@@ -634,6 +634,16 @@ class ContactBook:
         self.contacts = out
         return out
 
+    def cached(self) -> dict[str, tuple[int, Contact]]:
+        """The parsed contacts kept by scan(): path -> (mtime_ns, contact)."""
+        return dict(self._cache)
+
+    def seed(self, path: str, mtime_ns: int, contact: Contact) -> None:
+        """Hands scan() a contact parsed elsewhere: used while the file's modification time is still mtime_ns."""
+        cached = self._cache.get(path)
+        if cached is None or cached[0] != mtime_ns:
+            self._cache[path] = (mtime_ns, contact)
+
     def by_id(self, contact_id: str) -> Contact | None:
         return next((c for c in self.contacts if c.id == contact_id and not c.conflict), None)
 

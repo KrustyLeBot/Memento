@@ -125,6 +125,17 @@ class Store:
                 del self._cache[stale]
         return notes
 
+    def cached(self) -> dict[str, tuple[int, Note]]:
+        """The parsed notes and activities kept by scan()/scan_activities(): path -> (mtime_ns, note)."""
+        return dict(self._cache)
+
+    def seed(self, path: str, mtime_ns: int, note: Note) -> None:
+        """Hands scan() a note parsed elsewhere (a background read, a saved index): used while the file's
+        modification time is still mtime_ns, re-read otherwise."""
+        cached = self._cache.get(path)
+        if cached is None or cached[0] != mtime_ns:
+            self._cache[path] = (mtime_ns, note)
+
     def scan_contacts(self) -> list[Contact]:
         """The contacts (contacts/*.md); also what the agenda reads for the birthdays."""
         return self.contacts.scan()

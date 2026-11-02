@@ -16,4 +16,7 @@ registerNoteAction({
   },
 });
 
-export default { key: 'agenda', label: 'Agenda', icon: 'calendar', hideable: true, load: () => import('./AgendaPage.svelte') };
+export default {
+  key: 'agenda', label: 'Agenda', icon: 'calendar', hideable: true, load: () => import('./AgendaPage.svelte'),
+  prefetch: () => import('./prefetch.js').then((m) => m.prefetch()),
+};

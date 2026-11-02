@@ -1,7 +1,7 @@
 // @ts-check
 // The contacts API and the module's small rules (texts, links, the editor's form), as in
 // windows/memento_win/ui/contacts_view.py. Sorting, sections, search, merge and import are the server's (the core's).
-import { request } from '../../lib/api.js';
+import { lists, request } from '../../lib/api.js';
 
 /**
  * @typedef {{ ref: string, id: string, name: string, second: string, favorite: boolean, conflict: boolean }} ContactSummary
@@ -25,8 +25,14 @@ const first = (/** @type {boolean} */ firstNameFirst) => (firstNameFirst ? '?fir
 
 export const api = {
   /** @returns {Promise<{ sections: Section[], count: number, results: number | null }>} */
-  list: (q = '', firstNameFirst = false, /** @type {AbortSignal | undefined} */ signal = undefined) =>
-    request('GET', `/api/contacts?${new URLSearchParams({ q, ...(firstNameFirst ? { first: '1' } : {}) })}`, { signal }),
+  /** Without a search, from the cache (`onFresh`: the newer answer when the cached one was stale). */
+  list: (q = '', firstNameFirst = false, /** @type {AbortSignal | undefined} */ signal = undefined,
+    /** @type {((data: any) => void) | undefined} */ onFresh = undefined) => {
+    const path = `/api/contacts?${new URLSearchParams({ q, ...(firstNameFirst ? { first: '1' } : {}) })}`;
+    return q ? request('GET', path, { signal }) : lists.get(path, 'contacts', { signal, onFresh });
+  },
+  prefetch: (firstNameFirst = false) =>
+    lists.prefetch(`/api/contacts?${new URLSearchParams({ q: '', ...(firstNameFirst ? { first: '1' } : {}) })}`, 'contacts'),
   /** @returns {Promise<VersionedContact>} */
   get: (/** @type {string} */ ref) => request('GET', `/api/contacts/${enc(ref)}`),
   /** @returns {Promise<VersionedContact>} */

@@ -15,8 +15,8 @@
   import { calendars, loadCalendars } from './calendars.js';
   import { agendaPrefs } from './prefs.js';
   import {
-    MONTHS_SHORT, addDays, addMonths, byDay, cap, gridStart, hhmm, longDate, mediumDate, minutesStamp, monthTitle, parts,
-    scheduleRows, searchRows, stampMinutes, today as todayIso, weekStartOf, weekTitle,
+    CHUNK, MONTHS_SHORT, addDays, addMonths, byDay, cap, hhmm, longDate, mediumDate, minutesStamp, monthTitle, parts,
+    scheduleRows, searchRows, stampMinutes, today as todayIso, weekTitle, windowOf,
   } from './dates.js';
   import ListView from './ListView.svelte';
   import MonthView from './MonthView.svelte';
@@ -33,7 +33,6 @@
   export let route;
 
   const VIEWS = [['agenda', 'Agenda'], ['month', 'Mois'], ['week', 'Semaine'], ['day', 'Jour']];
-  const CHUNK = 60;
   $: p = agendaPrefs($prefs);
 
   let view = '';
@@ -116,18 +115,7 @@
 
   // ---- loading ----
 
-  function window_() {
-    if (view === 'month') {
-      const first = gridStart(anchor, p.weekStart);
-      return [first, addDays(first, 41)];
-    }
-    if (view === 'week') {
-      const first = weekStartOf(anchor, p.weekStart);
-      return [first, addDays(first, 6)];
-    }
-    if (view === 'day') return [anchor, anchor];
-    return [anchor, addDays(anchor, span - 1)];
-  }
+  const window_ = () => windowOf(view, anchor, span, p.weekStart);
   $: [first, last] = (void (view, anchor, span, p.weekStart), window_());
 
   async function load() {
@@ -136,12 +124,16 @@
     pending = controller;
     today = todayIso();
     const [from, to] = window_();
-    try {
-      const result = await agenda.entries(from, to, controller.signal);
-      if (controller.signal.aborted) return;
+    /** @param {{ entries: import('./api.js').Entry[], problems: string[] }} result */
+    const apply = (result) => {
       entries = result.entries;
       problems = [...new Set(result.problems)];
       loaded = true;
+    };
+    try {
+      const result = await agenda.entries(from, to, controller.signal, apply);
+      if (controller.signal.aborted) return;
+      apply(result);
       if (view === 'agenda' && entries.length < 25 && span < 400) {
         span = Math.min(400, span + CHUNK);
         load();

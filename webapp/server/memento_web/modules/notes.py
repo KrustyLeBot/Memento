@@ -15,6 +15,7 @@ from starlette.routing import Route
 from ..core import MAX_ATTACHMENT, atomic, drawing, fmt, now_ms
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import owned, read_versioned, require_version, unlink_quiet, write_stream
+from ..memo import Answers, json_response
 
 NOTE_PATH = re.compile(r"^(?:[^/]+|activities/[^/]+|agenda/[^/]+/[^/]+)\.md$")
 EDITABLE = {"title", "body", "parts", "color", "pinned", "labels"}
@@ -98,6 +99,7 @@ def apply_changes(note: fmt.Note, body: dict) -> fmt.Note:
 class Notes:
     def __init__(self, data):
         self.data = data
+        self.answers = Answers()
 
     def routes(self) -> list[Route]:
         return [
@@ -159,12 +161,15 @@ class Notes:
 
         def run():
             notes = self.data.store.scan()
-            shown = [n for n in notes if matches(n, query, label)]
-            shown.sort(key=lambda n: (not n.pinned, -n.updated))
-            labels = sorted({x for n in notes for x in n.labels}, key=fmt.fold)
-            return {"notes": [summary(n) for n in shown], "labels": labels,
-                    "conflicts": sum(1 for n in notes if n.conflict)}
-        return JSONResponse(await self.data.read(run))
+
+            def answer():
+                shown = [n for n in notes if matches(n, query, label)]
+                shown.sort(key=lambda n: (not n.pinned, -n.updated))
+                labels = sorted({x for n in notes for x in n.labels}, key=fmt.fold)
+                return {"notes": [summary(n) for n in shown], "labels": labels,
+                        "conflicts": sum(1 for n in notes if n.conflict)}
+            return self.answers.body((query, label), notes, answer)
+        return json_response(await self.data.read(run))
 
     async def get(self, request: Request) -> JSONResponse:
         relative = request.path_params["path"]

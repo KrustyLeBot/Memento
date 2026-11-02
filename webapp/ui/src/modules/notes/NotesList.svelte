@@ -25,19 +25,23 @@
   /** @type {any} */
   let debounce = null;
 
+  /** @param {{ notes: import('../../lib/api.js').NoteSummary[], labels: string[] }} result */
+  function apply(result) {
+    notes = result.notes;
+    labels = result.labels;
+    if (label && !labels.includes(label)) {
+      label = '';
+      load();
+    }
+    loaded = true;
+  }
+
   async function load() {
     pending?.abort();
     const controller = new AbortController();
     pending = controller;
     try {
-      const result = await api.list(query.trim(), label, controller.signal);
-      notes = result.notes;
-      labels = result.labels;
-      if (label && !labels.includes(label)) {
-        label = '';
-        load();
-      }
-      loaded = true;
+      apply(await api.list(query.trim(), label, controller.signal, apply));
     } catch (error) {
       showError(error, 'Liste des notes');
     }

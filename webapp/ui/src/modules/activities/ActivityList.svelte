@@ -24,11 +24,15 @@
   /** @type {HTMLInputElement} */
   let picker;
 
+  /** @param {{ activities: import('./activities.js').ActivitySummary[], totals: string[] }} body */
+  function apply(body) {
+    list = body.activities;
+    included = body.totals;
+  }
+
   async function load() {
     try {
-      const body = await api.list();
-      list = body.activities;
-      included = body.totals;
+      apply(await api.list(apply));
       const first = !loaded;
       loaded = true;
       if (first) {

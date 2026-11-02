@@ -12,7 +12,7 @@ export const calendars = writable(null);
 
 export async function loadCalendars() {
   try {
-    calendars.set(await agenda.calendars());
+    calendars.set(await agenda.calendars((fresh) => calendars.set(fresh)));
   } catch (error) {
     showError(error, 'Agendas');
   }

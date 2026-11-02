@@ -1,7 +1,7 @@
 // @ts-check
 // The Activités endpoints (server: memento_web/modules/activities.py). Photos go through the notes' attachment
 // endpoints: an activity is a note of activities/.
-import { request } from '../../lib/api.js';
+import { lists, request } from '../../lib/api.js';
 
 /** @typedef {import('./activities.js').ActivitySummary} ActivitySummary */
 /** @typedef {ActivitySummary & { description: string, file: string | null, alt: string | null, photos: string[],
@@ -17,7 +17,9 @@ const key = (/** @type {string} */ k) => encodeURIComponent(k);
 
 export const activities = {
   /** @returns {Promise<{ activities: ActivitySummary[], totals: string[], sports: { key: string, label: string, has_gps: boolean }[] }>} */
-  list: () => request('GET', '/api/activities'),
+  list: (/** @type {((data: any) => void) | undefined} */ onFresh = undefined) =>
+    lists.get('/api/activities', 'activities', { onFresh }),
+  prefetch: () => lists.prefetch('/api/activities', 'activities'),
   /** @returns {Promise<VersionedActivity>} */
   get: (/** @type {string} */ id) => request('GET', `/api/activities/${key(id)}`),
   /** @returns {Promise<any>} */
