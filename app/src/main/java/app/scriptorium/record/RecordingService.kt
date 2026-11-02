@@ -194,7 +194,8 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
         }
         val live = Recorder.state.value
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
+            this, 0, Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_OPEN_RECORD)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         fun action(label: String, act: String, code: Int, icon: Int) = Notification.Action.Builder(

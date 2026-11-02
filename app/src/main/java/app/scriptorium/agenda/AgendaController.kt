@@ -267,6 +267,7 @@ class AgendaController(
     }
 
     fun editSeriesOf(exception: Event) {
+        if (readOnly()) return
         val s = event(exception.recurrenceOf) ?: return say(Snack("Série introuvable"))
         editorReturn = Screen.EVENT
         editor = EventEditor(EditMode.File, s, EventDraft.fromEvent(s))
@@ -386,6 +387,7 @@ class AgendaController(
 
     /** "Rétablir l'occurrence d'origine": the exception file goes, the series' occurrence comes back. */
     fun restoreOccurrence(exception: Event) {
+        if (readOnly()) return
         val series = event(exception.recurrenceOf) ?: return say(Snack("Série introuvable"))
         val at = exception.recurrenceAt ?: return
         scope.launch {
@@ -416,6 +418,7 @@ class AgendaController(
     // ---- calendars ----
 
     fun saveCalendars(s: CalendarSettings) {
+        if (readOnly()) return
         scope.launch {
             try {
                 withContext(io) { repo.saveCalendars(s) }
@@ -429,6 +432,7 @@ class AgendaController(
 
     /** Deletes the calendar and every event in it; the snackbar puts everything back. */
     fun deleteCalendar(id: String) {
+        if (readOnly()) return
         val settings = repo.calendars.value
         val doomed = settings.eventsOf(id, repo.agenda.value.events)
         val next = try {
@@ -490,6 +494,7 @@ class AgendaController(
 
     fun confirmImport(options: ImportOptions) {
         val p = importState as? IcsImportState.Preview ?: return
+        if (readOnly()) return
         importState = IcsImportState.Running(0, p.parsed.sumOf { it.events.size + it.overrides.size })
         scope.launch {
             try {
@@ -515,6 +520,7 @@ class AgendaController(
 
     /** "Annuler l'import": every file carrying `import: <id>`, and the calendars it created when empty. */
     fun undoImport(importId: String) {
+        if (readOnly()) return
         importState = null
         scope.launch {
             try {

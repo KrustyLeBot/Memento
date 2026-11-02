@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="widget_bg">#FF1E1B18</color>
-    <color name="widget_text">#FFF2EDE6</color>
-    <color name="widget_dim">#FFA59C90</color>
-    <color name="widget_accent">#FFE3B44C</color>
+    <color name="widget_bg">#FF1E1719</color>
+    <color name="widget_text">#FFF6E0E4</color>
+    <color name="widget_dim">#FFBAA6AA</color>
+    <color name="widget_accent">#FFFFB1C6</color>
+    <color name="window_bg">#FF130D0E</color>
 </resources>

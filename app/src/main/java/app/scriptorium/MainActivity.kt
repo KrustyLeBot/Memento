@@ -65,11 +65,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        // Reopened from the recents after the task was left with back: Android hands the first intent again
+        // (the shared text, the .ics...), which was already handled.
+        if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        if (intent.action == ACTION_OPEN_RECORD) {
+            vm.leaveNoteEditor()
+            vm.openRecord()
+            intent.action = null
+            return
+        }
         if (handleAgendaIntent(intent)) {
             intent?.action = null // not again on configuration changes
             return
         }
         app.scriptorium.ui.vcardUri(intent)?.let { uri ->
+            vm.leaveNoteEditor()
             vm.contacts.startImport(uri)
             intent?.action = null
             return
@@ -86,6 +96,7 @@ class MainActivity : ComponentActivity() {
     /** Reminder notifications, widget rows and buttons, and `.ics` files opened or shared from other apps. */
     private fun handleAgendaIntent(intent: Intent?): Boolean {
         intent ?: return false
+        if (intent.action in listOf(ACTION_OPEN_ENTRY, ACTION_AGENDA_TODAY, ACTION_NEW_EVENT)) vm.leaveNoteEditor()
         when (intent.action) {
             ACTION_OPEN_ENTRY -> {
                 app.scriptorium.reminders.Reminders.dismiss(this, intent.getStringExtra(app.scriptorium.reminders.Reminders.EXTRA_NOTIFY_KEY))
@@ -109,6 +120,7 @@ class MainActivity : ComponentActivity() {
         }
         val uris = app.scriptorium.ui.calendarUris(intent)
         if (uris.isEmpty()) return false
+        vm.leaveNoteEditor()
         vm.openModule(Module.AGENDA)
         vm.agenda.startImport(uris)
         return true
@@ -223,6 +235,7 @@ class MainActivity : ComponentActivity() {
         const val ACTION_OPEN_ENTRY = "app.scriptorium.action.OPEN_ENTRY"
         const val ACTION_AGENDA_TODAY = "app.scriptorium.action.AGENDA_TODAY"
         const val ACTION_NEW_EVENT = "app.scriptorium.action.NEW_EVENT"
+        const val ACTION_OPEN_RECORD = "app.scriptorium.action.OPEN_RECORD"
     }
 
     private fun requestFileAccess(legacy: (String) -> Unit) {

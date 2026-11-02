@@ -23,7 +23,10 @@ object LegacyFolder {
 
     /** True when [old] holds files and [target] holds none yet (missing or empty). */
     fun needsImport(old: File, target: File): Boolean =
-        old.isDirectory && summary(old).files > 0 && (!target.exists() || summary(target).files == 0)
+        old.isDirectory && !hasFiles(target) && hasFiles(old)
+
+    /** Stops at the first file: this runs on every resume, and both folders can hold thousands. */
+    private fun hasFiles(dir: File): Boolean = dir.exists() && dir.walkTopDown().any { it.isFile && !skipped(it) }
 
     /**
      * Copies every file of [from] into [to] (same relative paths, modification times kept) and checks

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Widgets, light theme (values-night has the dark one). -->
-    <color name="widget_bg">#FFFDF8F0</color>
-    <color name="widget_text">#FF1F1B16</color>
-    <color name="widget_dim">#FF6E6559</color>
-    <color name="widget_accent">#FFB0851A</color>
+    <!-- Widgets, light theme (values-night has the dark one): the app's burgundy palette (ui/SuitePalette.kt). -->
+    <color name="widget_bg">#FFFFF8F8</color>
+    <color name="widget_text">#FF3C2F32</color>
+    <color name="widget_dim">#FF6B5B5E</color>
+    <color name="widget_accent">#FF912C52</color>
+    <!-- Window behind the first frame, so a dark phone does not flash white at start. -->
+    <color name="window_bg">#FFFFF8F8</color>
 </resources>
