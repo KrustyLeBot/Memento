@@ -19,6 +19,8 @@ from .auth import Auth
 from .config import Config
 from .data import Data
 from .errors import ApiError
+from .modules.agenda import Agenda
+from .modules.agenda_ics import AgendaIcs
 from .modules.common import Common
 from .modules.maphost import MapHost
 from .modules.notes import Notes
@@ -77,6 +79,7 @@ def create_app(config: Config, fetch=None) -> Starlette:
     async def events(request: Request):
         return await data.watcher.stream(request)
 
+    agenda = Agenda(data)
     routes = [
         Route("/healthz", healthz),
         Route("/api/login", auth.login, methods=["POST"]),
@@ -85,6 +88,8 @@ def create_app(config: Config, fetch=None) -> Starlette:
         Route("/api/events", events, methods=["GET"]),
         *Common(data).routes(),
         *Notes(data).routes(),
+        *agenda.routes(),
+        *AgendaIcs(data, agenda).routes(),
         *maphost.routes(),
     ]
 
