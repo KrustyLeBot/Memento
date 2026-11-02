@@ -38,7 +38,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -69,7 +68,6 @@ import kotlinx.coroutines.launch
 fun ContactsScreen(vm: MainViewModel) {
     val c = vm.contacts
     val all by c.contacts.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) c.startImport(uri) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/x-vcard")) { uri -> if (uri != null) c.exportAll(uri) }
     var menu by remember { mutableStateOf(false) }
@@ -104,7 +102,6 @@ fun ContactsScreen(vm: MainViewModel) {
     RevealOnReturn(list, tappedKey, tappedIndex) { vm.lists.contactTapped = null }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             SuiteTopBar("Contacts") {
                 Box {
@@ -118,7 +115,7 @@ fun ContactsScreen(vm: MainViewModel) {
             }
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { c.newContact() }) { Icon(Icons.Default.Add, "Nouveau contact") }
+            FloatingActionButton(onClick = { c.newContact() }, Modifier.liftAboveSnackbar()) { Icon(Icons.Default.Add, "Nouveau contact") }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {

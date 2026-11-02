@@ -86,7 +86,7 @@ fun RecordScreen(vm: MainViewModel) {
                 !pack.complete && !OfflinePacks.isRunning(pack.id) -> try {
                     OfflinePacks.resume(pack.id)
                 } catch (e: OfflinePacks.PackException) {
-                    vm.snack = app.memento.Snack("Carte hors ligne incomplète : ${e.message}")
+                    vm.say(app.memento.Snack("Carte hors ligne incomplète : ${e.message}"))
                 }
             }
         }
@@ -94,7 +94,7 @@ fun RecordScreen(vm: MainViewModel) {
     }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted[Manifest.permission.ACCESS_FINE_LOCATION] == true) begin()
-        else vm.snack = app.memento.Snack("Sans la localisation, impossible d'enregistrer un tracé")
+        else vm.say(app.memento.Snack("Sans la localisation, impossible d'enregistrer un tracé"))
     }
     fun start() {
         if (!sport.hasGps) { begin(); return }

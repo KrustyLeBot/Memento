@@ -26,7 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,12 +49,10 @@ import app.memento.suite.SuiteTopBar
 fun ContactEditScreen(vm: MainViewModel) {
     val c = vm.contacts
     val ed = c.editor ?: return
-    val snackbar = rememberVmSnackbar(vm)
     var menu by remember { mutableStateOf(false) }
     val birthdayError = ed.birthday().exceptionOrNull()?.message
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             SuiteTopBar(if (ed.original == null) "Nouveau contact" else "Modifier le contact", onBack = { vm.back() }) {
                 TextButton(onClick = { c.closeEditor(save = true) }, enabled = !c.busy) { Text("Enregistrer") }

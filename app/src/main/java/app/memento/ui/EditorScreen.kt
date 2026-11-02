@@ -10,9 +10,6 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -129,13 +126,6 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
     var showDate by remember { mutableStateOf(false) }
     // an event's description: the event screens own its date and its deletion
     val isEvent = app.memento.NoteRepository.isAgendaPath(ed.base?.path.orEmpty())
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(vm.snack) {
-        val s = vm.snack ?: return@LaunchedEffect
-        val result = snackbar.showSnackbar(s.text, actionLabel = if (s.undo != null) s.action else null)
-        if (result == SnackbarResult.ActionPerformed) s.undo?.invoke()
-        vm.snack = null
-    }
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { vm.addAttachments(it) }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.addAttachments(it) }
 
@@ -193,7 +183,6 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
     Scaffold(
         containerColor = bg,
         contentColor = fg,
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = bg, titleContentColor = fg),
@@ -217,7 +206,7 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
             )
         },
         bottomBar = {
-            Surface(color = bg, contentColor = fg) {
+            Surface(Modifier.snackbarAnchor(), color = bg, contentColor = fg) {
                 Column(Modifier.navigationBarsPadding().imePadding()) {
                     if (textFocused) {
                         Row(

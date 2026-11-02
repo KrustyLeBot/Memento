@@ -86,7 +86,7 @@ private fun load(vm: MainViewModel, scope: CoroutineScope, read: () -> Route, on
         try {
             onRoute(withContext(Dispatchers.IO) { read() })
         } catch (e: Exception) {
-            vm.snack = Snack("Parcours illisible : ${e.message}")
+            vm.say(Snack("Parcours illisible : ${e.message}"))
         }
     }
 }
@@ -150,10 +150,10 @@ fun prepareRoute(vm: MainViewModel, scope: CoroutineScope, route: Route, plan: T
             val id = withContext(Dispatchers.IO) { if (plan != null) OfflinePacks.prepareRoute(route, plan) else OfflinePacks.prepareRoute(route) }
             onStarted(id)
         } catch (e: OfflinePacks.PackException) {
-            vm.snack = Snack(e.message ?: "Préparation impossible")
+            vm.say(Snack(e.message ?: "Préparation impossible"))
         } catch (e: java.io.IOException) {
             // writing the pack's first files (storage full): uncaught, it would crash the app mid-recording start
-            vm.snack = Snack("Préparation impossible : ${e.message}")
+            vm.say(Snack("Préparation impossible : ${e.message}"))
         }
     }
 }
@@ -171,7 +171,7 @@ fun PreparedRoutesSection(vm: MainViewModel) {
             try {
                 pending = route to withContext(Dispatchers.Default) { OfflinePacks.planRoute(route) }
             } catch (e: OfflinePacks.PackException) {
-                vm.snack = Snack(e.message ?: "Préparation impossible")
+                vm.say(Snack(e.message ?: "Préparation impossible"))
             }
         }
     }
@@ -235,7 +235,7 @@ private fun PackRow(vm: MainViewModel, p: Pack, progress: OfflinePacks.Progress?
             }
             if (!p.complete && !running) {
                 TextButton(onClick = {
-                    try { OfflinePacks.resume(p.id) } catch (e: OfflinePacks.PackException) { vm.snack = Snack(e.message ?: "Reprise impossible") }
+                    try { OfflinePacks.resume(p.id) } catch (e: OfflinePacks.PackException) { vm.say(Snack(e.message ?: "Reprise impossible")) }
                 }) { Text("Reprendre") }
             }
             IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Supprimer le parcours préparé") }
@@ -311,7 +311,7 @@ fun FollowRouteRow(vm: MainViewModel, choice: RouteChoice?, onChoice: (RouteChoi
                             try {
                                 onChoice(RouteChoice(withContext(Dispatchers.IO) { OfflinePacks.route(p.id) }, p.id))
                             } catch (e: Exception) {
-                                vm.snack = Snack("Parcours illisible : ${e.message}")
+                                vm.say(Snack("Parcours illisible : ${e.message}"))
                             }
                         }
                     }) { Text(p.name + if (p.complete) "" else " (carte incomplète)") }

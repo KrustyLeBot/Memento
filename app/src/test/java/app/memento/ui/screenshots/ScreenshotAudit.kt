@@ -30,6 +30,7 @@ import app.memento.MainViewModel
 import app.memento.Module
 import app.memento.Screen
 import app.memento.Snack
+import app.memento.SnackDuration
 import app.memento.ThemeMode
 import app.memento.activity.Gpx
 import app.memento.activity.Sport
@@ -40,6 +41,7 @@ import app.memento.suite.UpdateState
 import app.memento.ui.ActivitiesScreen
 import app.memento.ui.ActivityDetailScreen
 import app.memento.ui.AgendaScreen
+import app.memento.ui.AppFrame
 import app.memento.ui.CalendarsScreen
 import app.memento.ui.ContactDetailScreen
 import app.memento.ui.ContactDuplicatesScreen
@@ -206,8 +208,7 @@ class ScreenshotAudit {
         both("notes_label_failed")
         vm.selectLabel(null)
         setPrivateState(vm.updates, "state", UpdateState.Idle)
-        both("notes_snackbar") { vm.snack = Snack("Note supprimée", undo = {}) }
-        vm.snack = null
+        snackShot("notes_snackbar", Snack("Note supprimée", undo = {}))
         vm.query = "zzz"
         both("notes_empty_search")
     }
@@ -407,22 +408,52 @@ class ScreenshotAudit {
         both("contacts_import_preview")
     }
 
+    // ---- the app-level snackbar: same place on every screen, above the bottom bar, FABs lifted ----
+
+    /** Posts [snack], captures it dark and light, then clears the queue for the next one. */
+    private fun snackShot(name: String, snack: Snack) {
+        both(name) { vm.say(snack) }
+        clearSnacks()
+    }
+
+    private fun clearSnacks() {
+        while (true) vm.snacks.finish(vm.snacks.current ?: break, actionPerformed = false)
+        idle()
+    }
+
+    @Test
+    fun snackbars() {
+        seedActivities()
+        vm.screen = Screen.LIST
+        show()
+        // the real path: a note deleted from its editor, which closes onto the list while the snack is posted
+        vm.openNote(vm.notes.value.first { it.title == "Vacances" })
+        idle()
+        both("snack_notes_deleted") { vm.deleteEditorNote(); settle { vm.snacks.current != null } }
+        clearSnacks()
+        vm.openNote(vm.notes.value.first { it.title == "Courses" })
+        snackShot("snack_editor", Snack("Pièce jointe supprimée", undo = {}))
+        vm.closeEditor()
+        vm.openModule(Module.AGENDA)
+        snackShot("snack_agenda", Snack("Événement supprimé", undo = {}))
+        vm.agenda.newEvent(LocalDate.now())
+        snackShot("snack_event_editor", Snack("Donne un titre à l'événement", duration = SnackDuration.LONG))
+        vm.agenda.cancelEditor()
+        vm.openModule(Module.ACTIVITIES)
+        snackShot("snack_activities", Snack("Import impossible : fichier illisible", duration = SnackDuration.LONG))
+        vm.openModule(Module.CONTACTS)
+        snackShot("snack_contacts", Snack("Contact supprimé", undo = {}))
+        vm.openSettings()
+        snackShot("snack_settings", Snack("Cache des cartes vidé", duration = SnackDuration.LONG))
+    }
+
     // ---- the app frame ----
 
     @Composable
     private fun App(vm: MainViewModel) {
         MementoTheme(vm.theme) {
             LegacyImportDialog(vm)
-            val module = vm.screen.module
-            if (module != null || vm.screen == Screen.SETTINGS) {
-                Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.navigationBars)) { Screens(vm) }
-                    val modules = Module.entries.filter { it !in vm.hiddenModules || it == module }
-                    ModuleBar(modules, module, onSelect = { vm.openModule(it) }, onSettings = { vm.openSettings() })
-                }
-            } else {
-                Screens(vm)
-            }
+            AppFrame(vm) { Screens(vm) }
         }
     }
 

@@ -35,7 +35,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -358,13 +357,11 @@ fun CalendarsScreen(vm: MainViewModel) {
     val c = vm.agenda
     val settings by vm.repo.calendars.collectAsState()
     val agenda by vm.repo.agenda.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     var editing by remember { mutableStateOf<Calendar?>(null) }
     var creating by remember { mutableStateOf(false) }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = { SuiteTopBar("Agendas", onBack = { vm.back() }) },
-        floatingActionButton = { FloatingActionButton(onClick = { creating = true }) { Icon(Icons.Default.Add, "Nouvel agenda") } },
+        floatingActionButton = { FloatingActionButton(onClick = { creating = true }, Modifier.liftAboveSnackbar()) { Icon(Icons.Default.Add, "Nouvel agenda") } },
     ) { p ->
         LazyColumn(Modifier.padding(p).fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 96.dp)) {
             settings.problem?.let { msg -> item { SettingsHint(msg, MaterialTheme.colorScheme.error) } }

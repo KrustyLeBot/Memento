@@ -16,7 +16,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,12 +37,10 @@ import app.memento.suite.SuiteTopBar
 fun ContactDuplicatesScreen(vm: MainViewModel) {
     val c = vm.contacts
     val all by c.contacts.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     val groups = remember(all, c.ignoredGroups.toList(), c.firstNameFirst) {
         Duplicates.groups(all.filter { !it.conflict }, c.firstNameFirst).filter { g -> g.map { it.id }.toSet() !in c.ignoredGroups }
     }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = { SuiteTopBar("Doublons", onBack = { vm.back() }) },
     ) { padding ->
         LazyColumn(

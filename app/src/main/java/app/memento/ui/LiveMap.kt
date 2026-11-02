@@ -161,14 +161,14 @@ fun LiveMap(
         if (!following) {
             SmallFloatingActionButton(
                 onClick = { following = true; MapHost.call("setFollow", "true") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 8.dp + bottomInset),
+                modifier = Modifier.align(Alignment.BottomEnd).then(if (full) Modifier.liftAboveSnackbar() else Modifier).padding(end = 8.dp, bottom = 8.dp + bottomInset),
                 containerColor = MapOverlay.container, contentColor = MapOverlay.content,
             ) { Icon(Icons.Default.MyLocation, "Recentrer sur ma position") }
         } else {
             // the whole route (or the live square) at once; the button above brings the camera back
             SmallFloatingActionButton(
                 onClick = { following = false; MapHost.call("setFollow", "false"); MapHost.call("fit") },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 8.dp + bottomInset),
+                modifier = Modifier.align(Alignment.BottomEnd).then(if (full) Modifier.liftAboveSnackbar() else Modifier).padding(end = 8.dp, bottom = 8.dp + bottomInset),
                 containerColor = MapOverlay.container, contentColor = MapOverlay.content,
             ) { Icon(Icons.Default.ZoomOutMap, "Vue d'ensemble") }
         }
@@ -225,7 +225,7 @@ fun LiveFullMap(settings: Settings, l: Live, onExit: () -> Unit, onPauseResume: 
             }
         }
         // above the navigation bar
-        MapOverlaySurface(shape = RoundedCornerShape(16.dp), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 24.dp)) {
+        MapOverlaySurface(shape = RoundedCornerShape(16.dp), modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 24.dp).snackbarAnchor()) {
             Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = onPauseResume, modifier = Modifier.weight(1f).height(48.dp)) {
                     Text(if (l.paused) "Reprendre" else "Pause", fontSize = 16.sp)

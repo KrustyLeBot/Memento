@@ -48,9 +48,6 @@ sealed class LegacyImport {
     data class Failed(val message: String) : LegacyImport()
 }
 
-/** [undo] is the snackbar's action, labelled [action]. */
-data class Snack(val text: String, val action: String = "Annuler", val undo: (() -> Unit)? = null)
-
 /** Everything the editor can change, for change detection and autosave. */
 data class EditorSnapshot(
     val title: String,
@@ -144,23 +141,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Scroll positions, filters and tapped items of the module lists, kept while their screen is not shown. */
     val lists = ListMemory()
 
-    val activities = ActivityController(app, repo, viewModelScope, io, { snack = it }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }, syncing = { syncing }).also { c ->
+    /** The app-level snackbar's messages, shown one at a time by MainActivity's frame (ui/AppFrame). */
+    val snacks = SnackQueue()
+
+    fun say(snack: Snack) = snacks.post(snack)
+
+    val activities = ActivityController(app, repo, viewModelScope, io, { say(it) }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }, syncing = { syncing }).also { c ->
         c.onOpen = { screen = Screen.ACTIVITY }
     }
 
     /** The Contacts module (list, detail, editor, import, mirror into the phone). */
-    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it }, { goBack() }, syncing = { syncing })
+    val contacts = ContactsController(app, repo, viewModelScope, io, { say(it) }, { screen = it }, { goBack() }, syncing = { syncing })
 
     /** The Agenda module (views, event editor, import/export, reminders and widgets kept up to date). */
     val agenda = AgendaController(
-        app, repo, viewModelScope, io, contacts.contacts, { snack = it }, { screen = it }, { goBack() },
+        app, repo, viewModelScope, io, contacts.contacts, { say(it) }, { screen = it }, { goBack() },
         openNote = { n -> openNote(n) },
         openActivity = { activities.open(it) },
         openContact = { id ->
             // a birthday tapped in a notification or a widget at cold start: the contacts are read after the notes
             contacts.whenScanned {
                 val c = contacts.book.byId(id)
-                if (c == null) snack = Snack("Contact introuvable") else contacts.open(c)
+                if (c == null) say(Snack("Contact introuvable")) else contacts.open(c)
             }
         },
         syncing = { syncing },
@@ -181,7 +183,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var editor by mutableStateOf<EditorState?>(null)
     var labelFilter by mutableStateOf<String?>(null)
     var query by mutableStateOf("")
-    var snack by mutableStateOf<Snack?>(null)
 
     var gridView by mutableStateOf(settings.gridView)
     var scanFormat by mutableStateOf(settings.scanFormat)
@@ -361,9 +362,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     repo.save(Note(path = "", id = id, title = title, created = now, updated = now, pdf = pdfPath))
                 }
                 openNote(note)
-                snack = Snack("Scan enregistré (${pages.size} page${if (pages.size > 1) "s" else ""})")
+                say(Snack("Scan enregistré (${pages.size} page${if (pages.size > 1) "s" else ""})"))
             } catch (e: Exception) {
-                snack = Snack("Scan impossible : ${e.message}")
+                say(Snack("Scan impossible : ${e.message}"))
             } finally {
                 savingScan = false
             }
@@ -405,14 +406,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is SafFs -> fs.uriOf(path)
             else -> null
         }
-        if (uri == null) { snack = Snack("Fichier introuvable (pas encore synchronisé ?)"); return }
+        if (uri == null) { say(Snack("Fichier introuvable (pas encore synchronisé ?)")); return }
         try {
             app.startActivity(
                 android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mimeOf(path))
                     .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         } catch (e: android.content.ActivityNotFoundException) {
-            snack = Snack("Aucune application pour ouvrir ce fichier")
+            say(Snack("Aucune application pour ouvrir ce fichier"))
         }
     }
 
@@ -441,7 +442,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             attaching = false
-            if (failed.isNotEmpty()) snack = Snack("Pièce jointe impossible : ${failed.first()}")
+            if (failed.isNotEmpty()) say(Snack("Pièce jointe impossible : ${failed.first()}"))
         }
     }
 
@@ -478,7 +479,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (NoteRepository.deletable(listOf(path), owner, repo.allNotes()).isEmpty()) null
                 else repo.fs.readBytes(path).also { repo.deleteOwned(listOf(path), owner) }
             }
-            snack = Snack("Pièce jointe supprimée") {
+            say(Snack("Pièce jointe supprimée") {
                 if (bytes != null) viewModelScope.launch {
                     withContext(io) { repo.fs.writeBytes(path, bytes) }
                     if (editor === ed) {
@@ -488,7 +489,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         withContext(io) { repo.save(note.copy(attachments = note.attachments + path)) }
                     }
                 }
-            }
+            })
         }
     }
 
@@ -526,7 +527,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun editDrawing(path: String) {
         viewModelScope.launch {
             val svg = withContext(io) { repo.fs.readText(path) }
-            if (svg == null) { snack = Snack("Dessin introuvable (pas encore synchronisé ?)"); return@launch }
+            if (svg == null) { say(Snack("Dessin introuvable (pas encore synchronisé ?)")); return@launch }
             drawing = app.memento.draw.DrawingState(app.memento.draw.Drawing.parse(svg), path)
             screen = Screen.DRAWING
         }
@@ -560,7 +561,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 persist(ed)
             } catch (e: Exception) {
-                snack = Snack("Dessin non enregistré : ${e.message}")
+                say(Snack("Dessin non enregistré : ${e.message}"))
             }
         }
     }
@@ -666,7 +667,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             settings.legacyImportDismissed = true
             legacyImport = null
             checkLegacyLeft()
-            snack = Snack(if (error == null) "Ancien dossier supprimé" else "Suppression impossible : ${error.message}")
+            say(Snack(if (error == null) "Ancien dossier supprimé" else "Suppression impossible : ${error.message}"))
         }
     }
     /** The record screen scrolls to its offline maps (the map-download notification), then clears this. */
@@ -773,7 +774,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ed.base = saved
                 ed.lastSnapshot = snap
             } catch (e: Exception) {
-                snack = Snack("Échec de l'enregistrement : ${e.message}")
+                say(Snack("Échec de l'enregistrement : ${e.message}"))
             }
         }
     }
@@ -794,9 +795,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ed.base = saved
                     ed.lastSnapshot = ed.snapshot()
                     ed.dateVersion++
-                    snack = Snack(if (start == null) "Retirée de l'agenda" else "Ajoutée à l'agenda")
+                    say(Snack(if (start == null) "Retirée de l'agenda" else "Ajoutée à l'agenda"))
                 } catch (e: Exception) {
-                    snack = Snack("Échec de l'enregistrement : ${e.message}")
+                    say(Snack("Échec de l'enregistrement : ${e.message}"))
                 }
             }
         }
@@ -833,7 +834,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 // an intent (notification, widget) already took the user somewhere: offer it instead of taking over
                 if (screen.module != null) screen = target
-                else snack = Snack("Brouillon retrouvé", action = "Reprendre") { screen = target }
+                else say(Snack("Brouillon retrouvé", action = "Reprendre") { screen = target })
             }
         }
     }
@@ -900,14 +901,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 NoteRepository.ownedFiles(note, repo.allNotes()).mapNotNull { p -> repo.fs.readBytes(p)?.let { p to it } }
             }
             withContext(io) { repo.delete(note) }
-            snack = Snack("Note supprimée") {
+            say(Snack("Note supprimée") {
                 viewModelScope.launch {
                     withContext(io) {
                         files.forEach { (p, bytes) -> repo.fs.writeBytes(p, bytes) }
                         repo.save(note)
                     }
                 }
-            }
+            })
         }
     }
 
@@ -918,7 +919,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val note = ed.base ?: return@launch
             val kept = withContext(io) { repo.keepConflictCopy(note) }
             ed.reloadFrom(kept)
-            snack = Snack("Cette version a remplacé l'originale")
+            say(Snack("Cette version a remplacé l'originale"))
         }
     }
 

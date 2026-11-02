@@ -44,9 +44,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -90,21 +87,13 @@ private fun previewText(note: Note): String =
 @Composable
 fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
     val notes by vm.notes.collectAsState()
-    val snackbar = remember { SnackbarHostState() }
     val visible = remember(notes, vm.labelFilter, vm.query) { filterNotes(notes, vm.labelFilter, vm.query) }
     val labels = remember(notes) { notes.flatMap { it.labels }.distinct().sortedBy { it.fold() } }
 
-    LaunchedEffect(vm.snack) {
-        val s = vm.snack ?: return@LaunchedEffect
-        val result = snackbar.showSnackbar(s.text, actionLabel = if (s.undo != null) s.action else null)
-        if (result == SnackbarResult.ActionPerformed) s.undo?.invoke()
-        vm.snack = null
-    }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.liftAboveSnackbar(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SmallFloatingActionButton(
                     onClick = { if (!vm.syncing && !vm.savingScan) onScan() },
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,

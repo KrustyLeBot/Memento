@@ -92,10 +92,10 @@ fun MapCacheSettings(vm: MainViewModel) {
                             OfflinePacks.clearAll()
                         }
                         cleared++
-                        vm.snack = Snack(
+                        vm.say(Snack(
                             if (kept.isEmpty()) "Cache des cartes vidé"
                             else "Cache des cartes vidé, sauf « ${kept.joinToString(" », « ") { it.name }} » utilisé par l'enregistrement en cours",
-                        )
+                        ))
                     }
                 }) { Text("Vider") }
             },

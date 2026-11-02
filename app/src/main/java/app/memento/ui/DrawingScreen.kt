@@ -81,7 +81,7 @@ fun DrawingScreen(vm: MainViewModel, state: DrawingState) {
             }
         },
         bottomBar = {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+            Surface(Modifier.snackbarAnchor(), color = MaterialTheme.colorScheme.surfaceContainer) {
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         FilterChip(selected = !state.eraser, onClick = { state.eraser = false }, label = { Text("Stylo") })

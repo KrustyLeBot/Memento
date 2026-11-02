@@ -12,6 +12,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import app.memento.Module
 
@@ -28,8 +29,8 @@ private val Module.icon: ImageVector
  * each module and on the settings. [current] null means the settings are shown.
  */
 @Composable
-fun ModuleBar(modules: List<Module>, current: Module?, onSelect: (Module) -> Unit, onSettings: () -> Unit) {
-    NavigationBar {
+fun ModuleBar(modules: List<Module>, current: Module?, onSelect: (Module) -> Unit, onSettings: () -> Unit, modifier: Modifier = Modifier) {
+    NavigationBar(modifier) {
         modules.forEach { m ->
             NavigationBarItem(
                 selected = m == current,

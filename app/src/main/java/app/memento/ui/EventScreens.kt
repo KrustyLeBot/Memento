@@ -50,7 +50,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -145,7 +144,7 @@ private fun openLink(context: android.content.Context, vm: MainViewModel, url: S
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: android.content.ActivityNotFoundException) {
-        vm.snack = app.memento.Snack("Aucune application pour ouvrir ce lien")
+        vm.say(app.memento.Snack("Aucune application pour ouvrir ce lien"))
     }
 }
 
@@ -167,7 +166,6 @@ fun EventDetailScreen(vm: MainViewModel) {
     val c = vm.agenda
     val context = LocalContext.current
     val sources by c.sources.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     val zone = ZoneId.systemDefault()
     val h24 = is24h()
     val today = rememberToday()
@@ -183,7 +181,6 @@ fun EventDetailScreen(vm: MainViewModel) {
     val e = entry
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             SuiteTopBar("", onBack = { c.closeDetail() }) {
                 if (e != null && event != null) {
@@ -242,7 +239,7 @@ fun EventDetailScreen(vm: MainViewModel) {
                     try {
                         context.startActivity(geo)
                     } catch (_: android.content.ActivityNotFoundException) {
-                        vm.snack = app.memento.Snack("Aucune application de cartes")
+                        vm.say(app.memento.Snack("Aucune application de cartes"))
                     }
                 }) { Text(place, color = MaterialTheme.colorScheme.primary) }
             }
@@ -306,7 +303,6 @@ private fun FieldRow(icon: ImageVector?, modifier: Modifier = Modifier, content:
 fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
     val c = vm.agenda
     val sources by c.sources.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     val zone = ZoneId.systemDefault()
     val h24 = is24h()
     val today = rememberToday()
@@ -325,7 +321,6 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
     BackHandler { close() }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = close) { Icon(Icons.Default.Close, "Fermer") } },

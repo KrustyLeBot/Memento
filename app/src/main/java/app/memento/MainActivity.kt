@@ -23,19 +23,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.ui.Modifier
 import app.memento.ui.AgendaScreen
 import app.memento.ui.ContactsScreen
 import app.memento.ui.LegacyImportDialog
-import app.memento.ui.ModuleBar
 import app.memento.map.MapHost
 import app.memento.map.MapRuntime
 import app.memento.ui.ActivitiesScreen
@@ -222,22 +212,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 LegacyImportDialog(vm)
                 app.memento.ui.ContactRequestDialogs(vm)
-                val module = vm.screen.module
-                if (module != null || vm.screen == Screen.SETTINGS) {
-                    // The keyboard (search fields of the lists) lifts the screen and hides the bar, so the
-                    // results and the FAB stay above it.
-                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-                    val typing = WindowInsets.isImeVisible
-                    Column(Modifier.fillMaxSize().imePadding()) {
-                        // The bar takes the navigation-bar inset; screens above must not pad for it again.
-                        Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.navigationBars)) { Screens() }
-                        // a hidden module opened by a widget or a notification shows in the bar while it is open
-                        val modules = Module.entries.filter { it !in vm.hiddenModules || it == module }
-                        if (!typing) ModuleBar(modules, module, onSelect = { vm.openModule(it) }, onSettings = { vm.openSettings() })
-                    }
-                } else {
-                    Screens()
-                }
+                app.memento.ui.AppFrame(vm) { Screens() }
             }
         }
     }
@@ -274,7 +249,7 @@ class MainActivity : ComponentActivity() {
             .build()
         GmsDocumentScanning.getClient(options).getStartScanIntent(this)
             .addOnSuccessListener { launch(IntentSenderRequest.Builder(it).build()) }
-            .addOnFailureListener { vm.snack = Snack("Scanner indisponible : ${it.message}") }
+            .addOnFailureListener { vm.say(Snack("Scanner indisponible : ${it.message}")) }
     }
 
     companion object {

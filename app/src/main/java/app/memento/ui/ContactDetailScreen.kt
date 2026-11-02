@@ -35,7 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -69,7 +68,6 @@ fun ContactDetailScreen(vm: MainViewModel) {
         LaunchedEffect(Unit) { c.back() }
         return
     }
-    val snackbar = rememberVmSnackbar(vm)
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var menu by remember { mutableStateOf(false) }
@@ -78,16 +76,15 @@ fun ContactDetailScreen(vm: MainViewModel) {
         try {
             ctx.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
-            vm.snack = Snack("Aucune application pour $what")
+            vm.say(Snack("Aucune application pour $what"))
         }
     }
     fun copy(text: String, what: String) {
         clipboard.setText(AnnotatedString(text))
-        vm.snack = Snack("$what copié")
+        vm.say(Snack("$what copié"))
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             SuiteTopBar("", onBack = { vm.back() }) {
                 IconButton(onClick = { c.toggleFavorite(contact) }) {

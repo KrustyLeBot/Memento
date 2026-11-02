@@ -40,7 +40,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -97,7 +96,6 @@ fun AgendaScreen(vm: MainViewModel) {
     val sources by c.sources.collectAsState()
     val scan by vm.repo.agenda.collectAsState()
     val scans by vm.repo.scans.collectAsState()
-    val snackbar = rememberVmSnackbar(vm)
     val today = rememberToday()
     val h24 = is24h()
     var menu by remember { mutableStateOf(false) }
@@ -113,7 +111,6 @@ fun AgendaScreen(vm: MainViewModel) {
     if (vm.legacyImport == null) AskReminderAccess(c, sources)
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (c.searching) {
                 TopAppBar(
@@ -161,7 +158,7 @@ fun AgendaScreen(vm: MainViewModel) {
             }
         },
         floatingActionButton = {
-            if (!c.searching) FloatingActionButton(onClick = { c.newEvent(if (c.view == AgendaView.AGENDA) today else c.selected) }) {
+            if (!c.searching) FloatingActionButton(onClick = { c.newEvent(if (c.view == AgendaView.AGENDA) today else c.selected) }, Modifier.liftAboveSnackbar()) {
                 Icon(Icons.Default.Add, "Nouvel événement")
             }
         },

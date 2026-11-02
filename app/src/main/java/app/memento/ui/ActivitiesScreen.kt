@@ -26,9 +26,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,15 +68,8 @@ fun ActivitiesScreen(vm: MainViewModel) {
     var askRelief by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
     BackHandler(enabled = selecting) { selected = emptySet() }
-    val snackbar = remember { SnackbarHostState() }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.activities.startImport(uri)
-    }
-    LaunchedEffect(vm.snack) {
-        val s = vm.snack ?: return@LaunchedEffect
-        val result = snackbar.showSnackbar(s.text, actionLabel = if (s.undo != null) s.action else null)
-        if (result == SnackbarResult.ActionPerformed) s.undo?.invoke()
-        vm.snack = null
     }
 
     val infos = remember(all) { all.mapNotNull { n -> n.activity?.let { n to it } }.sortedByDescending { it.second.start } }
@@ -98,7 +88,6 @@ fun ActivitiesScreen(vm: MainViewModel) {
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
         topBar = { SuiteTopBar("Activités") },
     ) { padding ->
         LazyColumn(

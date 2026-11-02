@@ -23,8 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,19 +67,6 @@ fun vcardUri(intent: Intent?): Uri? {
         Intent.ACTION_SEND -> if (type in VCARD_TYPES) IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java) else null
         else -> null
     }
-}
-
-/** Shows the view model's snack (with its "Annuler" action) in this screen's snackbar host. */
-@Composable
-fun rememberVmSnackbar(vm: MainViewModel): SnackbarHostState {
-    val host = remember { SnackbarHostState() }
-    LaunchedEffect(vm.snack) {
-        val s = vm.snack ?: return@LaunchedEffect
-        val result = host.showSnackbar(s.text, actionLabel = if (s.undo != null) s.action else null)
-        if (result == SnackbarResult.ActionPerformed) s.undo?.invoke()
-        vm.snack = null
-    }
-    return host
 }
 
 /** A round badge with the contact's initial. */
