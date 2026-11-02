@@ -153,7 +153,12 @@ class AgendaController(
     fun changeWeekStart(d: java.time.DayOfWeek) { weekStart = d; prefs.weekStart = d }
     fun changeEventZoneTimes(v: Boolean) { eventZoneTimes = v; prefs.eventZoneTimes = v }
 
-    private data class WindowKey(val sources: AgendaSources, val from: LocalDate, val to: LocalDate, val zone: ZoneId)
+    /** Sources compared by identity: a deep hash of every note on each lookup would cost more than the window. */
+    private class WindowKey(val sources: AgendaSources, val from: LocalDate, val to: LocalDate, val zone: ZoneId) {
+        override fun equals(other: Any?) =
+            other is WindowKey && other.sources === sources && other.from == from && other.to == to && other.zone == zone
+        override fun hashCode() = ((System.identityHashCode(sources) * 31 + from.hashCode()) * 31 + to.hashCode()) * 31 + zone.hashCode()
+    }
 
     private val cache = object : LinkedHashMap<WindowKey, EntriesResult>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<WindowKey, EntriesResult>?) = size > 24

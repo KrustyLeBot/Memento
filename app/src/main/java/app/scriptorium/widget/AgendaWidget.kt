@@ -65,10 +65,13 @@ class AgendaWidget : AppWidgetProvider() {
         }
         val settings = Settings(app)
         if (settings.storage !is StorageConfig.Default) { finish(); return }
-        // the broadcast may last a minute at most: the client gives up waiting at 20 s
-        SynchrotronClient.syncOnOpen(app, Settings.defaultDir().path) { state ->
+        // a broadcast may last a minute at most: the client reports a timeout at 20 s, and this guards a silent one
+        val stop = SynchrotronClient.syncOnOpen(app, Settings.defaultDir().path) { state ->
             if (state != SyncState.Syncing) finish()
         }
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!done) { stop(); finish() }
+        }, 30_000)
     }
 }
 

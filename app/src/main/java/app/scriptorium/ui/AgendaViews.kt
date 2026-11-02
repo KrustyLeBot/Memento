@@ -100,8 +100,10 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
         }
         target = c.selected
     }
-    LaunchedEffect(sources, first, last) {
-        val fresh = if (monthsOf === sources) HashMap(months) else HashMap()
+    var monthsZone by remember { mutableStateOf(zone) }
+    LaunchedEffect(sources, first, last, zone) {
+        val fresh = if (monthsOf === sources && monthsZone == zone) HashMap(months) else HashMap()
+        monthsZone = zone
         var m = first
         while (!m.isAfter(last)) {
             if (m !in fresh) fresh[m] = c.entries(sources, m.atDay(1), m.atEndOfMonth().plusDays(1)).entries
@@ -130,15 +132,24 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
         if (idx >= 0) list.scrollToItem(maxOf(0, if (idx > 0 && items[idx - 1] is ListItem.Month) idx - 1 else idx))
         target = null
     }
-    // endless in both directions: a few months more when an end comes into view (bounded to 20 years)
+    // Endless in both directions: the next two years load as they come into view; past them, and towards the past,
+    // each new swipe against an end adds six months (bounded to 20 years), so empty months cannot loop.
     LaunchedEffect(list) {
-        snapshotFlow { Triple(list.firstVisibleItemIndex, list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, list.layoutInfo.totalItemsCount) }
-            .collect { (top, bottom, total) ->
-                if (target != null) return@collect
-                val horizon = YearMonth.from(today)
-                if (bottom >= total - 3 && last.isBefore(horizon.plusYears(20)) && (list.isScrollInProgress || last.isBefore(horizon.plusYears(2)))) last = last.plusMonths(3)
-                if (top == 0 && list.isScrollInProgress && first.isAfter(horizon.minusYears(20))) first = first.minusMonths(3)
+        var wasScrolling = false
+        snapshotFlow {
+            listOf(list.firstVisibleItemIndex, list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, list.layoutInfo.totalItemsCount,
+                if (list.isScrollInProgress) 1 else 0, first.hashCode(), last.hashCode(), if (target == null) 0 else 1)
+        }.collect { (top, bottom, total, scrolling) ->
+            val newGesture = scrolling == 1 && !wasScrolling
+            wasScrolling = scrolling == 1
+            if (target != null) return@collect
+            val horizon = YearMonth.from(today)
+            if (bottom >= total - 3) {
+                if (last.isBefore(horizon.plusYears(2))) last = last.plusMonths(3)
+                else if (newGesture && last.isBefore(horizon.plusYears(20))) last = last.plusMonths(6)
             }
+            if (top == 0 && newGesture && first.isAfter(horizon.minusYears(20))) first = first.minusMonths(6)
+        }
     }
 
     LazyColumn(state = list, contentPadding = PaddingValues(start = 4.dp, end = 12.dp, top = 4.dp, bottom = 96.dp), modifier = Modifier.fillMaxSize()) {
@@ -156,13 +167,19 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
 
 @Composable
 private fun DayRow(c: AgendaController, g: DayGroup, today: LocalDate, zone: ZoneId, h24: Boolean) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        DayBadge(g.date, today, Modifier.clickable { c.selected = g.date; c.changeView(AgendaView.DAY) })
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (g.entries.isEmpty()) {
-                Text("Rien de prévu aujourd'hui", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 18.dp))
+    Column {
+        if (g.date == today) {
+            Text("Aujourd'hui", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 12.dp, top = 6.dp))
+        }
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            DayBadge(g.date, today, Modifier.clickable { c.selected = g.date; c.changeView(AgendaView.DAY) })
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (g.entries.isEmpty()) {
+                    Text("Rien de prévu aujourd'hui", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 18.dp))
+                }
+                g.entries.forEach { e -> EntryChip(e, AgendaText.timeLineOn(e, g.date, zone, h24, c.eventZoneTimes)) { c.open(e) } }
             }
-            g.entries.forEach { e -> EntryChip(e, AgendaText.timeLineOn(e, g.date, zone, h24, c.eventZoneTimes)) { c.open(e) } }
         }
     }
 }

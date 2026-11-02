@@ -132,8 +132,14 @@ object Reminders {
 
     private fun setAlarm(context: Context, at: Long, pi: PendingIntent) {
         val am = context.getSystemService(AlarmManager::class.java)
-        if (canExact(context)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        if (!canExact(context)) return am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        try {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        } catch (e: SecurityException) {
+            // the access was withdrawn between the check and the call: the inexact alarm still fires
+            Log.w(TAG, "exact alarm refused, inexact one set", e)
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
     }
 
     /**

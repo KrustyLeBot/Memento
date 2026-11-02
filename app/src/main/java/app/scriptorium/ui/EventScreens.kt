@@ -294,6 +294,10 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
                 modifier = Modifier.fillMaxWidth().padding(start = 28.dp),
             )
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            if (ed.mode == EditMode.File && ed.base.isSeries) {
+                Text("Toute la série : le début est celui de la première occurrence.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 40.dp, top = 4.dp))
+            }
             FieldRow(Icons.Default.Schedule) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Toute la journée", Modifier.weight(1f))
