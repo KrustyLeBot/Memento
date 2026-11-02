@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Scriptorium</string>
+    <string name="widget_agenda_description">Les prochains événements, activités et notes datées</string>
+    <string name="widget_today_description">Le prochain événement du jour</string>
 </resources>

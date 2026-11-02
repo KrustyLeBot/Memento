@@ -154,6 +154,8 @@ fun SettingsScreen(vm: MainViewModel, onPickFolder: () -> Unit) {
                 SettingsHint("Distance, durée et dénivelé de l'écran Activités. Réglage synchronisé avec le PC.")
             }
 
+            if (app.scriptorium.Module.AGENDA !in vm.hiddenModules) AgendaSettings(vm)
+
             ContactsSettings(vm)
 
             if (vm.settings.storage is StorageConfig.Default) SyncSettings(Settings.defaultDir().path)

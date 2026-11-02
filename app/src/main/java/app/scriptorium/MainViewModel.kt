@@ -32,12 +32,16 @@ import app.scriptorium.scan.ScanPdf
 import app.scriptorium.scan.PdfPages
 import app.scriptorium.activity.ActivityController
 import app.scriptorium.contacts.ContactsController
+import app.scriptorium.agenda.AgendaController
 import app.scriptorium.record.Recorder
 import app.scriptorium.sync.SkipReason
 import app.scriptorium.sync.SyncState
 import app.scriptorium.sync.SynchrotronClient
 
-enum class Screen { LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS, CONTACT, CONTACT_EDIT, CONTACT_DUPLICATES }
+enum class Screen {
+    LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS, CONTACT, CONTACT_EDIT, CONTACT_DUPLICATES,
+    EVENT, EVENT_EDIT, AGENDA_CALENDARS,
+}
 
 /** Screens that carry the bottom bar: the home screen of each module. */
 val Screen.module: Module?
@@ -87,6 +91,8 @@ class EditorState(note: Note?, val isNew: Boolean) {
     var pendingFocusId by mutableStateOf<Long?>(null)
     var focusTitle by mutableStateOf(false)
     var externalConflict by mutableStateOf(false)
+    /** Bumped when [base]'s date (agenda keys) changes, so the editor redraws its date chip. */
+    var dateVersion by mutableStateOf(0)
 
     var lastSnapshot: EditorSnapshot? = null
     var loadedRaw: String? = null
@@ -140,6 +146,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The Contacts module (list, detail, editor, import, mirror into the phone). */
     val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it })
+
+    /** Where the note editor, an activity and the calendars screen return to (they are reached from several modules). */
+    private var editorReturn = Screen.LIST
+    private var activityReturn = Screen.ACTIVITIES
+    var calendarsReturn = Screen.AGENDA
+
+    /** The Agenda module (views, event editor, import/export, reminders and widgets kept up to date). */
+    val agenda = AgendaController(
+        app, repo, viewModelScope, io, contacts.contacts, { snack = it }, { screen = it },
+        openNote = { n, ret -> openNote(n, ret) },
+        openActivity = { activityReturn = Screen.AGENDA; activities.open(it) },
+        openContact = { id ->
+            val c = contacts.book.byId(id)
+            if (c == null) snack = Snack("Contact introuvable") else contacts.open(c)
+        },
+        syncing = { syncing },
+    )
 
     var screen by mutableStateOf(rootOf(settings.lastModule.takeUnless { it in settings.hiddenModules } ?: Module.NOTES))
     var hiddenModules by mutableStateOf(settings.hiddenModules)
@@ -222,7 +245,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Never while a note is being edited.
      */
     private fun syncOnOpen() {
-        if (syncing || screen == Screen.EDITOR || settings.storage !is StorageConfig.Default) return
+        if (syncing || screen == Screen.EDITOR || screen == Screen.EVENT_EDIT || settings.storage !is StorageConfig.Default) return
         stopSync?.invoke()
         stopSync = SynchrotronClient.syncOnOpen(getApplication(), Settings.defaultDir().path) { state ->
             when (state) {
@@ -526,7 +549,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { withContext(io) { repo.saveActivitySettings(s) } }
     }
 
-    fun openActivities() { openModule(Module.ACTIVITIES) }
+    fun openActivities() { activityReturn = Screen.ACTIVITIES; openModule(Module.ACTIVITIES) }
 
     private fun rootOf(m: Module) = when (m) {
         Module.NOTES -> Screen.LIST
@@ -610,14 +633,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun openRecord() { screen = Screen.RECORD }
-    fun openActivity(note: Note) { activities.open(note) }
+    fun openActivity(note: Note) { activityReturn = Screen.ACTIVITIES; activities.open(note) }
 
     fun back() {
         when (screen) {
             Screen.EDITOR -> closeEditor()
             Screen.SETTINGS -> screen = rootOf(settings.lastModule.takeUnless { it in hiddenModules } ?: Module.NOTES)
             Screen.ACTIVITIES, Screen.AGENDA, Screen.CONTACTS -> openModule(Module.NOTES)
-            Screen.ACTIVITY -> { activities.close(); screen = Screen.ACTIVITIES }
+            Screen.ACTIVITY -> { activities.close(); screen = activityReturn; activityReturn = Screen.ACTIVITIES }
+            Screen.EVENT -> agenda.closeDetail()
+            Screen.EVENT_EDIT -> agenda.cancelEditor()
+            Screen.AGENDA_CALENDARS -> screen = calendarsReturn
             Screen.RECORD -> screen = Screen.ACTIVITIES
             Screen.CONTACT, Screen.CONTACT_EDIT, Screen.CONTACT_DUPLICATES -> contacts.back()
             Screen.DRAWING -> closeDrawing()
@@ -647,8 +673,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.EDITOR
     }
 
-    fun openNote(note: Note) {
+    fun openNote(note: Note, returnTo: Screen = Screen.LIST) {
         if (syncing) return // the banner already says why
+        editorReturn = returnTo
         val ed = EditorState(note, isNew = false)
         ed.loadedRaw = note.let { repo.fs.readText(it.path) }
         editor = ed
@@ -703,6 +730,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * "Ajouter à l'agenda" on the open note: [start] (a date, or a date-time in the device zone) and its
+     * reminders; null removes the date (and the old `reminder` field). The note stays in the notes list.
+     */
+    fun setNoteDate(start: app.scriptorium.agenda.Stamp?, alerts: List<Int>) {
+        val ed = editor ?: return
+        viewModelScope.launch {
+            persist(ed)
+            persistLock.withLock {
+                try {
+                    val base = ed.base ?: buildNote(ed, ed.snapshot(), ed.body())
+                    val dated = agenda.datedNote(base, start, alerts).copy(updated = System.currentTimeMillis())
+                    val saved = withContext(io) { repo.save(dated).also { ed.loadedRaw = repo.readRaw(it.path) } }
+                    ed.base = saved
+                    ed.lastSnapshot = ed.snapshot()
+                    ed.dateVersion++
+                    snack = Snack(if (start == null) "Retirée de l'agenda" else "Ajoutée à l'agenda")
+                } catch (e: Exception) {
+                    snack = Snack("Échec de l'enregistrement : ${e.message}")
+                }
+            }
+        }
+    }
+
     fun flushEditor() {
         val ed = editor ?: return
         if (screen != Screen.EDITOR) return
@@ -711,7 +762,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeEditor() {
         val ed = editor
-        screen = Screen.LIST
+        screen = editorReturn
+        editorReturn = Screen.LIST
         editor = null
         if (ed != null) viewModelScope.launch { persist(ed) }
     }
@@ -759,7 +811,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Deletes the open note for good; the snackbar offers a short-lived undo. */
     fun deleteEditorNote() {
         val ed = editor ?: return
-        screen = Screen.LIST
+        screen = editorReturn
+        editorReturn = Screen.LIST
         editor = null
         viewModelScope.launch {
             persistLock.withLock { }

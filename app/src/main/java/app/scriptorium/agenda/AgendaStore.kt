@@ -72,6 +72,11 @@ class AgendaStore(val fs: Fs) {
         return AgendaScan(events, problems)
     }
 
+    /** A file written by another path (the note editor on an event's description): read it again at the next scan. */
+    fun forget(path: String) {
+        cache.remove(path)
+    }
+
     fun calendars(): CalendarSettings = fs.readText(CalendarSettings.PATH)?.let { CalendarSettings.parse(it) } ?: CalendarSettings()
 
     fun saveCalendars(settings: CalendarSettings) = fs.writeText(CalendarSettings.PATH, settings.toJson())

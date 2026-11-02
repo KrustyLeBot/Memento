@@ -43,6 +43,40 @@ data class CalendarSettings(
 
     fun layer(key: String): Layer = layers[key] ?: Layer(true, DEFAULT_LAYER_COLORS[key] ?: "#78858F")
 
+    /** Reminders of a new event ("Rappels par défaut"), synced: `default_alerts` / `default_alerts_all_day` (`-15m`, …). */
+    fun defaultAlerts(allDay: Boolean): List<Int> {
+        val raw = extra[if (allDay) KEY_ALERTS_ALL_DAY else KEY_ALERTS] ?: return if (allDay) emptyList() else listOf(-15)
+        return (raw as? List<*>).orEmpty().mapNotNull { v -> try { Alerts.parse(v.toString()) } catch (_: IllegalArgumentException) { null } }
+    }
+
+    fun withDefaultAlerts(allDay: Boolean, alerts: List<Int>): CalendarSettings =
+        copy(extra = extra + ((if (allDay) KEY_ALERTS_ALL_DAY else KEY_ALERTS) to alerts.distinct().sorted().map { Alerts.format(it) }))
+
+    fun withLayer(key: String, transform: (Layer) -> Layer): CalendarSettings = copy(layers = layers + (key to transform(layer(key))))
+
+    fun withCalendar(id: String, transform: (Calendar) -> Calendar): CalendarSettings =
+        copy(calendars = calendars.map { if (it.id == id) transform(it) else it })
+
+    /** A new calendar named [name] (unique id from the name, the next free palette colour unless [color]). */
+    fun addCalendar(name: String, color: String? = null): Pair<CalendarSettings, Calendar> {
+        val cal = Calendar(uniqueCalendarId(name, this), name.trim(), color ?: nextColor(this))
+        return copy(calendars = calendars + cal) to cal
+    }
+
+    /** Without calendar [id]; the last calendar cannot go. The default moves to the first one left. */
+    fun removeCalendar(id: String): CalendarSettings {
+        val left = calendars.filter { it.id != id }
+        require(left.isNotEmpty()) { "Il faut garder au moins un agenda" }
+        return copy(calendars = left, default = if (defaultCalendar().id == id) left[0].id else default)
+    }
+
+    /** The files a calendar holds: its events (an unknown calendar id counts as the default) and their exception files. */
+    fun eventsOf(id: String, events: List<Event>): List<Event> {
+        val own = events.filter { calendar(it.calendar).id == id }
+        val ids = own.map { it.id }.toSet()
+        return own + events.filter { it.recurrenceOf in ids && it.id !in ids }
+    }
+
     fun toJson(): String {
         val cals = calendars.map { c ->
             val d = linkedMapOf<String, Any?>("id" to c.id, "name" to c.name, "color" to c.color, "visible" to c.visible)
@@ -67,6 +101,8 @@ data class CalendarSettings(
         const val LAYER_ACTIVITIES = "activities"
         const val LAYER_NOTES = "notes"
         const val LAYER_BIRTHDAYS = "birthdays"
+        const val KEY_ALERTS = "default_alerts"
+        const val KEY_ALERTS_ALL_DAY = "default_alerts_all_day"
 
         /** Fixed palette: each colour has a contrast of at least 3:1 against white and against #121212. */
         val PALETTE: List<Pair<String, String>> = listOf(

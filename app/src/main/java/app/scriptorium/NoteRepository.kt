@@ -35,6 +35,10 @@ class NoteRepository(private val context: Context, private val settings: Setting
     private val _calendars = MutableStateFlow(app.scriptorium.agenda.CalendarSettings())
     val calendars: StateFlow<app.scriptorium.agenda.CalendarSettings> = _calendars
 
+    /** Number of completed scans since the storage was set: 0 means nothing was read yet (lists are empty, not "no data"). */
+    private val _scans = MutableStateFlow(0)
+    val scans: StateFlow<Int> = _scans
+
     private val parsed = HashMap<String, Pair<Long, Note>>() // path -> (lastModified, note)
     private var observers: List<FileObserver> = emptyList()
     var fs: Fs = buildFs(settings.storage)
@@ -57,6 +61,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         _activities.value = emptyList()
         _agenda.value = app.scriptorium.agenda.AgendaScan()
         _calendars.value = app.scriptorium.agenda.CalendarSettings()
+        _scans.value = 0
     }
 
     /** Full rescan: reads only files whose modification time changed. */
@@ -97,6 +102,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         _activities.value = acts
         _agenda.value = agendaStore.scan()
         _calendars.value = agendaStore.calendars()
+        _scans.value = _scans.value + 1
     }
 
     fun startWatching() {
@@ -150,6 +156,12 @@ class NoteRepository(private val context: Context, private val settings: Setting
         }
         n = n.copy(hasId = true)
         fs.writeText(n.path, NoteFormat.serialize(n))
+        if (isAgendaPath(n.path)) {
+            // an event's description edited in the note editor: the agenda index holds it, not the notes list
+            agendaStore.forget(n.path)
+            _agenda.value = agendaStore.scan()
+            return n
+        }
         val modified = fs.lastModified(n.path)
         parsed[n.path] = modified to n
         if (isActivityPath(n.path)) _activities.value = _activities.value.filter { it.path != n.path } + n
@@ -188,6 +200,10 @@ class NoteRepository(private val context: Context, private val settings: Setting
     }
 
     fun delete(note: Note) {
+        if (isAgendaPath(note.path)) {
+            app.scriptorium.agenda.EventFormat.fromNote(note)?.let { deleteEvent(it) }
+            return
+        }
         fs.delete(note.path)
         note.pdf?.let { fs.delete(it) }
         note.attachments.forEach { fs.delete(it) }
@@ -236,6 +252,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
     companion object {
         const val ACTIVITIES_DIR = "activities"
         fun isActivityPath(path: String) = path.startsWith("$ACTIVITIES_DIR/")
+        fun isAgendaPath(path: String) = path.startsWith("${app.scriptorium.agenda.EventFormat.AGENDA_DIR}/")
         private val CONFLICT_COPY = Regex(""".+\.md\.conflict\d+""")
     }
 }

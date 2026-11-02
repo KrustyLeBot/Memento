@@ -224,11 +224,16 @@ class AgendaLayoutTest {
     }
 
     @Test
-    fun dstDayGridUsesRealMinutes() {
-        // 29 March 2026: Paris skips 02:00 -> 03:00; 04:00 local is 3 hours after midnight
+    fun dstDayGridUsesWallClockMinutes() {
+        // 29 March 2026: Paris skips 02:00 -> 03:00; 04:00 is drawn on the 04:00 line
         val e = ev("start: 2026-03-29T04:00\nend: 2026-03-29T05:00\ntz: Europe/Paris\n", "Tôt", "early1")
         val p = AgendaLayout.placeTimed(entries(e, from = "2026-03-01T00:00:00Z", to = "2026-04-01T00:00:00Z"), LocalDate.of(2026, 3, 29), PARIS).single()
-        assertEquals(180, p.startMin)
+        assertEquals(240, p.startMin)
+        assertEquals(300, p.endMin)
+        // 25 October 2026: 02:30 happens twice; a 01:30-03:30 meeting keeps its wall-clock place
+        val fall = ev("start: 2026-10-25T01:30\nend: 2026-10-25T03:30\ntz: Europe/Paris\n", "Nuit", "fall01")
+        val q = AgendaLayout.placeTimed(entries(fall, from = "2026-10-01T00:00:00Z", to = "2026-11-01T00:00:00Z"), LocalDate.of(2026, 10, 25), PARIS).single()
+        assertEquals(90 to 210, q.startMin to q.endMin)
     }
 
     @Test

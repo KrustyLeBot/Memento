@@ -65,6 +65,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (handleAgendaIntent(intent)) {
+            intent?.action = null // not again on configuration changes
+            return
+        }
         app.scriptorium.ui.vcardUri(intent)?.let { uri ->
             vm.contacts.startImport(uri)
             intent?.action = null
@@ -77,6 +81,37 @@ class MainActivity : ComponentActivity() {
             )
             intent.action = null // do not recreate the note on configuration changes
         }
+    }
+
+    /** Reminder notifications, widget rows and buttons, and `.ics` files opened or shared from other apps. */
+    private fun handleAgendaIntent(intent: Intent?): Boolean {
+        intent ?: return false
+        when (intent.action) {
+            ACTION_OPEN_ENTRY -> {
+                app.scriptorium.reminders.Reminders.dismiss(this, intent.getStringExtra(app.scriptorium.reminders.Reminders.EXTRA_NOTIFY_KEY))
+                vm.agenda.openExternal(
+                    intent.getStringExtra(app.scriptorium.reminders.Reminders.EXTRA_KIND),
+                    intent.getStringExtra(app.scriptorium.reminders.Reminders.EXTRA_TARGET),
+                    intent.getLongExtra(app.scriptorium.reminders.Reminders.EXTRA_START, 0L),
+                )
+                return true
+            }
+            ACTION_AGENDA_TODAY -> {
+                vm.openModule(Module.AGENDA)
+                vm.agenda.goToday()
+                return true
+            }
+            ACTION_NEW_EVENT -> {
+                vm.openModule(Module.AGENDA)
+                vm.agenda.newEvent(java.time.LocalDate.now())
+                return true
+            }
+        }
+        val uris = app.scriptorium.ui.calendarUris(intent)
+        if (uris.isEmpty()) return false
+        vm.openModule(Module.AGENDA)
+        vm.agenda.startImport(uris)
+        return true
     }
 
     private var pickTree: androidx.activity.result.ActivityResultLauncher<Uri?>? = null
@@ -165,7 +200,10 @@ class MainActivity : ComponentActivity() {
             Screen.CONTACT -> app.scriptorium.ui.ContactDetailScreen(vm)
             Screen.CONTACT_EDIT -> app.scriptorium.ui.ContactEditScreen(vm)
             Screen.CONTACT_DUPLICATES -> app.scriptorium.ui.ContactDuplicatesScreen(vm)
-                }
+            Screen.EVENT -> app.scriptorium.ui.EventDetailScreen(vm)
+            Screen.EVENT_EDIT -> vm.agenda.editor?.let { app.scriptorium.ui.EventEditorScreen(vm, it) }
+            Screen.AGENDA_CALENDARS -> app.scriptorium.ui.CalendarsScreen(vm)
+        }
     }
 
     /** Google's document scanner: camera, automatic page corners, several pages. Photos only, no gallery. */
@@ -179,6 +217,12 @@ class MainActivity : ComponentActivity() {
         GmsDocumentScanning.getClient(options).getStartScanIntent(this)
             .addOnSuccessListener { launch(IntentSenderRequest.Builder(it).build()) }
             .addOnFailureListener { vm.snack = Snack("Scanner indisponible : ${it.message}") }
+    }
+
+    companion object {
+        const val ACTION_OPEN_ENTRY = "app.scriptorium.action.OPEN_ENTRY"
+        const val ACTION_AGENDA_TODAY = "app.scriptorium.action.AGENDA_TODAY"
+        const val ACTION_NEW_EVENT = "app.scriptorium.action.NEW_EVENT"
     }
 
     private fun requestFileAccess(legacy: (String) -> Unit) {
