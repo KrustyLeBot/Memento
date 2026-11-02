@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings as AndroidSettings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -65,6 +66,7 @@ fun RecordScreen(vm: MainViewModel) {
     var mode by remember { mutableStateOf(vm.settings.gpsMode) }
     var confirmStop by remember { mutableStateOf(false) }
     var showMap by remember { mutableStateOf(false) }
+    var fullMap by remember { mutableStateOf(false) }
     var follow by remember { mutableStateOf<RouteChoice?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -101,7 +103,14 @@ fun RecordScreen(vm: MainViewModel) {
         permissions.launch(wanted.toTypedArray())
     }
 
-    Scaffold(topBar = { SuiteTopBar("Enregistrer", onBack = { vm.back() }) }) { padding ->
+    val running = live?.takeIf { !it.finished && it.sport.hasGps }
+    BackHandler(enabled = fullMap && running != null) { fullMap = false }
+    if (fullMap && running != null) {
+        LiveFullMap(
+            vm.settings, running, onExit = { fullMap = false },
+            onPauseResume = { pauseOrResume(context, running) }, onStop = { confirmStop = true },
+        )
+    } else Scaffold(topBar = { SuiteTopBar("Enregistrer", onBack = { vm.back() }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             val l = live
             if (l == null) {
@@ -149,7 +158,7 @@ fun RecordScreen(vm: MainViewModel) {
                     PreparedRoutesSection(vm)
                 }
             } else {
-                LiveView(vm, l, showMap, { showMap = it }, onStop = { confirmStop = true })
+                LiveView(vm, l, showMap, { showMap = it }, onFull = { fullMap = true }, onStop = { confirmStop = true })
             }
         }
     }
@@ -213,8 +222,15 @@ private fun SportButton(s: Sport, selected: Boolean, modifier: Modifier, onClick
     }
 }
 
+private fun pauseOrResume(context: android.content.Context, l: Live) {
+    val t = System.currentTimeMillis()
+    val gps = l.sport.hasGps
+    if (l.paused) { if (gps) RecordingService.start(context, RecordingService.ACTION_RESUME) else Recorder.resume(t) }
+    else { if (gps) RecordingService.start(context, RecordingService.ACTION_PAUSE) else Recorder.pause(t) }
+}
+
 @Composable
-private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Boolean) -> Unit, onStop: () -> Unit) {
+private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Boolean) -> Unit, onFull: () -> Unit, onStop: () -> Unit) {
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(l.paused, l.finished) {
@@ -261,18 +277,13 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
             }
             OutlinedButton(onClick = { setMap(!showMap) }) { Text(if (showMap) "Masquer la carte" else "Afficher la carte") }
             if (showMap) {
-                LiveMap(vm.settings, l, Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)))
+                LiveMap(vm.settings, l, Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)), onFull = { if (it) onFull() })
             }
         }
         Box(Modifier.weight(if (showMap) 0.001f else 1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val gps = l.sport.hasGps
             OutlinedButton(
-                onClick = {
-                    val t = System.currentTimeMillis()
-                    if (l.paused) { if (gps) RecordingService.start(context, RecordingService.ACTION_RESUME) else Recorder.resume(t) }
-                    else { if (gps) RecordingService.start(context, RecordingService.ACTION_PAUSE) else Recorder.pause(t) }
-                },
+                onClick = { pauseOrResume(context, l) },
                 modifier = Modifier.weight(1f).height(56.dp),
             ) { Text(if (l.paused) "Reprendre" else "Pause", fontSize = 16.sp) }
             Button(onClick = onStop, modifier = Modifier.weight(1f).height(56.dp)) { Text("Terminer", fontSize = 16.sp) }

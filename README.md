@@ -95,8 +95,11 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   the photo, PNG for the relief and the OpenStreetMap stand-in): the host fetches with an
   identifying User-Agent and keeps a disk cache (300 MB, least recently used purged), so what was seen once works
   offline. Where IGN has no photo (it answers 404 abroad and at sea, and a uniform white JPEG at the edge of its coverage) the
-  OpenStreetMap tile is served instead. Offline packs (Android) hold the photo up to z17 within 500 MB, estimated
-  at 22 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). `tools/mapdev.py` serves
+  OpenStreetMap tile is served instead. Offline route packs (Android) hold the photo of the route's square up to
+  z14 and, within 1.5 km of the track, up to z17, within 500 MB (z17 then the band's width then z14 give way when it
+  does not fit), estimated at 22 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). Offline, a photo tile
+  missing from the packs is cut from its nearest ancestor and enlarged, so zooming in off the band shows the
+  medium-definition photo instead of nothing (MapLibre does not overzoom a raster tile it could not get). `tools/mapdev.py` serves
   the page with these endpoints for development (`python tools/mapdev.py`, then drive `window.SMap`).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.

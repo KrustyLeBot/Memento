@@ -73,19 +73,19 @@ class TilePlanTest {
     }
 
     @Test
-    fun routePackFitsTheBudgetAtTheHighestZoomPossible() {
-        // a 10 km hike: z17 fits in 500 MB
+    fun squareAloneFitsTheBudgetAtTheHighestZoomPossible() {
+        // a 10 km hike: the square alone goes up to the mid zoom (higher zooms come from the corridor)
         val small = MapSquare.of(LON0, LAT0, LON0 + 10_000 / K_LON, LAT0 + 3000 / MapSquare.M_PER_DEG_LAT)
-        val p = TilePlans.forRoute(small)!!
-        assertEquals(17, p.orthoZooms.last)
+        val p = TilePlans.squareOnly(small)!!
+        assertEquals(TilePlans.MID_Z, p.orthoZooms.last)
         assertEquals(8, p.orthoZooms.first)
         assertEquals(6..13, p.demZooms)
         assertTrue(p.estimatedBytes <= TilePlans.ROUTE_BUDGET)
 
-        // a 150 km ride: lower zmax, still within budget, and one zoom more would not be
-        val big = MapSquare.of(LON0, LAT0, LON0 + 150_000 / K_LON, LAT0 + 20_000 / MapSquare.M_PER_DEG_LAT)
-        val q = TilePlans.forRoute(big)!!
-        assertTrue(q.orthoZooms.last in 8..16)
+        // a 200 km ride: lower zmax, still within budget, and one zoom more would not be
+        val big = MapSquare.of(LON0, LAT0, LON0 + 200_000 / K_LON, LAT0 + 20_000 / MapSquare.M_PER_DEG_LAT)
+        val q = TilePlans.squareOnly(big)!!
+        assertTrue(q.orthoZooms.last in 8..13)
         assertTrue(q.estimatedBytes <= TilePlans.ROUTE_BUDGET)
         val next = TilePlan(big, 8..q.orthoZooms.last + 1, TilePlans.DEM_ZOOMS)
         assertTrue(next.estimatedBytes > TilePlans.ROUTE_BUDGET)
@@ -93,7 +93,7 @@ class TilePlanTest {
 
     @Test
     fun continentSizedRouteIsRefused() {
-        assertNull(TilePlans.forRoute(Bbox(-10.0, 35.0, 30.0, 60.0)))
+        assertNull(TilePlans.squareOnly(Bbox(-10.0, 35.0, 30.0, 60.0)))
     }
 
     @Test

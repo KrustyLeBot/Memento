@@ -43,6 +43,7 @@ import app.scriptorium.map.OfflinePacks
 import app.scriptorium.map.Pack
 import app.scriptorium.map.Route
 import app.scriptorium.map.RouteFile
+import app.scriptorium.map.TilePlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -143,10 +144,10 @@ private fun ActivityChooser(vm: MainViewModel, onDismiss: () -> Unit, onPick: (N
 }
 
 /** Starts preparing [route] for offline use, from a background thread; problems become a snack. */
-fun prepareRoute(vm: MainViewModel, scope: CoroutineScope, route: Route, onStarted: (String) -> Unit = {}) {
+fun prepareRoute(vm: MainViewModel, scope: CoroutineScope, route: Route, plan: TilePlan? = null, onStarted: (String) -> Unit = {}) {
     scope.launch {
         try {
-            val id = withContext(Dispatchers.IO) { OfflinePacks.prepareRoute(route) }
+            val id = withContext(Dispatchers.IO) { if (plan != null) OfflinePacks.prepareRoute(route, plan) else OfflinePacks.prepareRoute(route) }
             onStarted(id)
         } catch (e: OfflinePacks.PackException) {
             vm.snack = Snack(e.message ?: "Préparation impossible")
@@ -164,7 +165,16 @@ fun PreparedRoutesSection(vm: MainViewModel) {
     val packs by OfflinePacks.packs.collectAsState()
     val progress by OfflinePacks.progress.collectAsState()
     var choosing by remember { mutableStateOf(false) }
-    val picker = rememberRoutePicker(vm) { route -> prepareRoute(vm, scope, route) }
+    var pending by remember { mutableStateOf<Pair<Route, TilePlan>?>(null) }
+    val picker = rememberRoutePicker(vm) { route ->
+        scope.launch {
+            try {
+                pending = route to withContext(Dispatchers.Default) { OfflinePacks.planRoute(route) }
+            } catch (e: OfflinePacks.PackException) {
+                vm.snack = Snack(e.message ?: "Préparation impossible")
+            }
+        }
+    }
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { OfflinePacks.refresh() } }
 
     Section("Parcours hors ligne") {
@@ -183,7 +193,27 @@ fun PreparedRoutesSection(vm: MainViewModel) {
             onSource = { s -> choosing = false; if (s == Source.FILE) picker.pickFile() else picker.pickActivity() },
         )
     }
+    pending?.let { (route, plan) ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("Préparer « ${route.name.ifBlank { "Parcours" }} »") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Taille estimée : environ ${megabytes(plan.estimatedBytes)} Mo")
+                    Text(plan.detailLabel() + ", relief et sommets sur toute la zone.")
+                    Text(
+                        "Gardé 24 h sur le téléphone, puis supprimé. Mieux vaut le télécharger en Wi-Fi.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { pending = null; prepareRoute(vm, scope, route, plan) }) { Text("Télécharger") } },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("Annuler") } },
+        )
+    }
 }
+
+private fun megabytes(b: Long) = (b + 500_000) / 1_000_000
 
 @Composable
 private fun PackRow(vm: MainViewModel, p: Pack, progress: OfflinePacks.Progress?) {
@@ -193,9 +223,11 @@ private fun PackRow(vm: MainViewModel, p: Pack, progress: OfflinePacks.Progress?
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(p.name, style = MaterialTheme.typography.bodyLarge)
-                val size = "${(progress?.bytes ?: p.bytes) / 1_000_000} Mo"
+                // a complete pack's bytes are the files on disk, summed when its download ended
+                val size = "${megabytes(if (p.complete) p.bytes else progress?.bytes ?: p.bytes)} Mo"
+                val detail = if (p.corridor != null) " · HD le long du tracé" else ""
                 val state = when {
-                    p.complete -> (if (p.has3d) "2D + 3D" else "2D seulement") + " · $size"
+                    p.complete -> (if (p.has3d) "2D + 3D" else "2D seulement") + detail + " · $size"
                     running -> "Téléchargement… $size"
                     else -> "Interrompu · $size"
                 }

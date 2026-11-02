@@ -17,6 +17,11 @@ data class Pack(
     val complete: Boolean,
     /** The pack carries the route it was made for (`route.json`), so it can be followed. */
     val hasRoute: Boolean,
+    /**
+     * Route packs from the corridor builds: the band along the track holding the zooms above [zmax]. [zmax] stays the
+     * top zoom over the whole [square], so a manifest without it (older builds, zone packs) reads as before.
+     */
+    val corridor: Corridor? = null,
 ) {
     val has3d: Boolean get() = KIND_DEM in kinds && !obsolete
 
@@ -27,7 +32,7 @@ data class Pack(
     fun expired(now: Long): Boolean = now >= expiresAt()
 
     /** The tiles this pack downloads. */
-    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null)
+    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor)
 
     fun toJson(): String = buildString {
         append('{')
@@ -40,6 +45,16 @@ data class Pack(
         append(",\"bytes\":").append(bytes)
         append(",\"complete\":").append(complete)
         append(",\"route\":").append(hasRoute)
+        corridor?.let { c ->
+            append(",\"corridor\":{\"buffer\":").append(Json.num(c.bufferM, 1))
+            append(",\"zooms\":[").append(c.zooms.first).append(',').append(c.zooms.last).append(']')
+            append(",\"line\":[")
+            for (i in c.lons.indices) {
+                if (i > 0) append(',')
+                append(Json.num(c.lons[i], 6)).append(',').append(Json.num(c.lats[i], 6))
+            }
+            append("]}")
+        }
         append('}')
     }
 
@@ -62,6 +77,17 @@ data class Pack(
                 bytes = o["bytes"].asDouble()?.toLong() ?: 0L,
                 complete = o["complete"] as? Boolean ?: false,
                 hasRoute = o["route"] as? Boolean ?: false,
+                corridor = o["corridor"].asMap()?.let(::parseCorridor),
+            )
+        }
+
+        private fun parseCorridor(c: Map<String, Any?>): Corridor? {
+            val z = c["zooms"].asList()?.mapNotNull { it.asDouble()?.toInt() }?.takeIf { it.size == 2 } ?: return null
+            val line = c["line"].asList()?.mapNotNull { it.asDouble() } ?: return null
+            if (line.size < 2 || line.size % 2 != 0) return null
+            return Corridor(
+                line.filterIndexed { i, _ -> i % 2 == 0 }, line.filterIndexed { i, _ -> i % 2 == 1 },
+                c["buffer"].asDouble() ?: return null, z[0]..z[1],
             )
         }
 
