@@ -147,6 +147,15 @@ def test_html_and_svg_files_are_downloaded_never_rendered(client, data_dir):
     assert response.headers["content-type"] == "application/octet-stream"
 
 
+def test_a_drawing_shows_in_an_img_but_downloads_sandboxed_when_opened(client, data_dir):
+    (data_dir / "drawings").mkdir()
+    (data_dir / "drawings" / "dessin-aaaaaa.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>x()</script></svg>')
+    response = client.get("/api/files/drawings/dessin-aaaaaa.svg")
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert "sandbox" in response.headers["content-security-policy"]
+
+
 def test_pdf_opens_in_the_browser(client, data_dir):
     (data_dir / "attachments").mkdir()
     (data_dir / "attachments" / "scan.pdf").write_bytes(b"%PDF-1.4")

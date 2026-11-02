@@ -112,8 +112,9 @@ class Common:
     def _activity_settings(self) -> dict:
         found = read_versioned(self.data.path(SETTINGS_PATH))
         settings = ActivitySettings.parse(found[0].decode("utf-8", "replace")) if found else ActivitySettings()
-        return {"refine_altitude": settings.refine_altitude, "totals": [s.key for s in settings.totals],
-                "version": found[1] if found else None}
+        return {"refine_altitude": settings.refine_altitude, "totals": [s.key for s in Sport if s in settings.totals],
+                "version": found[1] if found else None,
+                "sports": [{"key": s.key, "label": s.label} for s in Sport]}
 
     async def get_activity_settings(self, request: Request) -> JSONResponse:
         return JSONResponse(await self.data.read(self._activity_settings))

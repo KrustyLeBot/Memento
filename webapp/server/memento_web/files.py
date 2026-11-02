@@ -107,4 +107,6 @@ def file_response(path: Path, download: bool = False) -> FileResponse:
         "Content-Security-Policy": PDF_CSP if mime == "application/pdf" and inline else FILE_CSP,
         "Cache-Control": "private, no-cache",
     }
-    return FileResponse(path, media_type=mime if inline else "application/octet-stream", headers=headers)
+    # An SVG keeps its type so <img> can show it (drawings), but opened directly it downloads, sandboxed.
+    typed = inline or mime == "image/svg+xml"
+    return FileResponse(path, media_type=mime if typed else "application/octet-stream", headers=headers)

@@ -235,7 +235,8 @@ class Auth:
         session = self.session_of(request)
         if session is None:
             raise ApiError(401, "Session expirée, reconnectez-vous")
-        return JSONResponse({"user": self.config.user, "expires": int(session.expires * 1000)})
+        return JSONResponse({"user": self.config.user, "expires": int(session.expires * 1000),
+                             "build": os.environ.get("MEMENTO_BUILD", "dev")})
 
 
 def _duration(seconds: int) -> str:
