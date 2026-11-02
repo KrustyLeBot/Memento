@@ -27,9 +27,21 @@ class NoteRepository(private val context: Context, private val settings: Setting
         _activitySettings.value = s
     }
 
+    /** `agenda/`: event files ([app.scriptorium.agenda.AgendaStore.scan]), with the files that could not be read. */
+    private val _agenda = MutableStateFlow(app.scriptorium.agenda.AgendaScan())
+    val agenda: StateFlow<app.scriptorium.agenda.AgendaScan> = _agenda
+
+    /** `agenda/calendars.json`, shared with the PC through the sync. */
+    private val _calendars = MutableStateFlow(app.scriptorium.agenda.CalendarSettings())
+    val calendars: StateFlow<app.scriptorium.agenda.CalendarSettings> = _calendars
+
     private val parsed = HashMap<String, Pair<Long, Note>>() // path -> (lastModified, note)
     private var observers: List<FileObserver> = emptyList()
     var fs: Fs = buildFs(settings.storage)
+        private set
+
+    /** The agenda data layer on the current storage (rebuilt with it). */
+    var agendaStore = app.scriptorium.agenda.AgendaStore(fs)
         private set
 
     private fun buildFs(config: StorageConfig): Fs = when (config) {
@@ -39,9 +51,12 @@ class NoteRepository(private val context: Context, private val settings: Setting
 
     fun reconfigure() {
         fs = buildFs(settings.storage)
+        agendaStore = app.scriptorium.agenda.AgendaStore(fs)
         parsed.clear()
         _notes.value = emptyList()
         _activities.value = emptyList()
+        _agenda.value = app.scriptorium.agenda.AgendaScan()
+        _calendars.value = app.scriptorium.agenda.CalendarSettings()
     }
 
     /** Full rescan: reads only files whose modification time changed. */
@@ -80,6 +95,8 @@ class NoteRepository(private val context: Context, private val settings: Setting
         fs.readText(app.scriptorium.activity.ActivitySettings.PATH)?.let { _activitySettings.value = app.scriptorium.activity.ActivitySettings.parse(it) }
         _notes.value = result
         _activities.value = acts
+        _agenda.value = agendaStore.scan()
+        _calendars.value = agendaStore.calendars()
     }
 
     fun startWatching() {
@@ -89,15 +106,20 @@ class NoteRepository(private val context: Context, private val settings: Setting
             FileObserver.MOVED_FROM or FileObserver.MOVED_TO or FileObserver.CLOSE_WRITE
         val dir = fileFs.root
         if (!dir.isDirectory) return
-        fun observe(d: java.io.File): FileObserver = object : FileObserver(d.absolutePath, mask) {
+        fun observe(d: java.io.File, accept: (String) -> Boolean = ::isNoteFile): FileObserver = object : FileObserver(d.absolutePath, mask) {
             override fun onEvent(event: Int, path: String?) {
-                if (path != null && isNoteFile(path)) onExternalChange?.invoke()
+                if (path != null && accept(path)) onExternalChange?.invoke()
             }
         }.also { it.startWatching() }
+        // agenda/ and its year folders (a year folder created later is watched from the next startWatching)
+        val agendaDir = java.io.File(dir, app.scriptorium.agenda.EventFormat.AGENDA_DIR)
+        val agendaDirs = listOf(agendaDir) + agendaDir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }
         observers = listOfNotNull(
             observe(dir),
             java.io.File(dir, ACTIVITIES_DIR).takeIf { it.isDirectory }?.let { observe(it) },
-        )
+        ) + agendaDirs.filter { it.isDirectory }.map { d ->
+            observe(d) { name -> !isTempName(name) && (isNoteFile(name) || name.endsWith(".json") || '.' !in name) }
+        }
     }
 
     fun stopWatching() {
@@ -120,7 +142,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
     fun save(note: Note): Note {
         var n = note
         if (n.path.isEmpty()) {
-            val ids = (_notes.value + _activities.value).map { it.id }.toSet()
+            val ids = (_notes.value + _activities.value).map { it.id }.toSet() + _agenda.value.events.map { it.id }
             var id = n.id
             while (id in ids || id.isEmpty()) id = NoteFormat.generateId()
             n = n.copy(id = id, path = NoteFormat.fileNameFor(n.title, id), hasId = true)
@@ -135,6 +157,34 @@ class NoteRepository(private val context: Context, private val settings: Setting
     }
 
     fun readRaw(path: String): String? = fs.readText(path)
+
+    // ---- agenda ----
+
+    /** Writes an event (a new one gets its id and `agenda/<year>/` path) and updates [agenda]. */
+    fun saveEvent(event: app.scriptorium.agenda.Event): app.scriptorium.agenda.Event {
+        val taken = (_notes.value + _activities.value).map { it.id }.toSet()
+        val saved = agendaStore.save(event, taken)
+        val scan = _agenda.value
+        _agenda.value = scan.copy(events = scan.events.filter { it.path != saved.path } + saved)
+        return saved
+    }
+
+    fun deleteEvent(event: app.scriptorium.agenda.Event) {
+        agendaStore.delete(event)
+        val scan = _agenda.value
+        _agenda.value = scan.copy(events = scan.events.filter { it.path != event.path })
+    }
+
+    fun saveCalendars(settings: app.scriptorium.agenda.CalendarSettings) {
+        agendaStore.saveCalendars(settings)
+        _calendars.value = settings
+    }
+
+    /** After a bulk change (import, undo): re-reads `agenda/` and `calendars.json`. */
+    fun rescanAgenda() {
+        _agenda.value = agendaStore.scan()
+        _calendars.value = agendaStore.calendars()
+    }
 
     fun delete(note: Note) {
         fs.delete(note.path)

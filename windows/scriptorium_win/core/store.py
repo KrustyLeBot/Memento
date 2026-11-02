@@ -10,6 +10,8 @@ from . import atomic
 from . import elevation, fit, gpx
 from . import note as fmt
 from .activity import ActivityInfo
+from .agenda.model import AGENDA_DIR
+from .agenda.store import AgendaStore, DirFs
 from .analysis import analyze
 from .note import Note
 from .settings import PATH as SETTINGS_PATH, ActivitySettings
@@ -39,6 +41,7 @@ class Store:
     def __init__(self, root: Path):
         self.root = Path(root)
         self._cache: dict[str, tuple[int, Note]] = {}  # path -> (mtime_ns, note)
+        self.agenda = AgendaStore(DirFs(self.root))  # agenda/: events, calendars.json (core/agenda)
 
     # ---- reading ----
 
@@ -127,7 +130,17 @@ class Store:
                           for e in os.scandir(self.root / ACTIVITIES_DIR) if e.is_file() and not e.name.startswith("."))
         except OSError:
             acts = []
-        return tuple(files), tuple(acts)
+        agenda = []
+        try:
+            for sub in os.scandir(self.root / AGENDA_DIR):
+                if sub.is_dir() and not sub.name.startswith("."):
+                    agenda += [(f"{sub.name}/{e.name}", e.stat().st_mtime_ns, e.stat().st_size)
+                               for e in os.scandir(sub.path) if e.is_file() and not e.name.startswith(".")]
+                elif sub.is_file() and not sub.name.startswith("."):
+                    agenda.append((sub.name, sub.stat().st_mtime_ns, sub.stat().st_size))
+        except OSError:
+            pass
+        return tuple(files), tuple(acts), tuple(sorted(agenda))
 
     def labels(self) -> list[str]:
         return sorted({lbl for n in self.scan() for lbl in n.labels}, key=fmt.fold)

@@ -83,6 +83,47 @@ week, the month and overall, then the latest activities (walking, cycling, elect
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
 
+## Agenda
+
+Events live in `agenda/<year of the start>/<slug>-<id6>.md` (path fixed at creation), one note per event: the
+description is the note body. Agenda keys follow the usual note keys in the frontmatter:
+
+```yaml
+start: 2026-11-12T14:30        # local wall time; a date alone (2026-11-12) means all-day
+end: 2026-11-12T15:15          # optional; all-day: LAST day included
+tz: Europe/Paris               # IANA zone of start/end; absent = floating (follows the device zone)
+calendar: perso                # id in agenda/calendars.json; unknown or absent = the default calendar
+rrule: FREQ=WEEKLY;BYDAY=TH    # RFC 5545 without "RRULE:"
+exdate: [2026-11-19T14:30]     # skipped occurrences, same form as start (a date skips that whole day)
+alerts: [-15m, -1d]            # offsets from the start: m, h, d, w
+location: 12 rue de la Paix
+status: confirmed              # confirmed | tentative | cancelled (hidden)
+uid: 0a1b2c@google.com         # ICS UID (re-import key); <id>@scriptorium for events made here
+recurrence_of: k3f9a2          # an edited occurrence of a series (its own file)…
+recurrence_at: 2026-11-19T14:30  # …and the original start of that occurrence (also in the series' exdate)
+import: 20261101T092000-x1y2z3 # set on every file an ICS import created ("Annuler l'import" deletes them)
+ical_hash: 1a2b3c4d            # hash of the body the import wrote (a re-import keeps a description edited here)
+ical_extra:                    # ICS properties the app does not model, verbatim, written back on export
+  - "CATEGORIES:Santé"
+```
+
+- Any regular note with `start` (and optionally `end`, `tz`, `alerts`) is a **dated note**; a note with `reminder`
+  shows at that time with an alert. Activities and contacts' birthdays are layers computed from their own files.
+- `agenda/calendars.json` (synced settings): `{"calendars": [{"id", "name", "color", "visible"}], "default": "perso",
+  "layers": {"activities": {...}, "notes": {...}, "birthdays": {...}}}`; colours come from a fixed palette of 12, each
+  at least 3:1 against white and against #121212.
+- Recurrence is expanded in the wall time of the event's zone (biweekly on Android, `dateutil` on Windows), then
+  converted to instants: a time in the spring-forward gap moves forward by the gap (02:30 → 03:30), a repeated time
+  takes the first one. `DTSTART` always counts as the first occurrence (RFC 5545). At most 10 000 occurrences per
+  window. All-day entries are dates and never move.
+- ICS import (`.ics` or a `.zip` of them): preview, target calendar, "depuis le …" cut-off, duplicates by UID (skip,
+  update, keep both), undo. `TZID`s are IANA names, Windows names (CLDR table) or embedded `VTIMEZONE`s recognised
+  from their rules; an unknown zone falls back to the device zone and is counted. A single UTC event takes the
+  device zone; a UTC **series** keeps `tz: UTC` so it does not shift with daylight saving. Overrides
+  (`RECURRENCE-ID`) become exception files; HTML descriptions become text; attendees are listed as text.
+- Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used; same bytes on Android
+  and Windows. Shared test vectors (synthetic Google, Proton and Outlook shapes): `testdata/agenda/`.
+
 ## Status
 
 Milestones 1–2 and 6 (partly) are implemented: text notes, checklists (drag to reorder,
