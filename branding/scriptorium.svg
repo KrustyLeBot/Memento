@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="18 18 72 72">
+  <!-- Scriptorium: a dip-pen nib engraved with an S, gold ring on the breather hole, emerald field.
+       Drawn on the Android adaptive-icon grid (108 units, visible 72-unit square); the launcher layers in
+       app/src/main/res/drawable/ic_launcher_*.xml and windows/tools/make_icon.py are drawn from it. -->
+  <title>Scriptorium</title>
+  <defs>
+    <linearGradient id="field" gradientUnits="userSpaceOnUse" x1="10" y1="0" x2="98" y2="108">
+      <stop offset="0" stop-color="#41C97A"/><stop offset="1" stop-color="#0A5E3A"/>
+    </linearGradient>
+    <linearGradient id="nib" gradientUnits="userSpaceOnUse" x1="36.5" y1="0" x2="71.5" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.5" stop-color="#FFFFFF"/><stop offset="1" stop-color="#D3F0E1"/>
+    </linearGradient>
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="0" y1="30" x2="0" y2="70">
+      <stop offset="0" stop-color="#FFD54F"/><stop offset="1" stop-color="#E8930A"/>
+    </linearGradient>
+  </defs>
+  <rect id="background" x="18" y="18" width="72" height="72" rx="16" fill="url(#field)"/>
+  <g id="foreground" transform="translate(54 54.7) scale(0.96) translate(-54 -55.5)">
+    <path id="shadow" transform="translate(1.4 2.0)" fill="#05331F" fill-opacity="0.3" d="M36.5,36 Q36.5,33 39.5,31.8 Q54,26 68.5,31.8 Q71.5,33 71.5,36 V46 C71.5,55 67.5,61 63.0,67 C59.0,72.5 55.4,76 54.7,84 V67.11 A2.7,2.7 0 1 0 53.3,67.11 V84 C52.6,76 49.0,72.5 45.0,67 C40.5,61 36.5,55 36.5,46 Z"/>
+    <path id="nib-body" fill="url(#nib)" d="M36.5,36 Q36.5,33 39.5,31.8 Q54,26 68.5,31.8 Q71.5,33 71.5,36 V46 C71.5,55 67.5,61 63.0,67 C59.0,72.5 55.4,76 54.7,84 V67.11 A2.7,2.7 0 1 0 53.3,67.11 V84 C52.6,76 49.0,72.5 45.0,67 C40.5,61 36.5,55 36.5,46 Z"/>
+    <path id="initial" fill="#0A5E3A" d="M46.87,41.82 L46.84,42.57 L47.02,43.25 L47.39,43.89 L47.92,44.47 L48.60,45.03 L49.67,45.71 L50.90,46.37 L55.19,48.46 L56.39,49.16 L57.19,49.72 L58.08,50.53 L58.58,51.20 L58.82,51.68 L58.98,52.18 L59.05,52.99 L58.97,53.58 L58.66,54.61 L58.20,55.54 L57.74,56.22 L56.33,56.63 L54.71,56.91 L53.50,57.03 L51.92,57.04 L50.42,56.90 L49.36,56.70 L48.08,56.29 L47.23,55.89 L46.50,55.40 L45.89,54.83 L44.55,55.66 L44.88,56.41 L45.33,57.08 L45.89,57.66 L46.55,58.15 L47.30,58.57 L48.11,58.89 L48.98,59.13 L49.88,59.29 L51.12,59.35 L52.05,59.30 L52.97,59.16 L53.86,58.93 L54.70,58.60 L55.59,58.13 L57.14,57.58 L58.12,57.09 L58.77,56.70 L59.90,55.81 L60.72,54.93 L61.45,54.44 L62.25,53.79 L62.95,53.04 L63.36,52.49 L63.86,51.59 L64.12,50.93 L64.31,50.24 L64.39,49.65 L64.37,49.10 L64.26,48.59 L64.06,48.10 L63.61,47.41 L63.22,46.98 L62.53,46.38 L61.15,45.46 L59.56,44.62 L55.61,42.70 L54.73,42.21 L53.94,41.69 L53.07,40.94 L52.59,40.34 L52.28,39.69 L52.16,38.99 L52.21,38.48 L52.36,37.93 L52.58,37.37 L52.89,36.80 L54.83,36.38 L55.89,36.25 L57.28,36.16 L58.28,36.16 L59.54,36.25 L60.68,36.42 L61.67,36.68 L62.48,37.01 L62.94,37.30 L63.21,37.14 L63.23,37.16 L64.28,36.47 L64.17,36.15 L63.91,35.70 L63.53,35.30 L63.06,34.93 L62.30,34.52 L61.42,34.20 L60.46,33.97 L59.44,33.85 L58.40,33.83 L57.37,33.94 L56.38,34.17 L55.69,34.42 L54.66,35.00 L53.70,35.30 L52.55,35.79 L51.74,36.27 L51.22,36.65 L50.55,37.27 L50.04,37.88 L48.85,38.68 L48.03,39.49 L47.52,40.19 L47.24,40.71 L47.02,41.26Z"/>
+    <path id="ring" fill="none" stroke="url(#gold)" stroke-width="1.4" d="M50.05,64.5 a3.95,3.95 0 1,0 7.90,0 a3.95,3.95 0 1,0 -7.90,0"/>
+  </g>
+</svg>
