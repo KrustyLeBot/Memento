@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.ui.Modifier
 import app.scriptorium.ui.AgendaScreen
@@ -68,9 +70,11 @@ class MainActivity : ComponentActivity() {
         // Reopened from the recents after the task was left with back: Android hands the first intent again
         // (the shared text, the .ics...), which was already handled.
         if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
-        if (intent.action == ACTION_OPEN_RECORD) {
-            vm.leaveNoteEditor()
+        if (intent.action == ACTION_OPEN_RECORD || intent.action == ACTION_MAP_DOWNLOADS) {
+            vm.leaveEditors()
             vm.openRecord()
+            // the record screen lists the offline maps ("Itinéraires préparés") and their downloads
+            if (intent.action == ACTION_MAP_DOWNLOADS) vm.showPreparedRoutes = true
             intent.action = null
             return
         }
@@ -79,7 +83,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         app.scriptorium.ui.vcardUri(intent)?.let { uri ->
-            vm.leaveNoteEditor()
+            vm.leaveEditors()
             vm.contacts.startImport(uri)
             intent?.action = null
             return
@@ -96,7 +100,7 @@ class MainActivity : ComponentActivity() {
     /** Reminder notifications, widget rows and buttons, and `.ics` files opened or shared from other apps. */
     private fun handleAgendaIntent(intent: Intent?): Boolean {
         intent ?: return false
-        if (intent.action in listOf(ACTION_OPEN_ENTRY, ACTION_AGENDA_TODAY, ACTION_NEW_EVENT)) vm.leaveNoteEditor()
+        if (intent.action in listOf(ACTION_OPEN_ENTRY, ACTION_AGENDA_TODAY, ACTION_NEW_EVENT)) vm.leaveEditors()
         when (intent.action) {
             ACTION_OPEN_ENTRY -> {
                 app.scriptorium.reminders.Reminders.dismiss(this, intent.getStringExtra(app.scriptorium.reminders.Reminders.EXTRA_NOTIFY_KEY))
@@ -120,7 +124,7 @@ class MainActivity : ComponentActivity() {
         }
         val uris = app.scriptorium.ui.calendarUris(intent)
         if (uris.isEmpty()) return false
-        vm.leaveNoteEditor()
+        vm.leaveEditors()
         vm.openModule(Module.AGENDA)
         vm.agenda.startImport(uris)
         return true
@@ -169,7 +173,8 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 // the map page loads once in the background, so the first map opens at once
                 delay(1500)
-                MapHost.warmUp(applicationContext, dark, vm.settings.map3d)
+                // only the Activités module shows maps: hidden, the WebView is not worth its memory
+                if (Module.ACTIVITIES !in vm.hiddenModules) MapHost.warmUp(applicationContext, dark, vm.settings.map3d)
             }
             BackHandler(enabled = vm.screen != Screen.LIST || vm.query.isNotEmpty() || vm.labelFilter != null) {
                 vm.back()
@@ -184,10 +189,16 @@ class MainActivity : ComponentActivity() {
                 LegacyImportDialog(vm)
                 val module = vm.screen.module
                 if (module != null || vm.screen == Screen.SETTINGS) {
-                    Column(Modifier.fillMaxSize()) {
+                    // The keyboard (search fields of the lists) lifts the screen and hides the bar, so the
+                    // results and the FAB stay above it.
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    val typing = WindowInsets.isImeVisible
+                    Column(Modifier.fillMaxSize().imePadding()) {
                         // The bar takes the navigation-bar inset; screens above must not pad for it again.
                         Box(Modifier.weight(1f).consumeWindowInsets(WindowInsets.navigationBars)) { Screens() }
-                        ModuleBar(vm.visibleModules, module, onSelect = { vm.openModule(it) }, onSettings = { vm.openSettings() })
+                        // a hidden module opened by a widget or a notification shows in the bar while it is open
+                        val modules = Module.entries.filter { it !in vm.hiddenModules || it == module }
+                        if (!typing) ModuleBar(modules, module, onSelect = { vm.openModule(it) }, onSettings = { vm.openSettings() })
                     }
                 } else {
                     Screens()
@@ -236,6 +247,7 @@ class MainActivity : ComponentActivity() {
         const val ACTION_AGENDA_TODAY = "app.scriptorium.action.AGENDA_TODAY"
         const val ACTION_NEW_EVENT = "app.scriptorium.action.NEW_EVENT"
         const val ACTION_OPEN_RECORD = "app.scriptorium.action.OPEN_RECORD"
+        const val ACTION_MAP_DOWNLOADS = "app.scriptorium.action.MAP_DOWNLOADS"
     }
 
     private fun requestFileAccess(legacy: (String) -> Unit) {

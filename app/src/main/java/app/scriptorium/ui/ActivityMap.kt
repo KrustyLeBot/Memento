@@ -115,7 +115,7 @@ fun ActivityMapView(settings: Settings, detail: ActivityDetail, full: Boolean, o
 /** Says, discreetly, why the map is flat. */
 @Composable
 fun OfflineBadge(modifier: Modifier = Modifier) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), modifier = modifier) {
+    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), modifier = modifier) {
         Text(
             "Hors ligne : vue 2D", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),

@@ -6,6 +6,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import app.scriptorium.Note
+import app.scriptorium.DraftCodec
+import app.scriptorium.DraftFiles
+import app.scriptorium.EventEditorDraft
 import app.scriptorium.NoteRepository
 import app.scriptorium.Screen
 import app.scriptorium.Snack
@@ -42,9 +45,8 @@ sealed class EditMode {
 }
 
 /** The event editor: the file being edited, how to write it, and the fields (Compose state). */
-class EventEditor(val mode: EditMode, val base: Event, draft: EventDraft) {
+class EventEditor(val mode: EditMode, val base: Event, draft: EventDraft, val initial: EventDraft = draft) {
     var draft by mutableStateOf(draft)
-    val initial = draft
     val changed: Boolean get() = draft != initial
 }
 
@@ -275,8 +277,106 @@ class AgendaController(
     }
 
     fun cancelEditor() {
-        editor = null
+        closeEditorState()
         navigate(editorReturn)
+    }
+
+    private fun closeEditorState() {
+        editor = null
+        drafts.clear(drafts.event)
+    }
+
+    // ---- drafts (process death, leaving for a notification or a widget) ----
+
+    private val drafts = DraftFiles(app.filesDir)
+
+    /** On pause: what the open editor holds goes to a private file, so a killed process gives it back. */
+    fun keepDraft() {
+        val ed = editor
+        if (ed == null || !ed.changed) { drafts.clear(drafts.event); return }
+        val d = when (val m = ed.mode) {
+            EditMode.New -> EventEditorDraft("new", draft = ed.draft, initial = ed.initial)
+            EditMode.File -> EventEditorDraft("file", basePath = ed.base.path, draft = ed.draft, initial = ed.initial)
+            is EditMode.Occurrence -> EventEditorDraft(
+                "occurrence", seriesId = m.series.id, recurrenceAt = ed.base.recurrenceAt, draft = ed.draft, initial = ed.initial,
+            )
+        }
+        try {
+            drafts.write(drafts.event, DraftCodec.encodeEvent(d))
+        } catch (e: java.io.IOException) {
+            android.util.Log.w("AgendaController", "draft not kept", e)
+        }
+    }
+
+    /** After a restart, once the folder was read: the editor left open when the process died, if its event still exists. */
+    fun restoreDraft(): Boolean {
+        if (editor != null) return false
+        val text = drafts.read(drafts.event) ?: return false
+        drafts.clear(drafts.event)
+        val d = DraftCodec.decodeEvent(text) ?: return false
+        val events = repo.agenda.value.events
+        val (mode, base) = when (d.mode) {
+            "new" -> EditMode.New to EventFormat.newEvent("", d.draft.start)
+            "file" -> EditMode.File to (events.firstOrNull { it.path == d.basePath } ?: return false)
+            "occurrence" -> {
+                val series = events.firstOrNull { it.id == d.seriesId } ?: return false
+                val at = d.recurrenceAt ?: return false
+                EditMode.Occurrence(series) to repo.agendaStore.makeException(series, at, null)
+            }
+            else -> return false
+        }
+        editorReturn = Screen.AGENDA
+        editor = EventEditor(mode, base, d.draft, d.initial)
+        return true
+    }
+
+    /**
+     * A notification, a widget or a shared file takes the user elsewhere while the editor is open: what can be
+     * saved is saved; a draft that cannot be (end before start, new event without a title, sync running) stays
+     * in memory and the snackbar brings it back.
+     */
+    fun leaveEditor() {
+        val ed = editor ?: return
+        if (!ed.changed) return closeEditorState()
+        val problem = ed.draft.problem()
+            ?: (if (ed.draft.title.isBlank() && ed.mode == EditMode.New) "sans titre" else null)
+            ?: (if (syncing()) "synchronisation en cours" else null)
+        if (problem != null) {
+            say(Snack("Événement non enregistré ($problem)", action = "Reprendre") { navigate(Screen.EVENT_EDIT) })
+            return
+        }
+        closeEditorState()
+        scope.launch {
+            try {
+                write(ed)
+                say(Snack("Événement enregistré"))
+            } catch (e: Exception) {
+                editor = ed
+                say(Snack("Échec de l'enregistrement : ${e.message}", action = "Reprendre") { navigate(Screen.EVENT_EDIT) })
+            }
+        }
+    }
+
+    private suspend fun write(ed: EventEditor): Event {
+        val d = ed.draft
+        return withContext(io) {
+            when (val m = ed.mode) {
+                EditMode.New -> repo.saveEvent(d.applyTo(ed.base))
+                EditMode.File -> {
+                    val updated = d.applyTo(ed.base)
+                    val out = repo.saveEvent(updated.withNote { it.copy(updated = System.currentTimeMillis()) })
+                    if (ed.base.isSeries) retimeExceptions(ed.base, out)
+                    out
+                }
+                is EditMode.Occurrence -> {
+                    val series = event(m.series.id) ?: m.series
+                    val exc = d.applyTo(ed.base).copy(rrule = null)
+                    val (_, saved) = repo.agendaStore.saveException(series, exc)
+                    repo.rescanAgenda()
+                    saved
+                }
+            }
+        }
     }
 
     /** Writes the editor; [thenDescription] opens the note editor on the saved event right after. */
@@ -287,25 +387,8 @@ class AgendaController(
         if (d.title.isBlank() && ed.mode == EditMode.New && !thenDescription) return say(Snack("Donne un titre à l'événement"))
         scope.launch {
             try {
-                val saved = withContext(io) {
-                    when (val m = ed.mode) {
-                        EditMode.New -> repo.saveEvent(d.applyTo(ed.base))
-                        EditMode.File -> {
-                            val updated = d.applyTo(ed.base)
-                            val out = repo.saveEvent(updated.withNote { it.copy(updated = System.currentTimeMillis()) })
-                            if (ed.base.isSeries) retimeExceptions(ed.base, out)
-                            out
-                        }
-                        is EditMode.Occurrence -> {
-                            val series = event(m.series.id) ?: m.series
-                            val exc = d.applyTo(ed.base).copy(rrule = null)
-                            val (_, saved) = repo.agendaStore.saveException(series, exc)
-                            repo.rescanAgenda()
-                            saved
-                        }
-                    }
-                }
-                editor = null
+                val saved = write(ed)
+                closeEditorState()
                 // a whole series edited from one of its occurrences stays on that occurrence when it still exists
                 if (!(ed.mode == EditMode.File && ed.base.isSeries && detailId == saved.id)) detailAt = startInstant(saved)
                 detailId = saved.id

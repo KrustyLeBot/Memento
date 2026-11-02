@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,6 +71,9 @@ fun agendaColor(hex: String?): Color = try {
     Color(0xFF78858F)
 }
 
+/** The calendar's colour as the background of white text (darkened when needed, see [app.scriptorium.agenda.ChipColor]). */
+fun agendaChipColor(hex: String?): Color = Color(app.scriptorium.agenda.ChipColor.behindWhiteText(agendaColor(hex).toArgb()))
+
 /** The system's 12/24 h choice. */
 @Composable
 fun is24h(): Boolean = android.text.format.DateFormat.is24HourFormat(LocalContext.current)
@@ -92,7 +96,7 @@ fun entryTitle(e: Entry): String = listOfNotNull(entryIcon(e), e.title.ifBlank {
 /** A filled block in the entry's colour: title, then the time line and the second line (place, "3/5"…). */
 @Composable
 fun EntryChip(e: Entry, time: String?, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val bg = agendaColor(e.color)
+    val bg = agendaChipColor(e.color)
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(bg).clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
