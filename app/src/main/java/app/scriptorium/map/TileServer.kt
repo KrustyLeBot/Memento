@@ -16,6 +16,9 @@ import java.net.URL
 /** One HTTP answer, body read in full. */
 class HttpResult(val code: Int, val contentType: String?, val body: ByteArray)
 
+/** A fetched tile: [key] says what it really is (an aerial-photo request answered by OpenStreetMap is an "osm" PNG). */
+class FetchedTile(val key: TileKey, val bytes: ByteArray)
+
 /**
  * Serves the map page and its data from the app's own origin (`appassets.androidplatform.net`): the page
  * from the APK assets, tiles from the offline packs, then the browsing cache, then the network, and the
@@ -71,35 +74,38 @@ object TileServer {
 
     private fun tile(key: TileKey): WebResourceResponse {
         // the file can vanish between the lookup and the open: a cache trim, an expired pack deleted
-        val local = (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }
-        if (local != null) return png(local)
+        (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }?.let { return image(key.mime, it) }
+        if (key.kind == TileKey.KIND_ORTHO) {
+            val osm = key.fallback()
+            cache.get(osm.path)?.let { openOrNull(it) }?.let { return image(osm.mime, it) }
+        }
         if (!NetState.online.value) return notFound()
-        val bytes = fetch(key, allowOsm = true) ?: return notFound()
-        cache.put(key.path, bytes)
-        return png(ByteArrayInputStream(bytes))
+        val got = fetch(key, allowOsm = true) ?: return notFound()
+        cache.put(got.key.path, got.bytes)
+        return image(got.key.mime, ByteArrayInputStream(got.bytes))
     }
 
     /**
      * A tile from the network; null when no source has one there. [allowOsm] false for the offline packs:
      * the OSM tile policy forbids bulk downloads, so only browsing falls back to it.
      */
-    fun fetch(key: TileKey, allowOsm: Boolean): ByteArray? {
-        if (key.kind == "dem") {
+    fun fetch(key: TileKey, allowOsm: Boolean): FetchedTile? {
+        if (key.kind == TileKey.KIND_DEM) {
             val r = get(TileSources.dem(key.z, key.x, key.y))
             if (r.code == 404 || r.code == 403) return null
             if (r.code != 200 || r.body.isEmpty()) throw IOException("Relief : HTTP ${r.code}")
-            return r.body
+            return FetchedTile(key, r.body)
         }
         val ign = get(TileSources.ign(key.z, key.x, key.y))
-        if (!TileSources.ignHasNoTile(ign.code, ign.contentType, ign.body.size)) {
-            if (ign.code != 200) throw IOException("Plan IGN : HTTP ${ign.code}")
-            return ign.body
+        if (!TileSources.ignHasNoTile(ign.code, ign.contentType, ign.body)) {
+            if (ign.code != 200) throw IOException("Photo IGN : HTTP ${ign.code}")
+            return FetchedTile(key, ign.body)
         }
         if (!allowOsm) return null
         val osm = get(TileSources.osm(key.z, key.x, key.y))
         if (osm.code == 404) return null
         if (osm.code != 200 || osm.body.isEmpty()) throw IOException("OpenStreetMap : HTTP ${osm.code}")
-        return osm.body
+        return FetchedTile(key.fallback(), osm.body)
     }
 
     // ---- peaks ----
@@ -169,7 +175,7 @@ object TileServer {
         }
     }
 
-    private fun png(stream: java.io.InputStream) = WebResourceResponse("image/png", null, 200, "OK", headers(), stream)
+    private fun image(mime: String, stream: java.io.InputStream) = WebResourceResponse(mime, null, 200, "OK", headers(), stream)
 
     private fun json(text: String) =
         WebResourceResponse("application/json", "utf-8", 200, "OK", headers(), ByteArrayInputStream(text.toByteArray()))

@@ -8,6 +8,7 @@ Tiles are cached under $TMPDIR/scriptorium-map-dev. Standard library only."""
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import urllib.error
@@ -33,18 +34,22 @@ def get(url: str) -> tuple[int, str, bytes]:
         return e.code, e.headers.get("Content-Type", ""), e.read()
 
 
-def tile(t: mapcache.TileRequest) -> bytes | None:
-    path = mapcache.tile_path(CACHE, t)
-    if path.is_file():
-        return path.read_bytes()
+def tile(t: mapcache.TileRequest) -> tuple[str, bytes] | None:
+    for cached in (t, t.fallback()) if t.kind == "ortho" else (t,):
+        path = mapcache.tile_path(CACHE, cached)
+        if path.is_file():
+            return cached.mime, path.read_bytes()
     status, kind, data = get(mapcache.upstream_url(t))
-    if t.kind == "plan" and mapcache.plan_needs_fallback(status, kind, data):
+    stored = t
+    if t.kind == "ortho" and mapcache.ortho_needs_fallback(status, kind, data):
         status, kind, data = get(mapcache.fallback_url(t))
+        stored = t.fallback()
     if status != 200 or not kind.startswith("image/"):
         return None
+    path = mapcache.tile_path(CACHE, stored)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-    return data
+    return stored.mime, data
 
 
 def peak_list(r: mapcache.PeaksRequest) -> list[dict]:
@@ -75,8 +80,8 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlsplit(self.path)
         req = mapcache.parse_request(url.path, url.query)
         if isinstance(req, mapcache.TileRequest):
-            data = tile(req)
-            return self._send(200, "image/png", data) if data else self.send_error(404)
+            found = tile(req)
+            return self._send(200, *found) if found else self.send_error(404)
         if isinstance(req, mapcache.PeaksRequest):
             return self._send(200, "application/json", json.dumps(peak_list(req)).encode())
         if isinstance(req, mapcache.FileRequest) or url.path.startswith("/map/"):
@@ -96,6 +101,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    for old in mapcache.OLD_KINDS:
+        shutil.rmtree(CACHE / old, ignore_errors=True)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     print(f"http://127.0.0.1:{port}/map/index.html?mode=3d")
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

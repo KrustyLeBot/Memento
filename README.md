@@ -84,14 +84,19 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   followed with a 5 minute time constant). The consolidated altitude is the standard FIT field; the raw GPS
   altitude and the pressure are kept as developer fields (`gps_altitude`, `pressure`).
 - GPS rate while recording: 5 s walking, 2 s cycling and skiing, 3 s other; "Économie de batterie" uses 12 s.
-- The map is one web page shared by both apps (`web/map/`, MapLibre GL JS 4.7.1 vendored): Plan IGN on the
-  Terrarium elevation model, in 3D (default) as a square block cut out of the relief around the track (side = the
+- The map is one web page shared by both apps (`web/map/`, MapLibre GL JS 4.7.1 vendored): the IGN aerial
+  photo (orthophotos, WMTS `ORTHOIMAGERY.ORTHOPHOTOS`, JPEG, up to z19, never filtered, in either theme) on the Terrarium
+  elevation model, in 3D (default) as a square block cut out of the relief around the track (side = the
   track's larger side + 25 %, at least 1 km), or flat in 2D; the switch is a native control and is remembered. The
   track is coloured by its speed relative to the mean (red slow, yellow mean, green fast), ski days keep their
-  descents/climbs colours; up to 12 summits (IGN BD TOPO + IGN altimetry, spread out) are labelled. The page asks
-  its host for everything under one base URL (`t/plan|dem/{z}/{x}/{y}`, `peaks?w&s&e&n`): the host fetches with an
+  descents/climbs colours; lines are drawn with a white halo and a dark casing and the overlays on opaque surfaces,
+  so everything reads on snow as on forest; up to 12 summits (IGN BD TOPO + IGN altimetry, spread out) are labelled. The page asks
+  its host for everything under one base URL (`t/ortho|dem/{z}/{x}/{y}`, `peaks?w&s&e&n`; JPEG for
+  the photo, PNG for the relief and the OpenStreetMap stand-in): the host fetches with an
   identifying User-Agent and keeps a disk cache (300 MB, least recently used purged), so what was seen once works
-  offline. Where IGN has no tile (abroad) the OpenStreetMap tile is served instead. `tools/mapdev.py` serves
+  offline. Where IGN has no photo (it answers 404 abroad and at sea, and a uniform white JPEG at the edge of its coverage) the
+  OpenStreetMap tile is served instead. Offline packs (Android) hold the photo up to z17 within 500 MB, estimated
+  at 22 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). `tools/mapdev.py` serves
   the page with these endpoints for development (`python tools/mapdev.py`, then drive `window.SMap`).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.

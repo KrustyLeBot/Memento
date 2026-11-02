@@ -127,7 +127,7 @@ fun thin(n: Int, max: Int = 300): IntArray {
     return IntArray(max) { (it.toLong() * (n - 1) / (max - 1)).toInt() }
 }
 
-// slow to fast: violet, magenta, red-orange (stands out on the pale map)
+// slow to fast: violet, magenta, red-orange; on the aerial photo the page frames each line with a white halo and a dark casing
 private val Slow = Color(0xFF6A00F4)
 private val Mid = Color(0xFFE500A4)
 private val Fast = Color(0xFFFF3D00)

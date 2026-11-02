@@ -1,4 +1,4 @@
-// Activity map shared by the Android (WebView) and Windows (Qt WebEngine) apps: Plan IGN on the DEM, in 3D as a
+// Activity map shared by the Android (WebView) and Windows (Qt WebEngine) apps: the IGN aerial photo on the DEM, in 3D as a
 // square block cut out of the terrain, or flat in 2D. The host serves every URL under <base> (tiles, peaks) and
 // drives the page through window.SMap; the page reports back through hostPost (README, activities: the map).
 'use strict';
@@ -10,12 +10,14 @@
   const FOLLOW_PITCH = 55;
   const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
   const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
+  // The theme only dresses what surrounds the photo; the photo itself is never filtered, in any theme. Lines on it
+  // are sandwiched (white halo, dark casing, colour) so they read on snow, forest, rock and roofs alike.
   const THEMES = {
-    light: { bg: '#ffffff', band: '#d6d8da', frame: '#3a3f45', route: '#7d848d', casing: 'rgba(0,0,0,0.55)',
-             brightness: 1, saturation: 0 },
-    dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1', route: '#a3aab3', casing: 'rgba(0,0,0,0.85)',
-            brightness: 1, saturation: 0 },  // the IGN map keeps its real colours in dark mode too
+    light: { bg: '#ffffff', band: '#d6d8da', frame: '#3a3f45' },
+    dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1' },
   };
+  const HALO = 'rgba(255,255,255,0.85)', CASING = 'rgba(0,0,0,0.75)';
+  const ORTHO = { type: 'raster', tiles: [BASE + 't/ortho/{z}/{x}/{y}'], tileSize: 256, maxzoom: 19 };
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
   let mode = params.get('mode') === '2d' ? '2d' : '3d';
@@ -211,7 +213,7 @@
   // ---------------------------------------------------------------- map and style
 
   const T = () => THEMES[theme];
-  const rasterPaint = () => ({ 'raster-fade-duration': 0, 'raster-brightness-max': T().brightness, 'raster-saturation': T().saturation });
+  const rasterPaint = () => ({ 'raster-fade-duration': 0 });
   const lineLayout = { 'line-cap': 'round', 'line-join': 'round' };
   const solid = (c) => ['interpolate', ['linear'], ['line-progress'], 0, c, 1, c];
   function style() {
@@ -219,25 +221,33 @@
     return {
       version: 8,
       sources: {
-        plan: { type: 'raster', tiles: [BASE + 't/plan/{z}/{x}/{y}'], tileSize: 256, maxzoom: 18 },
+        ortho: ORTHO,
         band: geo(), mask: geo(), frame: geo(), route: geo(), lines: geo(), track: geo({ lineMetrics: true }),
         live: geo(), acc: geo(), dots: geo(), cursor: geo(),
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': t.bg } },
-        { id: 'plan', type: 'raster', source: 'plan', layout: { visibility: 'none' }, paint: rasterPaint() },
+        { id: 'ortho', type: 'raster', source: 'ortho', layout: { visibility: 'none' }, paint: rasterPaint() },
         { id: 'band', type: 'fill', source: 'band', paint: { 'fill-color': t.band, 'fill-antialias': false } },
         { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': t.bg, 'fill-antialias': false } },
         { id: 'frame', type: 'line', source: 'frame', paint: { 'line-color': t.frame, 'line-width': 1.5 } },
-        { id: 'route', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': t.route, 'line-width': 10, 'line-opacity': 0.75 } },
-        { id: 'lines-case', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 8 } },
+        // the route to follow: white on a dark casing, under the coloured trail that runs along it
+        { id: 'route-case', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 11 } },
+        { id: 'route', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 6.5, 'line-opacity': 0.9 } },
+        { id: 'lines-halo', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
+        { id: 'lines-case', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'lines', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': ['get', 'color'], 'line-width': 5 } },
-        { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 8 } },
+        { id: 'track-halo', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
+        { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'track', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-width': 5, 'line-gradient': solid('#d7191c') } },
-        { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 9.5 } },
+        { id: 'live-halo', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 12 } },
+        { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 9.5 } },
         { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
-        { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.14, 'fill-outline-color': '#1a73ff' } },
+        { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.2, 'fill-outline-color': '#ffffff' } },
+        // a dark ring outside the white one: the dots stand out on snow as on forest
+        { id: 'dots-halo', type: 'circle', source: 'dots', paint: { 'circle-radius': 11.5, 'circle-color': CASING, 'circle-blur': 0.15 } },
         { id: 'dots', type: 'circle', source: 'dots', paint: { 'circle-radius': 7, 'circle-color': ['get', 'color'], 'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff' } },
+        { id: 'cursor-halo', type: 'circle', source: 'cursor', paint: { 'circle-radius': 10, 'circle-color': CASING, 'circle-blur': 0.15 } },
         { id: 'cursor', type: 'circle', source: 'cursor', paint: { 'circle-radius': 6, 'circle-color': '#111418', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff' } },
       ],
     };
@@ -286,14 +296,14 @@
   }
   function rebuild3d() {
     map.setTerrain(null);  // the terrain must let go of its source before the source is removed
-    if (map.getLayer('plansq')) map.removeLayer('plansq');
-    for (const id of ['plansq', 'dem']) if (map.getSource(id)) map.removeSource(id);
+    if (map.getLayer('orthosq')) map.removeLayer('orthosq');
+    for (const id of ['orthosq', 'dem']) if (map.getSource(id)) map.removeSource(id);
     built3d = SQ;
     // sources bounded to the square: MapLibre requests no tile outside it
     const bounds = SQ ? grow(SQ, 200) : undefined;
     if (SQ) {
-      map.addSource('plansq', { type: 'raster', tiles: [BASE + 't/plan/{z}/{x}/{y}'], tileSize: 256, maxzoom: 18, bounds });
-      map.addLayer({ id: 'plansq', type: 'raster', source: 'plansq', paint: rasterPaint() }, 'band');
+      map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
+      map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
     }
     map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
   }
@@ -316,8 +326,8 @@
     const is3d = mode === '3d';
     if (is3d && shown && (SQ || pos) && !sameBox(built3d, SQ)) rebuild3d();  // nothing to show: no unbounded terrain
     if (is3d && shown && SQ && !(relief && relief.sq === SQ)) measureForCamera(SQ);
-    vis('plan', shown && (!is3d || !SQ));
-    vis('plansq', shown && is3d && !!SQ);
+    vis('ortho', shown && (!is3d || !SQ));
+    vis('orthosq', shown && is3d && !!SQ);
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
     // setTerrain rebuilds the whole terrain renderer: only when its state really changes
     const want = is3d && shown && !!(SQ || pos) && !!map.getSource('dem'), cur = map.getTerrain();
@@ -775,13 +785,6 @@
       map.setPaintProperty('mask', 'fill-color', c.bg);
       map.setPaintProperty('band', 'fill-color', c.band);
       map.setPaintProperty('frame', 'line-color', c.frame);
-      map.setPaintProperty('route', 'line-color', c.route);
-      for (const id of ['lines-case', 'track-case', 'live-case']) map.setPaintProperty(id, 'line-color', c.casing);
-      for (const id of ['plan', 'plansq']) {
-        if (!map.getLayer(id)) continue;
-        map.setPaintProperty(id, 'raster-brightness-max', c.brightness);
-        map.setPaintProperty(id, 'raster-saturation', c.saturation);
-      }
     },
     setCursor(lon, lat) {
       src('cursor').setData(lon == null ? EMPTY : { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } });

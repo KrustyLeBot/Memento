@@ -5,6 +5,7 @@ import app.scriptorium.activity.Geo
 import app.scriptorium.activity.Sport
 import app.scriptorium.activity.Track
 import app.scriptorium.activity.TrackPoint
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -76,17 +77,17 @@ class TilePlanTest {
         // a 10 km hike: z17 fits in 500 MB
         val small = MapSquare.of(LON0, LAT0, LON0 + 10_000 / K_LON, LAT0 + 3000 / MapSquare.M_PER_DEG_LAT)
         val p = TilePlans.forRoute(small)!!
-        assertEquals(17, p.planZooms.last)
-        assertEquals(8, p.planZooms.first)
+        assertEquals(17, p.orthoZooms.last)
+        assertEquals(8, p.orthoZooms.first)
         assertEquals(6..13, p.demZooms)
         assertTrue(p.estimatedBytes <= TilePlans.ROUTE_BUDGET)
 
         // a 150 km ride: lower zmax, still within budget, and one zoom more would not be
         val big = MapSquare.of(LON0, LAT0, LON0 + 150_000 / K_LON, LAT0 + 20_000 / MapSquare.M_PER_DEG_LAT)
         val q = TilePlans.forRoute(big)!!
-        assertTrue(q.planZooms.last in 8..16)
+        assertTrue(q.orthoZooms.last in 8..16)
         assertTrue(q.estimatedBytes <= TilePlans.ROUTE_BUDGET)
-        val next = TilePlan(big, 8..q.planZooms.last + 1, TilePlans.DEM_ZOOMS)
+        val next = TilePlan(big, 8..q.orthoZooms.last + 1, TilePlans.DEM_ZOOMS)
         assertTrue(next.estimatedBytes > TilePlans.ROUTE_BUDGET)
     }
 
@@ -98,7 +99,7 @@ class TilePlanTest {
     @Test
     fun zonePackIsAbout700Tiles() {
         val z = TilePlans.forZone(LON0, LAT0)
-        assertEquals(8..15, z.planZooms)
+        assertEquals(8..15, z.orthoZooms)
         assertNull(z.demZooms)
         assertTrue("${z.tileCount}", z.tileCount in 500..1000)
         assertEquals(20_000.0, z.square.widthM, 1.0)
@@ -108,7 +109,7 @@ class TilePlanTest {
 class PackTest {
     private val square = Bbox(5.9, 44.9, 6.1, 45.1)
     private val created = 1_790_000_000_000L
-    private val pack = Pack("r-1", "Tour « test »", created, square, 16, setOf(Pack.KIND_PLAN, Pack.KIND_DEM, Pack.KIND_PEAKS), 123_456_789, complete = true, hasRoute = true)
+    private val pack = Pack("r-1", "Tour « test »", created, square, 16, setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 123_456_789, complete = true, hasRoute = true)
 
     @Test
     fun manifestRoundTrip() {
@@ -130,15 +131,26 @@ class PackTest {
         assertTrue(Pack.covers3d(listOf(pack), 6.0, 45.0, now))
         assertFalse(Pack.covers3d(listOf(pack), 7.0, 45.0, now))
         assertFalse(Pack.covers3d(listOf(pack.copy(complete = false)), 6.0, 45.0, now))
-        assertFalse(Pack.covers3d(listOf(pack.copy(kinds = setOf(Pack.KIND_PLAN))), 6.0, 45.0, now))
+        assertFalse(Pack.covers3d(listOf(pack.copy(kinds = setOf(Pack.KIND_ORTHO))), 6.0, 45.0, now))
         assertFalse(Pack.covers3d(listOf(pack), 6.0, 45.0, created + Pack.LIFETIME_MS))
     }
 
     @Test
     fun planOfAPackMatchesItsKinds() {
-        assertEquals(8..16, pack.plan().planZooms)
+        assertEquals(8..16, pack.plan().orthoZooms)
         assertEquals(TilePlans.DEM_ZOOMS, pack.plan().demZooms)
-        assertNull(pack.copy(kinds = setOf(Pack.KIND_PLAN)).plan().demZooms)
+        assertNull(pack.copy(kinds = setOf(Pack.KIND_ORTHO)).plan().demZooms)
+    }
+
+    @Test
+    fun aPackFromBeforeTheAerialPhotoCoversNothing() {
+        // a manifest written by the Plan IGN builds: its relief is fine, but its base layer is never read again
+        val old = Pack.parse(pack.toJson().replace("\"ortho\"", "\"plan\""))
+        assertTrue(old.obsolete)
+        assertFalse(old.has3d)
+        assertFalse(Pack.covers3d(listOf(old), 6.0, 45.0, created + 1000))
+        assertEquals(listOf(old), Pack.toPurge(listOf(old), created + Pack.LIFETIME_MS))
+        assertFalse(pack.obsolete)
     }
 }
 
@@ -370,23 +382,47 @@ class PeaksTest {
 class TileSourcesTest {
     @Test
     fun ignFallbackOnlyWhenIgnHasNoTile() {
-        assertTrue(TileSources.ignHasNoTile(404, "text/xml", 137))
-        assertTrue(TileSources.ignHasNoTile(400, "text/xml", 200))
-        assertTrue(TileSources.ignHasNoTile(200, "image/png", 0))
-        assertTrue(TileSources.ignHasNoTile(200, "text/xml", 300))
-        assertFalse(TileSources.ignHasNoTile(200, "image/png", 30_000))
-        assertFalse(TileSources.ignHasNoTile(500, "text/html", 100))
-        assertFalse(TileSources.ignHasNoTile(503, null, 0))
+        assertTrue(TileSources.ignHasNoTile(404, "text/xml", map("ign-ortho-nodata.xml")))
+        assertTrue(TileSources.ignHasNoTile(400, "text/xml", ByteArray(200)))
+        assertTrue(TileSources.ignHasNoTile(200, "image/jpeg", ByteArray(0)))
+        assertTrue(TileSources.ignHasNoTile(200, "text/xml", ByteArray(300)))
+        assertFalse(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-alps.jpg")))
+        assertFalse(TileSources.ignHasNoTile(500, "text/html", ByteArray(100)))
+        assertFalse(TileSources.ignHasNoTile(503, null, ByteArray(0)))
+        // the white tile IGN sends at the edge of its coverage is "no photo"; the flat sea of low zooms is a photo
+        assertTrue(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-white.jpg")))
+        assertFalse(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-sea.jpg")))
     }
 
     @Test
+    fun flatJpegColourIsReadWithoutDecodingThePicture() {
+        // real IGN answers, shared with the Windows tests (testdata/map)
+        assertArrayEquals(intArrayOf(255, 128, 128), FlatJpeg.colour(map("ign-ortho-white.jpg")))
+        assertArrayEquals(intArrayOf(48, 151, 101), FlatJpeg.colour(map("ign-ortho-sea.jpg")))
+        assertNull(FlatJpeg.colour(map("ign-ortho-alps.jpg")))
+        val white = map("ign-ortho-white.jpg")
+        for (n in listOf(2, 100, 700, 1640)) assertNull(FlatJpeg.colour(white.copyOf(n)))
+    }
+
+    private fun map(name: String): ByteArray =
+        listOf(File("../testdata/map"), File("testdata/map")).first { it.isDirectory }.resolve(name).readBytes()
+
+    @Test
     fun tilePathsFromThePage() {
-        assertEquals(TileKey("plan", 12, 2116, 1466), TileKey.parse("/t/plan/12/2116/1466"))
+        assertEquals(TileKey("ortho", 12, 2116, 1466), TileKey.parse("/t/ortho/12/2116/1466"))
+        assertEquals(TileKey("ortho", 19, 1, 1), TileKey.parse("/t/ortho/19/1/1.jpg"))
         assertEquals(TileKey("dem", 3, 7, 0), TileKey.parse("/t/dem/3/7/0.png"))
         assertNull(TileKey.parse("/t/dem/3/8/0"))
         assertNull(TileKey.parse("/t/sat/3/1/1"))
-        assertNull(TileKey.parse("/t/plan/../../etc"))
-        assertEquals("plan/12/2116/1466.png", TileKey("plan", 12, 2116, 1466).path)
+        assertNull(TileKey.parse("/t/plan/3/1/1")) // the former base layer
+        assertNull(TileKey.parse("/t/osm/3/1/1")) // a cache folder, not a URL
+        assertNull(TileKey.parse("/t/ortho/../../etc"))
+        val t = TileKey("ortho", 12, 2116, 1466)
+        assertEquals("ortho/12/2116/1466.jpg", t.path)
+        assertEquals("image/jpeg", t.mime)
+        assertEquals("osm/12/2116/1466.png", t.fallback().path)
+        assertEquals("image/png", t.fallback().mime)
+        assertEquals("image/png", TileKey("dem", 3, 7, 0).mime)
     }
 }
 
@@ -434,14 +470,14 @@ class TileCacheTest {
             val cache = TileCache(dir, 10_000)
             val t = System.currentTimeMillis()
             for (i in 0 until 4) {
-                TileCache.writeAtomic(File(dir, "plan/1/0/$i.png"), ByteArray(3000))
-                File(dir, "plan/1/0/$i.png").setLastModified(t - (10 - i) * 60_000L)
+                TileCache.writeAtomic(File(dir, "ortho/1/0/$i.jpg"), ByteArray(3000))
+                File(dir, "ortho/1/0/$i.jpg").setLastModified(t - (10 - i) * 60_000L)
             }
             // tile 0 is the oldest, but reading it makes it the most recent
-            assertNotNull(cache.get("plan/1/0/0.png"))
+            assertNotNull(cache.get("ortho/1/0/0.jpg"))
             cache.trim()
-            assertNotNull(cache.get("plan/1/0/0.png"))
-            assertNull(cache.get("plan/1/0/1.png"))
+            assertNotNull(cache.get("ortho/1/0/0.jpg"))
+            assertNull(cache.get("ortho/1/0/1.jpg"))
             assertTrue(dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } <= 8000)
             assertFalse(dir.walkTopDown().any { it.name.endsWith(".tmp") })
         } finally {

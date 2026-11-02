@@ -12,9 +12,9 @@ class MapRegressionTest {
     @Test
     fun rateLimitedOrTimedOutIgnIsAnErrorNotAMissingTile() {
         // read as "no tile", a pack download skipped the tile and called itself complete
-        assertFalse(TileSources.ignHasNoTile(429, "text/html", 100))
-        assertFalse(TileSources.ignHasNoTile(408, null, 0))
-        assertTrue(TileSources.ignHasNoTile(404, "text/xml", 137))
+        assertFalse(TileSources.ignHasNoTile(429, "text/html", ByteArray(100)))
+        assertFalse(TileSources.ignHasNoTile(408, null, ByteArray(0)))
+        assertTrue(TileSources.ignHasNoTile(404, "text/xml", ByteArray(137)))
     }
 
     @Test(expected = Json.JsonException::class)
@@ -31,7 +31,7 @@ class MapRegressionTest {
             val created = 1_790_000_000_000L
             val square = Bbox(5.9, 44.9, 6.1, 45.1)
             for (id in listOf("r-used", "r-free")) {
-                val p = Pack(id, id, created, square, 12, setOf(Pack.KIND_PLAN), 0, complete = true, hasRoute = true)
+                val p = Pack(id, id, created, square, 12, setOf(Pack.KIND_ORTHO), 0, complete = true, hasRoute = true)
                 TileCache.writeAtomic(File(dir, "$id/manifest.json"), p.toJson().toByteArray())
             }
             val later = created + Pack.LIFETIME_MS + 1
@@ -90,7 +90,7 @@ class OffRouteDebounceTest {
     @Test
     fun pinnedPackStillCoversIn3dPastItsLifetime() {
         val created = 1_790_000_000_000L
-        val p = Pack("r-1", "r", created, Bbox(5.9, 44.9, 6.1, 45.1), 12, setOf(Pack.KIND_PLAN, Pack.KIND_DEM), 0, complete = true, hasRoute = true)
+        val p = Pack("r-1", "r", created, Bbox(5.9, 44.9, 6.1, 45.1), 12, setOf(Pack.KIND_ORTHO, Pack.KIND_DEM), 0, complete = true, hasRoute = true)
         val later = created + Pack.LIFETIME_MS + 1
         assertFalse(Pack.covers3d(listOf(p), 6.0, 45.0, later))
         assertTrue(Pack.covers3d(listOf(p), 6.0, 45.0, later, setOf("r-1")))

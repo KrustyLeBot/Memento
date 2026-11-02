@@ -12,20 +12,25 @@ data class TileRange(val z: Int, val x0: Int, val x1: Int, val y0: Int, val y1: 
     }
 }
 
-/** What an offline pack downloads: Plan IGN zooms, terrain (DEM) zooms, and the estimate the budget is checked on. */
-data class TilePlan(val square: Bbox, val planZooms: IntRange, val demZooms: IntRange?) {
-    val planRanges: List<TileRange> get() = planZooms.map { TilePlans.range(square, it) }
+/** What an offline pack downloads: aerial-photo zooms, terrain (DEM) zooms, and the estimate the budget is checked on. */
+data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: IntRange?) {
+    val orthoRanges: List<TileRange> get() = orthoZooms.map { TilePlans.range(square, it) }
     val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(square, it) }.orEmpty()
-    val tileCount: Long get() = planRanges.sumOf { it.count } + demRanges.sumOf { it.count }
-    val estimatedBytes: Long get() = planRanges.sumOf { it.count } * TilePlans.PLAN_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES
+    val tileCount: Long get() = orthoRanges.sumOf { it.count } + demRanges.sumOf { it.count }
+    val estimatedBytes: Long get() = orthoRanges.sumOf { it.count } * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES
 }
 
 object TilePlans {
-    const val PLAN_TILE_BYTES = 25L * 1024
+    /**
+     * IGN orthophoto JPEGs measured at z12-17 (3x3 tiles per zoom, Nov 2026): 10-20 KB on average in the Alps
+     * (Vanoise, Chamonix), 17-23 KB in towns (Grenoble, Annecy), never above 26 KB. 22 KB keeps the estimate on the
+     * safe side for a mixed route; the download still checks the real bytes against the budget.
+     */
+    const val ORTHO_TILE_BYTES = 22L * 1024
     const val DEM_TILE_BYTES = 60L * 1024
     const val ROUTE_BUDGET = 500L * 1024 * 1024
-    const val PLAN_MIN_Z = 8
-    const val PLAN_MAX_Z = 17
+    const val ORTHO_MIN_Z = 8
+    const val ORTHO_MAX_Z = 17
     val DEM_ZOOMS = 6..13
 
     /** The zone pack recorded around the start without a route: 2D only, 20 km square, z8–15. */
@@ -45,13 +50,13 @@ object TilePlans {
     }
 
     /**
-     * The route pack for [square]: Plan IGN from z8 up to the highest zoom ≤ 17 whose estimate, DEM z6–13
+     * The route pack for [square]: the aerial photo from z8 up to the highest zoom ≤ 17 whose estimate, DEM z6–13
      * included, fits [budget]. Null when even z8 does not fit (a route the size of a country).
      */
     fun forRoute(square: Bbox, budget: Long = ROUTE_BUDGET): TilePlan? {
         var best: TilePlan? = null
-        for (zmax in PLAN_MIN_Z..PLAN_MAX_Z) {
-            val p = TilePlan(square, PLAN_MIN_Z..zmax, DEM_ZOOMS)
+        for (zmax in ORTHO_MIN_Z..ORTHO_MAX_Z) {
+            val p = TilePlan(square, ORTHO_MIN_Z..zmax, DEM_ZOOMS)
             if (p.estimatedBytes > budget) break
             best = p
         }

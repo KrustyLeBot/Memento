@@ -26,10 +26,10 @@ class MapPageContractTest {
 
     @Test
     fun tileUrlsThePageBuildsAreServed() {
-        assertTrue(page.contains("BASE + 't/plan/{z}/{x}/{y}'"))
+        assertTrue(page.contains("tiles: [BASE + 't/ortho/{z}/{x}/{y}'], tileSize: 256, maxzoom: 19"))
         assertTrue(page.contains("`\${BASE}t/dem/\${z}/\${x}/\${y}`"))
         // what MapLibre and the DEM protocol make of them, as TileServer sees the path
-        assertEquals(TileKey("plan", 14, 8501, 5850), TileKey.parse("/t/plan/14/8501/5850"))
+        assertEquals(TileKey("ortho", 19, 272042, 187212), TileKey.parse("/t/ortho/19/272042/187212"))
         assertEquals(TileKey("dem", 12, 2120, 1460), TileKey.parse("/t/dem/12/2120/1460"))
     }
 

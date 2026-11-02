@@ -26,7 +26,8 @@ from ..core import mapcache, peaks
 SCHEME = b"scr"
 BASE_URL = "scr://app/"
 PURGE_EVERY = 20 * 1024 * 1024  # bytes written between two purges
-MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "json": b"application/json",
+MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg",
+        "json": b"application/json",
         "svg": b"image/svg+xml", "txt": b"text/plain"}
 # Errors that mean "no network", as opposed to a server answering (404 and the like).
 OFFLINE_ERRORS = {QNetworkReply.NetworkError.ConnectionRefusedError, QNetworkReply.NetworkError.HostNotFoundError,
@@ -73,7 +74,8 @@ def _log(text: str) -> None:
 
 
 class TileStore(QObject):
-    """Tiles on disk under `root` (tiles2/), fetched on a miss. Concurrent requests for one tile share a fetch."""
+    """Tiles on disk under `root` (tiles2/), fetched on a miss. Concurrent requests for one tile share a fetch. Each
+    answer is (MIME type, bytes): an aerial-photo request answered by its OpenStreetMap stand-in is a PNG."""
 
     def __init__(self, root: Path, parent: QObject | None = None):
         super().__init__(parent)
@@ -88,17 +90,18 @@ class TileStore(QObject):
 
     # ---- tiles ----
 
-    def get(self, tile: mapcache.TileRequest, done: Callable[[bytes | None], None]) -> None:
-        path = mapcache.tile_path(self.root, tile)
-        try:
-            data = path.read_bytes()
-            os.utime(path)  # LRU: the purge removes the least recently read
-            done(data)
-            return
-        except FileNotFoundError:
-            pass
-        except OSError as error:  # a file the purge is deleting, a locked file: fetch it again
-            _log(f"{path}: {error}")
+    def get(self, tile: mapcache.TileRequest, done: Callable[[tuple[str, bytes] | None], None]) -> None:
+        for cached in (tile, tile.fallback()) if tile.kind == "ortho" else (tile,):
+            path = mapcache.tile_path(self.root, cached)
+            try:
+                data = path.read_bytes()
+                os.utime(path)  # LRU: the purge removes the least recently read
+                done((cached.mime, data))
+                return
+            except FileNotFoundError:
+                pass
+            except OSError as error:  # a file the purge is deleting, a locked file: fetch it again
+                _log(f"{path}: {error}")
         if self.backoff.blocked(time.monotonic()):
             done(None)
             return
@@ -125,17 +128,18 @@ class TileStore(QObject):
             self._finish(tile.key, None)
             return
         self.backoff.succeeded()
-        if tile.kind == "plan" and primary and mapcache.plan_needs_fallback(status, kind, data):
+        if tile.kind == "ortho" and primary and mapcache.ortho_needs_fallback(status, kind, data):
             self._fetch(tile, mapcache.fallback_url(tile), primary=False)  # outside IGN's coverage: OpenStreetMap
             return
         if status != 200 or not kind.startswith("image/") or not data:
             _log(f"{tile.key}: HTTP {status} {kind}")
             self._finish(tile.key, None)
             return
-        self._store(mapcache.tile_path(self.root, tile), data)
-        self._finish(tile.key, data)
+        stored = tile if primary else tile.fallback()
+        self._store(mapcache.tile_path(self.root, stored), data)
+        self._finish(tile.key, (stored.mime, data))
 
-    def _finish(self, key: str, data: bytes | None) -> None:
+    def _finish(self, key: str, data: tuple[str, bytes] | None) -> None:
         for done in self._waiting.pop(key, []):
             done(data)
 
@@ -267,11 +271,14 @@ class SchemeHandler(QWebEngineUrlSchemeHandler):
                 return
             self._reply(job, MIME.get(path.suffix.lstrip(".").lower(), b"application/octet-stream"), data)
         elif isinstance(req, mapcache.TileRequest):
-            self.store.get(req, partial(self._answer, job, b"image/png"))
+            self.store.get(req, partial(self._answer_tile, job))
         elif isinstance(req, mapcache.PeaksRequest):
             self.store.peaks(req, lambda found, j=job: self._answer(j, b"application/json", json.dumps(found).encode()))
         else:
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
+
+    def _answer_tile(self, job: QWebEngineUrlRequestJob, tile: tuple[str, bytes] | None) -> None:
+        self._answer(job, tile[0].encode() if tile else b"", tile[1] if tile else None)
 
     def _answer(self, job: QWebEngineUrlRequestJob, mime: bytes, data: bytes | None) -> None:
         if not shiboken6.isValid(job):
@@ -298,6 +305,8 @@ def profile() -> QWebEngineProfile:
     if _profile is None:
         root = cache_root()
         _remove_old_cache(root / "tiles")
+        for kind in mapcache.OLD_KINDS:  # tiles of a former base layer, never read again
+            _remove_old_cache(root / "tiles2" / kind)
         prof = QWebEngineProfile("scriptorium-map", QCoreApplication.instance())
         prof.setCachePath(str(root / "webengine"))
         prof.setPersistentStoragePath(str(root / "webengine-data"))
@@ -322,7 +331,8 @@ def tile_store() -> TileStore:
 
 
 def _remove_old_cache(old: Path) -> None:
-    """The hand-drawn map's OpenStreetMap cache (up to 100 MB) is no longer read: deleted once, in the background."""
+    """A cache no longer read (the hand-drawn map's OpenStreetMap tiles, a former base layer's): deleted in the
+    background. Once gone, later startups find nothing to do."""
     if not old.is_dir():
         return
 

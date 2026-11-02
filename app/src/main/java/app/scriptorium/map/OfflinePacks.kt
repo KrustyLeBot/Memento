@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Offline packs in `filesDir/packs/<id>/` (private storage the system does not purge mid-hike, never the
- * synced Documents folder): `manifest.json`, `plan/` and `dem/` tiles, `peaks.json`, `route.json`.
+ * synced Documents folder): `manifest.json`, `ortho/` and `dem/` tiles, `peaks.json`, `route.json`.
  * Downloads run in a process-wide scope, so they go on while the recording service keeps the process
  * alive with no screen. A pack whose download stopped stays incomplete and can be resumed; every pack is
  * deleted 24 h after it was started.
@@ -116,6 +116,7 @@ object OfflinePacks {
     fun findTile(rel: String): File? {
         if (!::dir.isInitialized) return null
         for (p in _packs.value) {
+            if (p.obsolete) continue
             val f = File(dir, "${p.id}/$rel")
             if (f.isFile && f.length() > 0) return f
         }
@@ -127,21 +128,21 @@ object OfflinePacks {
 
     fun route(id: String): Route = RouteFile.fromJson(File(dir, "$id/route.json").readText())
 
-    /** Starts downloading what [route] needs offline: Plan IGN, relief and peaks of its square. Returns the pack id. */
+    /** Starts downloading what [route] needs offline: the aerial photo, relief and peaks of its square. Returns the pack id. */
     fun prepareRoute(route: Route): String {
         val box = route.bbox ?: throw PackException("Parcours vide")
         val square = MapSquare.of(box)
         val plan = TilePlans.forRoute(square) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
         val pack = Pack(
-            newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), square, plan.planZooms.last,
-            setOf(Pack.KIND_PLAN, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true,
+            newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), square, plan.orthoZooms.last,
+            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
         return pack.id
     }
 
     /**
-     * The 2D pack of a recording without route: Plan IGN of a 20 km square around the start. Skipped when
+     * The 2D pack of a recording without route: the aerial photo of a 20 km square around the start. Skipped when
      * offline or when a pack already covers the place (a second recording from the same spot). Runs in
      * the background: the caller is the GPS callback.
      */
@@ -150,9 +151,9 @@ object OfflinePacks {
         scope.launch {
             val now = System.currentTimeMillis()
             val near = MapSquare.centered(lon, lat, TilePlans.ZONE_HALF_M / 2)
-            if (_packs.value.any { !it.expired(now) && it.square.covers(near) }) return@launch
+            if (_packs.value.any { !it.expired(now) && !it.obsolete && it.square.covers(near) }) return@launch
             val plan = TilePlans.forZone(lon, lat)
-            val pack = Pack(newId("z"), "Zone autour du départ (2D)", now, plan.square, plan.planZooms.last, setOf(Pack.KIND_PLAN), 0, complete = false, hasRoute = false)
+            val pack = Pack(newId("z"), "Zone autour du départ (2D)", now, plan.square, plan.orthoZooms.last, setOf(Pack.KIND_ORTHO), 0, complete = false, hasRoute = false)
             try {
                 create(pack, plan.estimatedBytes) {}
             } catch (e: PackException) {
@@ -165,6 +166,7 @@ object OfflinePacks {
     fun resume(id: String) {
         val pack = _packs.value.firstOrNull { it.id == id } ?: return
         if (pack.complete || isRunning(id)) return
+        if (pack.obsolete) throw PackException("Carte d'un ancien format : à préparer de nouveau")
         if (!NetState.online.value) throw PackException("Pas de connexion")
         start(pack)
     }
@@ -237,7 +239,7 @@ object OfflinePacks {
     }
 
     /**
-     * Relief first (the 3D view needs it), then Plan IGN zoom by zoom. Should the real tiles outgrow the
+     * Relief first (the 3D view needs it), then the aerial photo zoom by zoom. Should the real tiles outgrow the
      * budget, the zoom being fetched is dropped and the pack stops at the one below: the 500 MB holds
      * even when the estimate was low.
      */
@@ -245,7 +247,7 @@ object OfflinePacks {
         val pdir = File(dir, pack.id)
         pdir.walkTopDown().filter { it.isFile && it.name.endsWith(".tmp") }.forEach { it.delete() }
         val plan = pack.plan()
-        val groups = plan.demRanges.map { "dem" to it } + plan.planRanges.map { "plan" to it }
+        val groups = plan.demRanges.map { TileKey.KIND_DEM to it } + plan.orthoRanges.map { TileKey.KIND_ORTHO to it }
         val total = plan.tileCount
         val done = AtomicLong(0)
         val bytes = AtomicLong(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
@@ -272,8 +274,8 @@ object OfflinePacks {
                 }
             }
             if (over.get()) {
-                if (kind != "plan" || range.z <= TilePlans.PLAN_MIN_Z) throw PackException("Parcours trop étendu pour une carte hors ligne")
-                File(pdir, "plan/${range.z}").deleteRecursively()
+                if (kind != TileKey.KIND_ORTHO || range.z <= TilePlans.ORTHO_MIN_Z) throw PackException("Parcours trop étendu pour une carte hors ligne")
+                File(pdir, "${TileKey.KIND_ORTHO}/${range.z}").deleteRecursively()
                 zmax = range.z - 1
                 // said at once: a resume after a later failure must not fetch this zoom again, only to drop it again
                 writeManifest(pack.copy(zmax = zmax, bytes = bytes.get()))
@@ -304,11 +306,11 @@ object OfflinePacks {
         if (f.isFile && f.length() > 0) return true
         if (!NetState.online.value) throw PackException("Connexion perdue : téléchargement interrompu")
         val body = try {
-            TileServer.fetch(key, allowOsm = false).also { failures.set(0) }
+            TileServer.fetch(key, allowOsm = false)?.bytes.also { failures.set(0) }
         } catch (e: IOException) {
             if (failures.incrementAndGet() > MAX_FAILURES_IN_A_ROW) throw PackException("Trop d'erreurs réseau : ${e.message}")
             return false
-        } ?: return true // no tile exists there (outside France for Plan IGN)
+        } ?: return true // no tile exists there (no IGN photo outside France)
         TileCache.writeAtomic(f, body)
         bytes.addAndGet(body.size.toLong())
         return true

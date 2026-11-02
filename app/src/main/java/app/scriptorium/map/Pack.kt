@@ -1,8 +1,9 @@
 package app.scriptorium.map
 
 /**
- * An offline pack's manifest (`manifest.json` in its folder). [kinds] says what it holds: "plan" tiles,
- * "dem" terrain tiles, "peaks". [complete] is false while downloading, and stays false when the download
+ * An offline pack's manifest (`manifest.json` in its folder). [kinds] says what it holds: "ortho" tiles
+ * (the IGN aerial photo), "dem" terrain tiles, "peaks". A pack from before the photo ("plan" instead of "ortho") is
+ * [obsolete]: it covers nothing, is never resumed, and goes with the others when its 24 h are up. [complete] is false while downloading, and stays false when the download
  * was interrupted (process killed, no network, disk full): such a pack can be resumed.
  */
 data class Pack(
@@ -17,14 +18,16 @@ data class Pack(
     /** The pack carries the route it was made for (`route.json`), so it can be followed. */
     val hasRoute: Boolean,
 ) {
-    val has3d: Boolean get() = KIND_DEM in kinds
+    val has3d: Boolean get() = KIND_DEM in kinds && !obsolete
+
+    val obsolete: Boolean get() = KIND_ORTHO !in kinds
 
     fun expiresAt(): Long = created + LIFETIME_MS
 
     fun expired(now: Long): Boolean = now >= expiresAt()
 
     /** The tiles this pack downloads. */
-    fun plan(): TilePlan = TilePlan(square, TilePlans.PLAN_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null)
+    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null)
 
     fun toJson(): String = buildString {
         append('{')
@@ -42,8 +45,8 @@ data class Pack(
 
     companion object {
         const val LIFETIME_MS = 24L * 3600 * 1000
-        const val KIND_PLAN = "plan"
-        const val KIND_DEM = "dem"
+        const val KIND_ORTHO = TileKey.KIND_ORTHO
+        const val KIND_DEM = TileKey.KIND_DEM
         const val KIND_PEAKS = "peaks"
 
         fun parse(text: String): Pack {
@@ -54,7 +57,7 @@ data class Pack(
                 name = o["name"] as? String ?: "",
                 created = o["created"].asDouble()?.toLong() ?: throw Json.JsonException("Manifeste sans date"),
                 square = square,
-                zmax = o["zmax"].asDouble()?.toInt() ?: TilePlans.PLAN_MIN_Z,
+                zmax = o["zmax"].asDouble()?.toInt() ?: TilePlans.ORTHO_MIN_Z,
                 kinds = o["kinds"].asList()?.filterIsInstance<String>()?.toSet().orEmpty(),
                 bytes = o["bytes"].asDouble()?.toLong() ?: 0L,
                 complete = o["complete"] as? Boolean ?: false,

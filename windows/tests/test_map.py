@@ -22,12 +22,15 @@ def png(width: int, height: int, pixel: bytes) -> bytes:
 # ---- request parsing ----
 
 def test_tile_paths_are_parsed_and_checked():
-    assert mapcache.parse_request("/t/plan/12/2120/1460") == mapcache.TileRequest("plan", 12, 2120, 1460)
+    assert mapcache.parse_request("/t/ortho/12/2120/1460") == mapcache.TileRequest("ortho", 12, 2120, 1460)
+    assert mapcache.parse_request("/t/ortho/12/2120/1460.jpg") == mapcache.TileRequest("ortho", 12, 2120, 1460)
     assert mapcache.parse_request("/t/dem/13/4253/2915.png") == mapcache.TileRequest("dem", 13, 4253, 2915)
-    assert mapcache.parse_request("/t/plan/19/1/1") is None       # past Plan IGN's zoom
+    assert mapcache.parse_request("/t/ortho/19/1/1") == mapcache.TileRequest("ortho", 19, 1, 1)
+    assert mapcache.parse_request("/t/ortho/20/1/1") is None      # past the orthophotos' zoom
     assert mapcache.parse_request("/t/dem/2/4/0") is None         # x outside the 4 columns of zoom 2
-    assert mapcache.parse_request("/t/ortho/2/1/1") is None
-    assert mapcache.parse_request("/t/plan/a/1/1") is None
+    assert mapcache.parse_request("/t/plan/2/1/1") is None        # the former base layer
+    assert mapcache.parse_request("/t/osm/2/1/1") is None         # the fallback is a cache folder, not a URL
+    assert mapcache.parse_request("/t/ortho/a/1/1") is None
 
 
 def test_peaks_and_files_are_parsed():
@@ -40,9 +43,12 @@ def test_peaks_and_files_are_parsed():
 
 
 def test_cache_path_and_urls(tmp_path):
-    t = mapcache.TileRequest("plan", 14, 8501, 5850)
-    assert mapcache.tile_path(tmp_path, t) == tmp_path / "plan" / "14" / "8501" / "5850.png"
-    assert "LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2" in mapcache.upstream_url(t)
+    t = mapcache.TileRequest("ortho", 14, 8501, 5850)
+    assert mapcache.tile_path(tmp_path, t) == tmp_path / "ortho" / "14" / "8501" / "5850.jpg"
+    assert mapcache.tile_path(tmp_path, t.fallback()) == tmp_path / "osm" / "14" / "8501" / "5850.png"
+    assert (t.mime, t.fallback().mime, mapcache.TileRequest("dem", 1, 0, 0).mime) == ("image/jpeg", "image/png", "image/png")
+    assert "LAYER=ORTHOIMAGERY.ORTHOPHOTOS" in mapcache.upstream_url(t)
+    assert "FORMAT=image/jpeg" in mapcache.upstream_url(t)
     assert "TILEMATRIX=14&TILEROW=5850&TILECOL=8501" in mapcache.upstream_url(t)
     assert mapcache.fallback_url(t) == "https://tile.openstreetmap.org/14/8501/5850.png"
     assert mapcache.upstream_url(mapcache.TileRequest("dem", 3, 4, 2)).endswith("/terrarium/3/4/2.png")
@@ -50,19 +56,27 @@ def test_cache_path_and_urls(tmp_path):
 
 # ---- IGN -> OpenStreetMap ----
 
-def test_plan_falls_back_to_osm_outside_ign_coverage():
-    drawn = png(16, 16, b"\xd0\xe0\xc0")
-    assert not mapcache.plan_needs_fallback(200, "image/png", drawn)
-    assert mapcache.plan_needs_fallback(404, "text/xml; charset=UTF-8", b"<ExceptionReport>No data found</ExceptionReport>")
-    assert mapcache.plan_needs_fallback(200, "text/xml", b"<x/>")
-    assert mapcache.plan_needs_fallback(200, "image/png", b"")
-    assert mapcache.plan_needs_fallback(200, "image/png", png(256, 256, b"\x00\x00\x00\x00"))  # fully transparent
+TESTDATA = __import__("pathlib").Path(__file__).resolve().parents[2] / "testdata" / "map"
 
 
-def test_blank_png_detection():
-    assert mapcache.png_is_blank(png(256, 256, b"\x00\x00\x00\x00"))
-    assert not mapcache.png_is_blank(png(256, 256, b"\x00\x00\x00\x01"))
-    assert not mapcache.png_is_blank(b"not a png")
+def test_ortho_falls_back_to_osm_outside_ign_coverage():
+    # real IGN answers (testdata/map): a photo, the white tile of the coverage's edge, the sea at low zoom, abroad
+    photo, white, sea = ((TESTDATA / f"ign-ortho-{n}.jpg").read_bytes() for n in ("alps", "white", "sea"))
+    assert not mapcache.ortho_needs_fallback(200, "image/jpeg", photo)
+    assert mapcache.ortho_needs_fallback(200, "image/jpeg", white)
+    assert not mapcache.ortho_needs_fallback(200, "image/jpeg", sea)  # flat, but a real answer: the sea
+    assert mapcache.ortho_needs_fallback(404, "text/xml; charset=UTF-8", (TESTDATA / "ign-ortho-nodata.xml").read_bytes())
+    assert mapcache.ortho_needs_fallback(200, "text/xml", b"<x/>")
+    assert mapcache.ortho_needs_fallback(200, "image/jpeg", b"")
+
+
+def test_flat_jpeg_detection():
+    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-white.jpg").read_bytes()) == (255, 128, 128)
+    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-sea.jpg").read_bytes()) == (48, 151, 101)
+    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-alps.jpg").read_bytes()) is None
+    white = (TESTDATA / "ign-ortho-white.jpg").read_bytes()
+    assert all(mapcache.jpeg_uniform_colour(white[:n]) is None for n in (2, 100, 700, 1640))  # truncated
+    assert mapcache.jpeg_uniform_colour(png(4, 4, b"\xff\xff\xff")) is None
 
 
 # ---- disk cache ----
@@ -70,7 +84,7 @@ def test_blank_png_detection():
 def test_purge_removes_least_recently_used_tiles_first(tmp_path):
     files = []
     for i in range(10):
-        f = tmp_path / "plan" / "10" / str(i) / "1.png"
+        f = tmp_path / "ortho" / "10" / str(i) / "1.jpg"
         f.parent.mkdir(parents=True)
         f.write_bytes(b"x" * 1000)
         os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))  # realistic dates: tile 0 is the oldest
@@ -88,7 +102,7 @@ def test_purge_removes_least_recently_used_tiles_first(tmp_path):
 def test_purge_goes_on_past_a_tile_windows_refuses_to_delete(tmp_path, monkeypatch):
     files = []
     for i in range(4):
-        f = tmp_path / "plan" / "10" / str(i) / "1.png"
+        f = tmp_path / "ortho" / "10" / str(i) / "1.jpg"
         f.parent.mkdir(parents=True)
         f.write_bytes(b"x" * 1000)
         os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))
@@ -230,7 +244,7 @@ def test_handler_serves_the_page_and_the_tiles(monkeypatch):
     from scriptorium_win.services import maphost
     from scriptorium_win.ui.mapview import MapView
     tile = png(4, 4, b"\x10\x20\x30")
-    monkeypatch.setattr(maphost.TileStore, "get", lambda self, t, done: done(tile if t.kind == "plan" else None))
+    monkeypatch.setattr(maphost.TileStore, "get", lambda self, t, done: done(("image/jpeg", tile) if t.kind == "ortho" else None))
     events = []
     view = MapView("2d")
     view.event.connect(events.append)
@@ -240,13 +254,14 @@ def test_handler_serves_the_page_and_the_tiles(monkeypatch):
     results = {}
     view.page().runJavaScript("document.title + '|' + typeof window.SMap.setTrack", 0, lambda r: results.setdefault("title", r))
     view.page().runJavaScript(
-        "fetch('../t/plan/1/0/0').then(r => r.arrayBuffer()).then(b => window.__len = b.byteLength);"
+        "fetch('../t/ortho/1/0/0').then(r => { window.__type = r.headers.get('content-type'); return r.arrayBuffer(); })"
+        ".then(b => window.__len = b.byteLength);"
         "fetch('../t/dem/1/0/0').then(r => window.__dem = r.ok ? 'ok' : 'status ' + r.status, () => window.__dem = 'failed');", 0)
     assert wait_for(app, lambda: "title" in results)
     assert results["title"] == "Carte|function"
     probe = {}  # a tile the host cannot get must reach the page as a plain 404
-    assert wait_for(app, lambda: view.page().runJavaScript("JSON.stringify([window.__len, window.__dem])", 0,
-                                                          lambda r: probe.update(r=r)) or probe.get("r") == f'[{len(tile)},"status 404"]'), probe
+    assert wait_for(app, lambda: view.page().runJavaScript("JSON.stringify([window.__len, window.__dem, window.__type])", 0,
+                                                          lambda r: probe.update(r=r)) or probe.get("r") == f'[{len(tile)},"status 404","image/jpeg"]'), probe
     # the page reports through QWebChannel: "ready" where WebGL exists, otherwise an explained error
     assert wait_for(app, lambda: any(e.get("type") in ("ready", "error") for e in events)), events
     view.call("setTrack", {"coords": [[6.86, 45.9], [6.87, 45.91]], "speeds": None, "avg": None})
@@ -279,9 +294,10 @@ def test_every_function_the_windows_host_calls_is_in_the_page_api():
 
 def test_urls_the_page_requests_are_served():
     page = _page()
-    assert "BASE + 't/plan/{z}/{x}/{y}'" in page
+    assert "BASE + 't/ortho/{z}/{x}/{y}'" in page
+    assert "maxzoom: 19" in page
     assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
     assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
-    assert mapcache.parse_request("/t/plan/14/8501/5850") == mapcache.TileRequest("plan", 14, 8501, 5850)
+    assert mapcache.parse_request("/t/ortho/14/8501/5850") == mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.parse_request("/t/dem/13/4253/2915") == mapcache.TileRequest("dem", 13, 4253, 2915)
     assert mapcache.parse_request("/peaks", "w=6.80000&s=45.90000&e=6.90000&n=46.00000") == mapcache.PeaksRequest(6.8, 45.9, 6.9, 46.0)
