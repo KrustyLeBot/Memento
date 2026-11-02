@@ -377,7 +377,6 @@ class ScreenshotAudit {
         settle { vm.agenda.importState is app.memento.agenda.IcsImportState.Preview }
         both("agenda_import_preview")
         vm.agenda.cancelImport()
-        vm.calendarsReturn = Screen.AGENDA
         vm.screen = Screen.AGENDA_CALENDARS
         both("agenda_calendars")
         both("agenda_calendar_edit") { click("Travail") }

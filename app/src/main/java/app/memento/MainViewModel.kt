@@ -35,24 +35,10 @@ import app.memento.activity.ActivityController
 import app.memento.contacts.ContactsController
 import app.memento.agenda.AgendaController
 import app.memento.record.Recorder
+import app.memento.ui.ListMemory
 import app.memento.sync.SkipReason
 import app.memento.sync.SyncState
 import app.memento.sync.SynchrotronClient
-
-enum class Screen {
-    LIST, EDITOR, SETTINGS, PDF, ACTIVITIES, ACTIVITY, RECORD, DRAWING, AGENDA, CONTACTS, CONTACT, CONTACT_EDIT, CONTACT_DUPLICATES,
-    EVENT, EVENT_EDIT, AGENDA_CALENDARS,
-}
-
-/** Screens that carry the bottom bar: the home screen of each module. */
-val Screen.module: Module?
-    get() = when (this) {
-        Screen.LIST -> Module.NOTES
-        Screen.AGENDA -> Module.AGENDA
-        Screen.ACTIVITIES -> Module.ACTIVITIES
-        Screen.CONTACTS -> Module.CONTACTS
-        else -> null
-    }
 
 /** State of the one-time import from a former folder (Scriptorium, Griffonote). */
 sealed class LegacyImport {
@@ -142,34 +128,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val persistLock = Mutex()
 
     /** The "Activités" folder (import, recording, detail). */
+    /** Where back goes: the screens the current one was opened from (see [Origins]). */
+    val origins = Origins()
+
+    private var shown by mutableStateOf(rootOf(settings.lastModule.takeUnless { it in settings.hiddenModules } ?: Module.NOTES))
+
+    /** The screen shown; every change is remembered as an origin, so back returns where the user came from. */
+    var screen: Screen
+        get() = shown
+        set(value) {
+            origins.moved(shown, value)
+            shown = value
+        }
+
+    /** Scroll positions, filters and tapped items of the module lists, kept while their screen is not shown. */
+    val lists = ListMemory()
+
     val activities = ActivityController(app, repo, viewModelScope, io, { snack = it }, { uri -> copyIn(uri) }, { repo.activitySettings.value.refineAltitude }, syncing = { syncing }).also { c ->
         c.onOpen = { screen = Screen.ACTIVITY }
     }
 
     /** The Contacts module (list, detail, editor, import, mirror into the phone). */
-    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it }, syncing = { syncing })
-
-    /** Where the note editor, an activity and the calendars screen return to (they are reached from several modules). */
-    private var editorReturn = Screen.LIST
-    private var activityReturn = Screen.ACTIVITIES
-    var calendarsReturn = Screen.AGENDA
+    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it }, { goBack() }, syncing = { syncing })
 
     /** The Agenda module (views, event editor, import/export, reminders and widgets kept up to date). */
     val agenda = AgendaController(
-        app, repo, viewModelScope, io, contacts.contacts, { snack = it }, { screen = it },
-        openNote = { n, ret -> openNote(n, ret) },
-        openActivity = { activityReturn = Screen.AGENDA; activities.open(it) },
+        app, repo, viewModelScope, io, contacts.contacts, { snack = it }, { screen = it }, { goBack() },
+        openNote = { n -> openNote(n) },
+        openActivity = { activities.open(it) },
         openContact = { id ->
             // a birthday tapped in a notification or a widget at cold start: the contacts are read after the notes
             contacts.whenScanned {
                 val c = contacts.book.byId(id)
-                if (c == null) snack = Snack("Contact introuvable") else contacts.open(c, returnTo = Screen.AGENDA)
+                if (c == null) snack = Snack("Contact introuvable") else contacts.open(c)
             }
         },
         syncing = { syncing },
     )
 
-    var screen by mutableStateOf(rootOf(settings.lastModule.takeUnless { it in settings.hiddenModules } ?: Module.NOTES))
+    /** Back to the screen the current one was opened from, else to its module root. */
+    fun goBack() {
+        val fallback = shown.home ?: rootOf(settings.lastModule.takeUnless { it in hiddenModules } ?: Module.NOTES)
+        val to = origins.pop(shown, fallback)
+        shown = to
+    }
+
+    /** The next screen is opened by a notification or a widget at a cold start: back from it leads to its module root. */
+    fun openedFromOutside() = origins.forgetNextOrigin(System.currentTimeMillis())
     var hiddenModules by mutableStateOf(settings.hiddenModules)
         private set
     var legacyImport by mutableStateOf<LegacyImport?>(null)
@@ -524,7 +529,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun closeDrawing() {
         val d = drawing
         drawing = null
-        screen = if (editor != null) Screen.EDITOR else Screen.LIST
+        if (editor != null) screen = Screen.EDITOR else goBack()
         val ed = editor
         if (d == null || ed == null || !d.changed) return
         viewModelScope.launch {
@@ -568,7 +573,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { withContext(io) { repo.saveActivitySettings(s) } }
     }
 
-    fun openActivities() { activityReturn = Screen.ACTIVITIES; openModule(Module.ACTIVITIES) }
+    fun openActivities() = openModule(Module.ACTIVITIES)
 
     private fun rootOf(m: Module) = when (m) {
         Module.NOTES -> Screen.LIST
@@ -660,29 +665,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The record screen scrolls to its offline maps (the map-download notification), then clears this. */
     var showPreparedRoutes by mutableStateOf(false)
 
-    /** The module root the record screen goes back to (the notes' "recording" card, the notification). */
-    private var recordReturn = Screen.ACTIVITIES
-
     fun openRecord() {
         flushEditor()
-        if (screen != Screen.RECORD) recordReturn = screen.takeIf { it.module != null } ?: Screen.ACTIVITIES
         screen = Screen.RECORD
     }
-    fun openActivity(note: Note) { activityReturn = Screen.ACTIVITIES; activities.open(note) }
+    fun openActivity(note: Note) = activities.open(note)
 
     fun back() {
         when (screen) {
             Screen.EDITOR -> closeEditor()
-            Screen.SETTINGS -> screen = rootOf(settings.lastModule.takeUnless { it in hiddenModules } ?: Module.NOTES)
+            Screen.SETTINGS, Screen.AGENDA_CALENDARS, Screen.RECORD -> goBack()
             Screen.ACTIVITIES, Screen.AGENDA, Screen.CONTACTS -> openModule(Module.NOTES)
-            Screen.ACTIVITY -> { activities.close(); screen = activityReturn; activityReturn = Screen.ACTIVITIES }
+            Screen.ACTIVITY -> { activities.close(); goBack() }
             Screen.EVENT -> agenda.closeDetail()
             Screen.EVENT_EDIT -> agenda.cancelEditor()
-            Screen.AGENDA_CALENDARS -> screen = calendarsReturn
-            Screen.RECORD -> screen = recordReturn
             Screen.CONTACT, Screen.CONTACT_EDIT, Screen.CONTACT_DUPLICATES -> contacts.back()
             Screen.DRAWING -> closeDrawing()
-            Screen.PDF -> { viewingPdf = null; screen = if (editor != null) Screen.EDITOR else Screen.LIST }
+            Screen.PDF -> { viewingPdf = null; goBack() }
             Screen.LIST -> when {
                 query.isNotEmpty() -> query = ""
                 labelFilter != null -> selectLabel(null)
@@ -708,9 +707,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.EDITOR
     }
 
-    fun openNote(note: Note, returnTo: Screen = Screen.LIST) {
+    fun openNote(note: Note) {
         if (syncing) return // the banner already says why
-        editorReturn = returnTo
         val ed = EditorState(note, isNew = false)
         ed.loadedRaw = note.let { repo.fs.readText(it.path) }
         editor = ed
@@ -729,7 +727,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         flushEditor()
-        editorReturn = Screen.LIST
         val ed = EditorState(null, isNew = true)
         ed.title = subject.orEmpty().trim()
         ed.applyBody(BodyFormat.fromShared(text.orEmpty()).trim('\n'))
@@ -836,8 +833,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeEditor() {
         val ed = editor
-        screen = editorReturn
-        editorReturn = Screen.LIST
+        goBack()
         editor = null
         if (ed != null) viewModelScope.launch { persist(ed) }
     }
@@ -885,8 +881,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Deletes the open note for good; the snackbar offers a short-lived undo. */
     fun deleteEditorNote() {
         val ed = editor ?: return
-        screen = editorReturn
-        editorReturn = Screen.LIST
+        goBack()
         editor = null
         viewModelScope.launch {
             persistLock.withLock { }

@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -36,9 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,18 +78,29 @@ private sealed class ListItem(val key: String) {
  * both directions as the list is scrolled (months computed off the main thread, one by one, cached).
  */
 @Composable
-fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h24: Boolean) {
+fun AgendaList(c: AgendaController, mem: AgendaMemory, sources: AgendaSources, today: LocalDate, h24: Boolean) {
     val zone = ZoneId.systemDefault()
-    var first by remember { mutableStateOf(YearMonth.from(c.selected).minusMonths(1)) }
-    var last by remember { mutableStateOf(YearMonth.from(c.selected).plusMonths(3)) }
+    // kept by the view model: back from an entry, the list is where it was left, not on the selected day again
+    remember(mem) {
+        if (!mem.started) {
+            mem.started = true
+            mem.first = YearMonth.from(c.selected).minusMonths(1)
+            mem.last = YearMonth.from(c.selected).plusMonths(3)
+            mem.target = c.selected
+            mem.scrollRequestSeen = c.scrollRequest
+        }
+    }
+    var first by mem::first
+    var last by mem::last
     // the previous months stay shown until the new data is ready, so the list keeps its place on every change
-    var months by remember { mutableStateOf<Map<YearMonth, List<Entry>>>(emptyMap()) }
-    var monthsOf by remember { mutableStateOf<AgendaSources?>(null) }
-    var target by remember { mutableStateOf<LocalDate?>(c.selected) }
-    val list = rememberLazyListState()
+    var months by mem::months
+    var monthsOf by mem::monthsOf
+    var target by mem::target
+    val list = mem.list
 
     LaunchedEffect(c.scrollRequest) {
-        if (c.scrollRequest == 0) return@LaunchedEffect
+        if (c.scrollRequest == mem.scrollRequestSeen) return@LaunchedEffect
+        mem.scrollRequestSeen = c.scrollRequest
         val m = YearMonth.from(c.selected)
         if (m.isBefore(first) || m.isAfter(last)) {
             first = m.minusMonths(1)
@@ -100,7 +108,7 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
         }
         target = c.selected
     }
-    var monthsZone by remember { mutableStateOf(zone) }
+    var monthsZone by mem::monthsZone
     LaunchedEffect(sources, first, last, zone) {
         val fresh = if (monthsOf === sources && monthsZone == zone) HashMap(months) else HashMap()
         monthsZone = zone
@@ -132,6 +140,10 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
         if (idx >= 0) list.scrollToItem(maxOf(0, if (idx > 0 && items[idx - 1] is ListItem.Month) idx - 1 else idx))
         target = null
     }
+    val tapped = mem.dayTapped
+    RevealOnReturn(list, tapped?.let { "d:$it" }, tapped?.let { d -> items.indexOfFirst { it is ListItem.Day && it.group.date == d } }, ready = loaded && target == null) {
+        mem.dayTapped = null
+    }
     // Endless in both directions: the next two years load as they come into view; past them, and towards the past,
     // each new swipe against an end adds six months (bounded to 20 years), so empty months cannot loop.
     LaunchedEffect(list) {
@@ -159,14 +171,14 @@ fun AgendaList(c: AgendaController, sources: AgendaSources, today: LocalDate, h2
                     AgendaText.monthTitle(item.ym.year, item.ym.monthValue), style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 12.dp, top = 16.dp, bottom = 6.dp),
                 )
-                is ListItem.Day -> DayRow(c, item.group, today, zone, h24)
+                is ListItem.Day -> DayRow(c, item.group, today, zone, h24) { mem.dayTapped = item.group.date }
             }
         }
     }
 }
 
 @Composable
-private fun DayRow(c: AgendaController, g: DayGroup, today: LocalDate, zone: ZoneId, h24: Boolean) {
+private fun DayRow(c: AgendaController, g: DayGroup, today: LocalDate, zone: ZoneId, h24: Boolean, onOpen: () -> Unit) {
     Column {
         if (g.date == today) {
             Text("Aujourd'hui", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
@@ -178,7 +190,7 @@ private fun DayRow(c: AgendaController, g: DayGroup, today: LocalDate, zone: Zon
                 if (g.entries.isEmpty()) {
                     Text("Rien de prévu aujourd'hui", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 18.dp))
                 }
-                g.entries.forEach { e -> EntryChip(e, AgendaText.timeLineOn(e, g.date, zone, h24, c.eventZoneTimes)) { c.open(e) } }
+                g.entries.forEach { e -> EntryChip(e, AgendaText.timeLineOn(e, g.date, zone, h24, c.eventZoneTimes)) { onOpen(); c.open(e) } }
             }
         }
     }
@@ -293,7 +305,7 @@ private val GUTTER = 44.dp
 /** Semaine (7 columns) or Jour (1): all-day strip, hour grid, current-time line; swiped between periods. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun TimeGridView(c: AgendaController, sources: AgendaSources, today: LocalDate, h24: Boolean, days: Int) {
+fun TimeGridView(c: AgendaController, mem: AgendaMemory, sources: AgendaSources, today: LocalDate, h24: Boolean, days: Int) {
     val base = remember(days, c.weekStart) { if (days == 7) AgendaLayout.weekStartOf(LocalDate.now(), c.weekStart) else LocalDate.now() }
     fun startOf(d: LocalDate) = if (days == 7) AgendaLayout.weekStartOf(d, c.weekStart) else d
     fun pageOf(d: LocalDate) = MID + (ChronoUnit.DAYS.between(base, startOf(d)) / days).toInt()
@@ -307,8 +319,10 @@ fun TimeGridView(c: AgendaController, sources: AgendaSources, today: LocalDate, 
     }
     val density = LocalDensity.current
     val hourPx = with(density) { HOUR.toPx() }
-    // the vertical position is shared by the pages: swiping keeps the same hours in view
-    var scrollY by remember { mutableIntStateOf(((java.time.LocalTime.now().hour - 1).coerceAtLeast(0) * hourPx).toInt()) }
+    // the vertical position is shared by the pages (swiping keeps the same hours in view) and kept by the view
+    // model (back from an event, the same hours are shown); first an hour before now
+    if (mem.hourScroll < 0) mem.hourScroll = ((java.time.LocalTime.now().hour - 1).coerceAtLeast(0) * hourPx).toInt()
+    var scrollY by mem::hourScroll
     HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, key = { it }) { page ->
         val start = base.plusDays((page - MID).toLong() * days)
         TimeGridPage(c, sources, (0 until days).map { start.plusDays(it.toLong()) }, today, h24, scrollY, isCurrent = { pager.currentPage == page }) { scrollY = it }

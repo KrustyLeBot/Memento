@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 from ..core import contacts as ct
 from ..core import vcard
 from . import icons, overwrite, theme
+from .scroll_memory import ScrollMemory, restore_view
 
 MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre",
           "décembre"]
@@ -317,6 +318,7 @@ class DuplicatesDialog(QDialog):
 class ContactsScreen(QWidget):
     message = Signal(str, object)  # text, undo callback or None
     changed = Signal()
+    detail_back = Signal()  # back (or delete) on a contact: the window returns where it was opened from
 
     def __init__(self):
         super().__init__()
@@ -324,6 +326,8 @@ class ContactsScreen(QWidget):
         self.first_name_first = False
         self.current: ct.Contact | None = None
         self.last_import: ct.ImportOutcome | None = None
+        self.memory = ScrollMemory()  # where the list was when a contact was opened from it: (id, row)
+        self._built_query: str | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 0)
         self.stack = QStackedWidget()
@@ -368,7 +372,7 @@ class ContactsScreen(QWidget):
         bar = QHBoxLayout()
         self.back = QToolButton()
         self.back.setToolTip("Retour")
-        self.back.clicked.connect(self.show_list)
+        self.back.clicked.connect(self.detail_back)
         bar.addWidget(self.back)
         self.name = QLabel()
         self.name.setStyleSheet("font-size: 16pt; font-weight: 600;")
@@ -439,9 +443,17 @@ class ContactsScreen(QWidget):
         return [self.list.item(i).text() for i in range(self.list.count()) if not self.list.item(i).data(ID_ROLE)]
 
     def rebuild(self) -> None:
-        self.list.clear()
-        people = self.contacts()
         query = self.search.text()
+        # a rescan (sync, edit) keeps the list where it is; a new search starts at the top
+        keep = self.list.verticalScrollBar().value() if query == self._built_query else None
+        self._built_query = query
+        self.list.clear()
+        self._fill(query)
+        if keep:
+            restore_view(self.list, keep, None)
+
+    def _fill(self, query: str) -> None:
+        people = self.contacts()
         bold = QFont()
         bold.setBold(True)
 
@@ -478,7 +490,15 @@ class ContactsScreen(QWidget):
         path = item.data(ID_ROLE)
         c = next((x for x in self.contacts() if x.path == path), None) if path else None
         if c is not None:
+            self.memory.remember(self.list.verticalScrollBar().value(), (c.id, self.list.row(item)))
             self.show_contact(c)
+
+    def _row_of(self, contact_id: str, near: int) -> int:
+        """The list row showing that contact: the one it was opened from when still there (a favourite is listed
+        twice), else the first."""
+        ids = {c.path: c.id for c in self.contacts()}
+        rows = [i for i in range(self.list.count()) if ids.get(self.list.item(i).data(ID_ROLE)) == contact_id]
+        return near if near in rows else (rows[0] if rows else -1)
 
     def focus_search(self) -> None:
         self.search.setFocus()
@@ -489,6 +509,10 @@ class ContactsScreen(QWidget):
     def show_list(self) -> None:
         self.current = None
         self.stack.setCurrentIndex(0)
+        if self.memory.pending:
+            value, (contact_id, near) = self.memory.take()
+            row = self._row_of(contact_id, near)
+            restore_view(self.list, value, self.list.indexFromItem(self.list.item(row)) if row >= 0 else None)
 
     def show_contact(self, c: ct.Contact) -> None:
         self.current = c
@@ -571,8 +595,8 @@ class ContactsScreen(QWidget):
         if c is None:
             return
         raw = self.store.contacts.delete(c)
-        self.show_list()
         self.rebuild()
+        self.detail_back.emit()
         self.changed.emit()
 
         def undo() -> None:

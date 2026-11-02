@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,8 +83,25 @@ fun ContactsScreen(vm: MainViewModel) {
         var i = 1
         sections.associate { s -> (s.title to i).also { i += 1 + s.contacts.size } }
     }
-    val list = rememberLazyListState()
+    val list = vm.lists.contacts
     val scope = rememberCoroutineScope()
+    val open = { section: String, contact: Contact -> vm.lists.contactTapped = section to contact.id; c.open(contact) }
+    val tapped = vm.lists.contactTapped
+    val (tappedKey, tappedIndex) = when {
+        tapped == null -> Pair<String?, Int?>(null, null)
+        // tapped in the search results: they are still on screen (the query is kept)
+        tapped.first.isEmpty() -> results.indexOfFirst { it.id == tapped.second }.let { i ->
+            (if (i >= 0) "r:" + results[i].path else tapped.second) to (if (i >= 0) 1 + i else -1)
+        }
+        else -> {
+            // the same section when the contact is still in it, else the first one listing it (a renamed contact)
+            val s = sections.firstOrNull { s -> s.title == tapped.first && s.contacts.any { it.id == tapped.second } }
+                ?: sections.firstOrNull { s -> s.contacts.any { it.id == tapped.second } }
+            val i = s?.contacts?.indexOfFirst { it.id == tapped.second } ?: -1
+            if (s == null || i < 0) tapped.second to -1 else (s.title + ":" + s.contacts[i].path) to (starts.getValue(s.title) + 1 + i)
+        }
+    }
+    RevealOnReturn(list, tappedKey, tappedIndex) { vm.lists.contactTapped = null }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -133,11 +149,11 @@ fun ContactsScreen(vm: MainViewModel) {
                         }
                     }
                     if (searching) {
-                        items(results, key = { "r:" + it.path }) { ContactRow(it) { c.open(it) } }
+                        items(results, key = { "r:" + it.path }) { ContactRow(it) { open("", it) } }
                     } else {
                         sections.forEach { s ->
                             stickyHeader(key = "h:" + s.title) { SectionHeader(s.title) }
-                            items(s.contacts, key = { s.title + ":" + it.path }) { ContactRow(it) { c.open(it) } }
+                            items(s.contacts, key = { s.title + ":" + it.path }) { ContactRow(it) { open(s.title, it) } }
                         }
                     }
                 }

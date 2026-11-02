@@ -18,6 +18,7 @@ from ..core.store import Store
 from ..core.track import Sport
 from . import icons, theme
 from .mapview import MapPanel
+from .scroll_memory import ScrollMemory, restore_area
 
 EMOJI = {Sport.WALK: "🚶", Sport.BIKE: "🚴", Sport.EBIKE: "⚡", Sport.SKI: "⛷️", Sport.GPS: "📍", Sport.PLAIN: "⏱️"}
 GPS_SPORTS = (Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS)
@@ -325,6 +326,7 @@ class ActivityRow(QFrame):
 
 class ActivitiesScreen(QWidget):
     back_requested = Signal()
+    detail_back = Signal()  # back (or delete) on an activity: the window returns where it was opened from
     message = Signal(str)
     changed = Signal()  # something was written: the window rescans
     open_file = Signal(str)
@@ -339,6 +341,8 @@ class ActivitiesScreen(QWidget):
         self.selected: set[str] = set()
         self.included: set[Sport] = set(Sport)  # sports counted in the totals (settings)
         self.current: Note | None = None
+        self.memory = ScrollMemory()  # where the list was when an activity was opened from it
+        self.row_widgets: dict[str, ActivityRow] = {}  # by note id
         self.config = None  # set by the window: remembers the map's 3D/2D choice
         self.map_panel: MapPanel | None = None
         self.stack = QStackedWidget()
@@ -512,15 +516,17 @@ class ActivitiesScreen(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         shown = [n for n in self.activities if self.sport_filter is None or n.activity.sport == self.sport_filter]
+        self.row_widgets = {}
         if not shown:
             hint = QLabel("Aucune activité. Importe un fichier FIT ou GPX (montre, Strava).")
             hint.setStyleSheet(f"color: {s.on_surface_variant};")
             self.rows.addWidget(hint)
         for n in shown:
             row = ActivityRow(n, self.selecting, n.path in self.selected)
-            row.clicked.connect(self.open_activity)
+            row.clicked.connect(self._row_clicked)
             row.toggled.connect(self._toggle)
             self.rows.addWidget(row)
+            self.row_widgets[n.id] = row
 
     # ---- import ----
 
@@ -572,6 +578,13 @@ class ActivitiesScreen(QWidget):
         self.current = None
         self._park_map()
         self.stack.setCurrentWidget(self.list_page)
+        if self.memory.pending:
+            value, key = self.memory.take()
+            restore_area(self.scroll, value, self.row_widgets.get(key))
+
+    def _row_clicked(self, note: Note) -> None:
+        self.memory.remember(self.scroll.verticalScrollBar().value(), note.id)
+        self.open_activity(note)
 
     def open_activity(self, note: Note) -> None:
         if self.store is None or note.activity is None:
@@ -594,7 +607,7 @@ class ActivitiesScreen(QWidget):
         head = QHBoxLayout()
         back = QToolButton()
         back.setIcon(icons.icon("back", s.on_surface, 22))
-        back.clicked.connect(self.show_list)
+        back.clicked.connect(self.detail_back)
         title = QLabel(note.title)
         title.setStyleSheet("font-size: 15pt; font-weight: 700;")
         edit = QPushButton("Modifier")
@@ -803,7 +816,7 @@ class ActivitiesScreen(QWidget):
         if answer == QMessageBox.StandardButton.Yes:
             self.store.delete(note)
             self.changed.emit()
-            self.show_list()
+            self.detail_back.emit()
 
     def _add_photo(self, note: Note) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Ajouter une photo", str(Path.home()), "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp)")

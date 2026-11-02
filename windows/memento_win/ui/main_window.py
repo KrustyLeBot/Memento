@@ -67,6 +67,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.stack, 1)
         self.setCentralWidget(central)
         self.module = "notes"
+        # Modules a detail was opened from in another module (an activity or a birthday tapped in the agenda): its
+        # back (button, Escape, delete) returns there instead of to that module's own list.
+        self._origins: list[str] = []
 
         # ---- snackbar (delete + undo, copy confirmation...) ----
         self.snack = QFrame(self)
@@ -103,6 +106,8 @@ class MainWindow(QMainWindow):
         self.rail.selected.connect(self.show_module)
         self.rail.open_settings.connect(self.show_settings)
         self.activities.back_requested.connect(self.show_list)
+        self.activities.detail_back.connect(lambda: self.leave_detail(self.activities))
+        self.contacts.detail_back.connect(lambda: self.leave_detail(self.contacts))
         self.activities.changed.connect(self.refresh)
         self.activities.open_file.connect(self.open_attachment)
         self.activities.reveal_file.connect(self.reveal_attachment)
@@ -160,6 +165,7 @@ class MainWindow(QMainWindow):
     # ---- navigation ----
 
     def show_module(self, key: str) -> None:
+        self._origins.clear()  # a module shown (the rail, back): nothing before it to come back to
         if key in self.config.hidden_modules:
             key = "notes"
         self.module = key
@@ -174,6 +180,13 @@ class MainWindow(QMainWindow):
                 "contacts": self.contacts}[key]
         self.stack.setCurrentWidget(page)
         self.setWindowTitle(f"Mémento — {self.store.root}")
+
+    def leave_detail(self, screen) -> None:
+        """Back from an activity or a contact: to the module it was opened from, else to its list."""
+        screen.show_list()
+        if self._origins:
+            origin = self._origins.pop()
+            self.show_module(origin)
 
     def show_list(self) -> None:
         self.show_module("notes")
@@ -203,10 +216,10 @@ class MainWindow(QMainWindow):
             self.show_module(self.module)
         elif current is self.activities:
             if self.activities.current is not None:
-                self.activities.show_list()
+                self.leave_detail(self.activities)
         elif current is self.contacts:
             if self.contacts.current is not None:
-                self.contacts.show_list()
+                self.leave_detail(self.contacts)
             elif self.contacts.search.text():
                 self.contacts.search.clear()
         elif current is self.agenda and self.agenda.search.text():
@@ -286,17 +299,23 @@ class MainWindow(QMainWindow):
         self.store.save_activity_settings(settings)
         self.activities.set_included(settings.totals)
 
+    def _open_in(self, key: str) -> None:
+        origin = self.module if self.stack.currentWidget() is not self.settings else None
+        self.show_module(key)
+        if origin is not None and origin != key:
+            self._origins.append(origin)
+
     def open_activity(self, note: Note) -> None:
-        self.show_module("activities")
+        self._open_in("activities")
         self.activities.open_activity(note)
 
     def open_contact(self, contact_id: str) -> None:
-        self.show_module("contacts")
         self.store.scan_contacts()
         contact = self.store.contacts.by_id(contact_id)
         if contact is None:
             self.show_snack("Contact introuvable (supprimé ?)")
             return
+        self._open_in("contacts")
         self.contacts.show_contact(contact)
 
     def _agenda_settings_changed(self, change: dict) -> None:

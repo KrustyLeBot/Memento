@@ -148,7 +148,7 @@ fun AgendaScreen(vm: MainViewModel) {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menu") }
                             DropdownMenu(menu, { menu = false }) {
                                 DropdownMenuItem({ Text("Aller à une date") }, { menu = false; jump = true })
-                                DropdownMenuItem({ Text("Agendas affichés") }, { menu = false; vm.calendarsReturn = Screen.AGENDA; vm.screen = Screen.AGENDA_CALENDARS })
+                                DropdownMenuItem({ Text("Agendas affichés") }, { menu = false; vm.screen = Screen.AGENDA_CALENDARS })
                                 DropdownMenuItem({ Text("Importer un fichier .ics") }, { menu = false; pick.launch(arrayOf("text/calendar", "application/zip", "application/octet-stream", "*/*")) })
                                 DropdownMenuItem({ Text("Exporter en .ics") }, { menu = false; exporting = true })
                                 DropdownMenuItem({ Text("Imports passés") }, { menu = false; pastImports = true })
@@ -176,11 +176,12 @@ fun AgendaScreen(vm: MainViewModel) {
                 SearchResults(c, sources, today, h24)
                 return@Column
             }
+            vm.lists.agenda.showing(c.view)
             when (c.view) {
-                AgendaView.AGENDA -> AgendaList(c, sources, today, h24)
+                AgendaView.AGENDA -> AgendaList(c, vm.lists.agenda, sources, today, h24)
                 AgendaView.MONTH -> MonthView(c, sources, today, h24)
-                AgendaView.WEEK -> TimeGridView(c, sources, today, h24, days = 7)
-                AgendaView.DAY -> TimeGridView(c, sources, today, h24, days = 1)
+                AgendaView.WEEK -> TimeGridView(c, vm.lists.agenda, sources, today, h24, days = 7)
+                AgendaView.DAY -> TimeGridView(c, vm.lists.agenda, sources, today, h24, days = 1)
             }
         }
     }

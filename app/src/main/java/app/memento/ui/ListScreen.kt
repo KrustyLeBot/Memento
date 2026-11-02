@@ -200,7 +200,21 @@ fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
             } else {
                 val pinned = visible.filter { it.pinned }
                 val others = visible.filter { !it.pinned }
+                val open = { n: Note -> vm.lists.noteTapped = n.id; vm.openNote(n) }
+                val tapped = vm.lists.noteTapped
+                val index = tapped?.let { id ->
+                    val p = pinned.indexOfFirst { it.id == id }
+                    val o = others.indexOfFirst { it.id == id }
+                    val head = if (pinned.isEmpty()) 0 else 1 + pinned.size + (if (others.isEmpty()) 0 else 1)
+                    when {
+                        p >= 0 -> 1 + p
+                        o >= 0 -> head + o
+                        else -> -1
+                    }
+                }
+                RevealOnReturn(vm.lists.notes, visible.firstOrNull { it.id == tapped }?.path ?: tapped, index) { vm.lists.noteTapped = null }
                 LazyVerticalStaggeredGrid(
+                    state = vm.lists.notes,
                     columns = StaggeredGridCells.Fixed(if (vm.gridView) 2 else 1),
                     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 160.dp),
                     verticalItemSpacing = 10.dp,
@@ -209,12 +223,12 @@ fun ListScreen(vm: MainViewModel, onScan: () -> Unit) {
                 ) {
                     if (pinned.isNotEmpty()) {
                         item(span = StaggeredGridItemSpan.FullLine, key = "h-pinned") { SectionHeader("ÉPINGLÉES") }
-                        items(pinned, key = { it.path }) { NoteCard(it) { vm.openNote(it) } }
+                        items(pinned, key = { it.path }) { NoteCard(it) { open(it) } }
                         if (others.isNotEmpty()) {
                             item(span = StaggeredGridItemSpan.FullLine, key = "h-others") { SectionHeader("AUTRES") }
                         }
                     }
-                    items(others, key = { it.path }) { NoteCard(it) { vm.openNote(it) } }
+                    items(others, key = { it.path }) { NoteCard(it) { open(it) } }
                 }
             }
         }
