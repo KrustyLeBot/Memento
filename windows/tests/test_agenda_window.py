@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from agenda_ui_data import ZONE, at, populate
 from scriptorium_win.core import note as fmt
 from scriptorium_win.core.agenda import rules
-from scriptorium_win.core.agenda.calendars import Calendar, CalendarSettings
+from scriptorium_win.core.agenda.calendars import CalendarSettings
 from scriptorium_win.core.agenda.entries import EntryKind
 from scriptorium_win.core.agenda.model import event_from_note, new_event
 from scriptorium_win.core.note import Note

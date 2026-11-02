@@ -11,11 +11,11 @@ import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QPoint, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QShortcut, QTextCharFormat
+from PySide6.QtCore import QDate, QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPainterPath, QPen, QShortcut, QTextCharFormat
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCalendarWidget, QDialog, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-                               QStackedWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
+                               QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QStackedWidget, QToolButton,
+                               QVBoxLayout, QWidget, QWidgetAction)
 
 from ..core import atomic
 from ..core.agenda import calendars as cals
@@ -23,10 +23,10 @@ from ..core.agenda.entries import Entry, EntryKind
 from ..core.agenda.frdates import long_date, month_title, week_title
 from ..core.agenda.ics_export import export_all, export_calendar
 from ..core.agenda.ics_import import IcsSource, apply_import, preview, read_sources, undo_import
-from ..core.agenda.model import Event, event_to_note, new_event, stamp_date
+from ..core.agenda.model import Event, event_to_note, new_event
 from . import icons, theme
 from .agenda_data import AgendaData, AgendaPrefs
-from .agenda_editor import EventDetailDialog, EventDialog, ask_scope, color_icon
+from .agenda_editor import EventDetailDialog, EventDialog, ask_scope, color_icon, french_locale
 from .agenda_import import CalendarsDialog, ExportDialog, ImportDialog, PastImportsDialog, palette_menu, plural
 from .agenda_views import (MonthView, Row, ScheduleView, TimeGridView, grid_start, schedule_rows, search_rows,
                            time_text, week_start_of)
@@ -175,6 +175,8 @@ class AgendaScreen(QWidget):
         self.view = self.prefs.view
         self.anchor = date.today()
         self._schedule_end: date | None = None
+        self._schedule_anchor: date | None = None
+        self._problems: list[str] = []
         self._rendered: tuple | None = None
         self._calendar_rows: dict[str, LayerRow] = {}
         self._layer_rows: dict[str, LayerRow] = {}
@@ -301,6 +303,10 @@ class AgendaScreen(QWidget):
                              ("PgUp", lambda: self.step(-1)), ("PgDown", lambda: self.step(1))):
             QShortcut(QKeySequence(keys), self, activated=action,
                       context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        # Today moves at midnight even when no file changes: the key of `render` includes the date.
+        self.day_timer = QTimer(self, interval=60_000)
+        self.day_timer.timeout.connect(self.render)
+        self.day_timer.start()
         self.restyle()
         self._show_view_buttons()
 
@@ -337,6 +343,11 @@ class AgendaScreen(QWidget):
             self._sync_side()
             self._rendered = None
         self.render()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self.isAncestorOf(QApplication.focusWidget() or self):
+            self.stack.currentWidget().setFocus()  # so T and the arrows work right after opening the module
 
     def focus_search(self) -> None:
         self.search.setFocus()
@@ -385,8 +396,7 @@ class AgendaScreen(QWidget):
         self.jump = QCalendarWidget()
         self.jump.setGridVisible(False)
         self.jump.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
-        from .agenda_editor import _french
-        self.jump.setLocale(_french())
+        self.jump.setLocale(french_locale())
         self.jump.clicked.connect(lambda q: (menu.close(), self.go_to(date(q.year(), q.month(), q.day()))))
         action = QWidgetAction(menu)
         action.setDefaultWidget(self.jump)
@@ -422,15 +432,13 @@ class AgendaScreen(QWidget):
         for key, row in self._layer_rows.items():
             layer = settings.layer(key)
             row.set_state(row.name, layer.color, layer.visible)
-        problems = self.data.problems
-        self.problems.setVisible(bool(problems))
-        self.problems.setText(plural(len(problems), "fichier illisible", "fichiers illisibles") if problems else "")
 
     def show_problems(self) -> None:
         box = QMessageBox(self)
-        box.setWindowTitle("Fichiers illisibles")
-        box.setText("Ces fichiers de l'agenda n'ont pas pu être lus ; ils ne sont pas modifiés.")
-        box.setDetailedText("\n".join(self.data.problems))
+        box.setWindowTitle("Problèmes de lecture")
+        box.setText("Ces fichiers ou ces règles n'ont pas pu être lus entièrement. Rien n'a été modifié ; "
+                    "ce qui est lisible est affiché.")
+        box.setDetailedText("\n".join(self._problems))
         box.exec()
 
     # ---- rendering ----
@@ -467,8 +475,8 @@ class AgendaScreen(QWidget):
             return
         if self.view == "month":
             start = grid_start(self.anchor, self.prefs.week_start)
-            entries = self.data.entries(start, start + timedelta(days=41)).entries
-            self.month.set_month(self.anchor, self.prefs.week_start, entries, today, tz, self.anchor)
+            result = self.data.entries(start, start + timedelta(days=41))
+            self.month.set_month(self.anchor, self.prefs.week_start, result.entries, today, tz)
             self.stack.setCurrentWidget(self.month)
         elif self.view in ("week", "day"):
             if self.view == "week":
@@ -476,25 +484,40 @@ class AgendaScreen(QWidget):
                 days = [first + timedelta(days=i) for i in range(7)]
             else:
                 days = [self.anchor]
-            entries = self.data.entries(days[0], days[-1]).entries
-            self.grid.set_days(days, entries, today, tz, self.data.now)
+            result = self.data.entries(days[0], days[-1])
+            self.grid.set_days(days, result.entries, today, tz, self.data.now)
             self.stack.setCurrentWidget(self.grid)
         else:
-            self._render_schedule(today)
+            result = self._render_schedule(today, keep_scroll=self.stack.currentWidget() is self.schedule)
             self.stack.setCurrentWidget(self.schedule)
+        self._show_problems(result.problems)
 
-    def _render_schedule(self, today: date) -> None:
+    def _render_schedule(self, today: date, keep_scroll: bool):
+        """Days from the anchor until 25 entries or 400 days; a redraw after a sync keeps the days already
+        loaded and the scroll position when the anchor did not move."""
         first = self.anchor
         last = first + timedelta(days=CHUNK_DAYS - 1)
+        same = keep_scroll and self._schedule_anchor == first and self._schedule_end is not None
+        while True:
+            result = self.data.entries(first, last)
+            if (len(result.entries) >= 25 or (last - first).days >= 400) and (not same or last >= self._schedule_end):
+                break
+            last += timedelta(days=CHUNK_DAYS)
         by_day = self.data.by_day(first, last)
-        while sum(len(v) for v in by_day.values()) < 25 and (last - first).days < 400:
-            more_first, last = last + timedelta(days=1), last + timedelta(days=CHUNK_DAYS)
-            by_day.update(self.data.by_day(more_first, last))
         if first > today:
             by_day.pop(today, None)
-        self._schedule_end = last
+        position = self.schedule.verticalScrollBar().value() if same else 0
+        self._schedule_anchor, self._schedule_end = first, last
         self.schedule.set_rows(schedule_rows(by_day, today), today, self.data.tz, self.prefs.event_zone_times)
-        self.schedule.scrollToTop()
+        self.schedule.verticalScrollBar().setValue(position)
+        return result
+
+    def _show_problems(self, window_problems: list[str]) -> None:
+        """Unreadable files, and what the visible window could not show (bad rules, cut series): never hidden."""
+        problems = list(dict.fromkeys(self.data.problems + window_problems))
+        self._problems = problems
+        self.problems.setVisible(bool(problems))
+        self.problems.setText(plural(len(problems), "problème de lecture", "problèmes de lecture") if problems else "")
 
     def _extend_schedule(self) -> None:
         if self._schedule_end is None or self.view != "agenda" or self.search.text().strip():
@@ -762,17 +785,19 @@ class AgendaScreen(QWidget):
         """Removes the calendar; its events go to `move_to`, or are deleted when None."""
         settings = self.data.settings
         victims = [e for e in self.data.sources.events if settings.calendar(e.calendar).id == calendar_id]
-        for ev in victims:
-            if move_to:
-                self.store.agenda.save(ev.copy(calendar=move_to))
-            else:
-                self.store.agenda.delete(ev)
 
         def change(s):
             s.calendars = [c for c in s.calendars if c.id != calendar_id]
             if s.default == calendar_id:
                 s.default = move_to or s.calendars[0].id
-        self._edit_settings(change)
+        if not self._edit_settings(change):
+            return
+        for ev in victims:
+            if move_to:
+                self.store.agenda.save(ev.copy(calendar=move_to))
+            else:
+                self.store.agenda.delete(ev)
+        self._after_write()
         self.message.emit("Agenda supprimé", None)
 
     def set_layer(self, key: str, visible: bool | None = None, color: str | None = None) -> None:
@@ -822,6 +847,12 @@ class AgendaScreen(QWidget):
             return
         existing = list(self.data.sources.events)
         settings = copy.deepcopy(self.data.settings)
+        if settings.problem:
+            answer = QMessageBox.question(self, "Import", f"{settings.problem}\n\nL'import peut devoir réécrire ce fichier "
+                                                          "(nouveaux agendas). Continuer ?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            settings.problem = None
         previews = preview(parsed, existing, settings)
         zone = self.data.zone
 

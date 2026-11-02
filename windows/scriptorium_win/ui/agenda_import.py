@@ -245,6 +245,7 @@ class ImportDialog(QDialog):
         data = row["target"].currentData()
         row["name"].setVisible(data == NEW)
         row["color"].setVisible(data == NEW)
+        self._update_button()
         if data in (NEW, SKIP):
             row["dup"].setText("")
             row["dup"].hide()
@@ -254,7 +255,6 @@ class ImportDialog(QDialog):
         row["dup"].setText(plural(n, "événement déjà présent dans cet agenda", "événements déjà présents dans cet agenda")
                            if n else "Aucun événement déjà présent dans cet agenda")
         row["dup"].show()
-        self._update_button()
 
     def _update_button(self) -> None:
         if hasattr(self, "import_button"):

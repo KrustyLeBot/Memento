@@ -10,6 +10,7 @@ Positions follow the wall clock of the device zone, so a 23 h or 25 h day (dayli
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QAbstractListModel, QLocale, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -25,6 +26,7 @@ LAYER_ICONS = {EntryKind.ACTIVITY: "run", EntryKind.NOTE: "edit_note", EntryKind
 MINUTES = 1440
 
 
+@lru_cache(maxsize=1)
 def uses_24h() -> bool:
     return "a" not in QLocale.system().timeFormat(QLocale.FormatType.ShortFormat).lower()
 
@@ -203,16 +205,13 @@ class MonthView(QWidget):
         self.grid_start = self.month
         self.week_start = 0
         self.today = date.today()
-        self.selected: date | None = None
         self.tz = None
         self.entries: list[Entry] = []
         self.hits = _Hits()
         self._hover: object | None = None
 
-    def set_month(self, month: date, week_start: int, entries: list[Entry], today: date, tz,
-                  selected: date | None = None) -> None:
+    def set_month(self, month: date, week_start: int, entries: list[Entry], today: date, tz) -> None:
         self.month, self.week_start, self.entries, self.today, self.tz = month.replace(day=1), week_start, entries, today, tz
-        self.selected = selected
         self.grid_start = grid_start(self.month, week_start)
         self.update()
 
@@ -253,8 +252,6 @@ class MonthView(QWidget):
                 cell = QRectF(c * cw, top, cw, ch)
                 if d.month != self.month.month:
                     p.fillRect(cell, QColor(s.surface_container))
-                if d == self.selected and d != self.today:
-                    p.fillRect(cell, _alpha(s.primary, 0.08))
                 p.setPen(grid_pen)
                 p.drawLine(QPointF(cell.left(), cell.top()), QPointF(cell.right(), cell.top()))
                 if c:
@@ -408,6 +405,7 @@ class TimeGridView(QWidget):
         self.clock_timer = QTimer(self, interval=60_000)
         self.clock_timer.timeout.connect(self.canvas.update)
         self.clock_timer.start()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_days(self, days: list[date], entries: list[Entry], today: date, tz, now_fn) -> None:
         self.days, self.today, self.tz, self.now_fn = days, today, tz, now_fn
@@ -963,7 +961,8 @@ class ScheduleView(QListView):
 
     def _scrolled(self, value: int) -> None:
         bar = self.verticalScrollBar()
-        if not self.search_mode and value >= bar.maximum() - self.viewport().height():
+        # Only when the list overflows: a short list already holds the screen's 400 days.
+        if not self.search_mode and bar.maximum() > 0 and value >= bar.maximum() - self.viewport().height():
             self.needs_more.emit()
 
     def scroll_to_day(self, d: date) -> None:

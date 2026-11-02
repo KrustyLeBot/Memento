@@ -130,6 +130,13 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   (`RECURRENCE-ID`) become exception files; HTML descriptions become text; attendees are listed as text.
 - Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used; same bytes on Android
   and Windows. Shared test vectors (synthetic Google, Proton and Outlook shapes): `testdata/agenda/`.
+- Windows: views Agenda, Mois, Semaine, Jour (keys T, ← →, Ctrl+F), the event editor (repetition presets and a
+  custom editor writing plain `RRULE`s; a rule it cannot express is shown as "Règle importée" and kept as is),
+  series scopes "cet événement" / "tous les événements", delete with undo, calendars, import and export, and
+  "Ajouter à l'agenda" in the note editor. Week start, "heures dans le fuseau de l'événement" and default reminders
+  are settings of the PC; the default calendar and the layers are in `calendars.json`. Windows stores reminders but
+  never notifies (the phone does). Editing a whole series moves its `exdate` and its edited occurrences with the
+  first start, so they keep matching.
 ## Contacts
 
 The "Contacts" module (bottom bar on the phone, left rail on the PC) keeps an address book as one note per contact

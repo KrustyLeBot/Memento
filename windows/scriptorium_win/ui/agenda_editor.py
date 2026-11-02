@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta
 from urllib.parse import quote
 from zoneinfo import available_timezones
 
-from PySide6.QtCore import QDate, QStringListModel, QTime, Qt, QUrl, Signal
+from PySide6.QtCore import QDate, QLocale, QStringListModel, QTime, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QCompleter, QDateEdit, QDialog, QDialogButtonBox,
                                QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
@@ -26,6 +26,7 @@ from ..core.agenda.frdates import MONTHS, WEEKDAYS, alert_label, clock, day_numb
 from ..core.agenda.model import Event, is_all_day, stamp_date
 from . import icons, theme
 from .agenda_views import uses_24h, wall
+from .editor_view import RichBody
 
 ALERT_PRESETS = [-5, -10, -15, -30, -60, -1440, -10080]
 FLOATING = "Celui de l'appareil (flottant)"
@@ -220,7 +221,7 @@ def date_edit(d: date) -> QDateEdit:
     edit = QDateEdit(to_qdate(d))
     edit.setCalendarPopup(True)
     edit.setDisplayFormat("ddd d MMM yyyy")
-    edit.setLocale(_french())
+    edit.setLocale(french_locale())
     return edit
 
 
@@ -230,8 +231,7 @@ def time_edit(t: time) -> QTimeEdit:
     return edit
 
 
-def _french():
-    from PySide6.QtCore import QLocale
+def french_locale() -> QLocale:
     return QLocale(QLocale.Language.French, QLocale.Country.France)
 
 
@@ -548,7 +548,6 @@ class EventDialog(QDialog):
         parts = fmt.parse_body(event.body)
         self.rich_description = not parts.items and not event.note.attachments and not event.note.pdf
         if self.rich_description:
-            from .editor_view import RichBody
             self.description = RichBody()
             self.description.setMinimumHeight(120)
             self.description.set_markdown(event.body)
@@ -767,8 +766,8 @@ def open_map(text: str) -> None:
 # ---- detail card ----
 
 class EventDetailDialog(QDialog):
-    """What a click on an event or a dated note shows; `action` tells the screen what to do next:
-    "edit", "delete", "note" (open as a note), "restore" (an edited occurrence back to the series'), or None."""
+    """What a click on an event shows; `action` tells the screen what to do next: "edit", "delete", "note"
+    (open as a note), "restore" (an edited occurrence back to the series'), or None."""
 
     def __init__(self, parent, entry: Entry, settings: CalendarSettings, device_zone: str, today: date,
                  event_zone: bool, series: Event | None = None):
@@ -858,13 +857,6 @@ class EventDetailDialog(QDialog):
             as_note.setToolTip("La description dans l'éditeur de notes : listes, pièces jointes, dessins")
             as_note.clicked.connect(lambda: self._finish("note"))
             buttons.addWidget(as_note)
-        else:
-            unplan = QPushButton("Retirer de l'agenda")
-            unplan.clicked.connect(lambda: self._finish("unplan"))
-            buttons.addWidget(unplan)
-            open_note = QPushButton("Ouvrir la note")
-            open_note.clicked.connect(lambda: self._finish("note"))
-            buttons.addWidget(open_note)
         buttons.addStretch()
         close = QPushButton("Fermer")
         close.clicked.connect(self.reject)
