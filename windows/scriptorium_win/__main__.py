@@ -28,6 +28,15 @@ def _excepthook(kind, value, tb) -> None:
     _show_error(f"Erreur inattendue : {value}", "".join(traceback.format_exception(kind, value, tb)))
 
 
+def _usable(folder: Path) -> bool:
+    """An existing folder with something in it; an unreadable one (share offline, no rights) is not."""
+    try:
+        return folder.is_dir() and any(folder.iterdir())
+    except OSError as error:
+        print(f"{folder}: {error}", file=sys.stderr)
+        return False
+
+
 def main() -> int:
     # A "windowed" executable has no console: some libraries crash without stdout/stderr.
     if sys.stdout is None:
@@ -66,7 +75,7 @@ def _run() -> int:
     config = Config()
     theme.apply_theme(app, config.theme)
     workdir = config.workdir
-    if workdir is None or not workdir.is_dir() or not any(workdir.iterdir()):
+    if workdir is None or not _usable(workdir):
         if workdir is not None:
             # A missing or emptied folder is usually one that moved (e.g. renamed by the sync): ask again.
             QMessageBox.warning(None, "Scriptorium", f"Le dossier {workdir} est introuvable ou vide. Choisis le dossier "
