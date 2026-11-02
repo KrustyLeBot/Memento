@@ -312,15 +312,44 @@ Free text shown as "Notes".
 
 ### Contacts in the phone (Android)
 
-Off by default. "Afficher mes contacts dans le téléphone (appels, SMS…)" in the settings asks for the contacts
-permissions and copies the contacts into the phone's own contacts, under an account "Mémento" (type
-`app.memento.contacts`, visible in the phone's Settings → Accounts), so the dialer, the messaging apps and the car
-show the names. It is one way: the files stay the truth, edits made in the phone's contacts app are overwritten at the
-next update, and the app is where a contact is edited. One raw contact per file (`SOURCE_ID` = the contact id,
-`SYNC1` = a hash of what is copied), updated at app start, after a change of the files, after an import and when the
-setting is turned on; nothing is rewritten when nothing changed. An empty `contacts/` folder never wipes the copies
-(a folder that cannot be read looks empty). Turning the setting off, or removing the account in the phone's
-settings, removes the copies.
+Off by default. "Mes contacts dans le téléphone (appels, SMS, app Contacts)" in the settings asks for the contacts
+permissions and syncs the contacts with the phone's own contacts, both ways, under an account "Mémento" (type
+`app.memento.contacts`, visible in the phone's Settings → Accounts): the dialer, the messaging apps and the car show
+the names, and a contact created, edited or deleted in the phone's contacts app is created, edited or deleted in the
+files too (so on the PC as well, through the synced folder).
+
+- **Mémento as the storage of the phone's contacts app.** The sync adapter declares `supportsUploading="true"` and
+  `contacts.xml` an `EditSchema` (name, phones with their type, e-mails, one formatted address, the birthday with an
+  optional year, a note; `photo` is declared because the platform requires it, but photos are not copied into the
+  files): the account is writable, so the contacts app lists "Mémento" when a contact is created ("save to") and
+  edits its contacts with those fields. In Samsung Contacts, set **Emplacement de stockage par défaut** to Mémento
+  (Contacts → ≡ → Paramètres *(verify)*) so "Créer un nouveau contact" in the dialer saves there.
+- **One raw contact per file**: `SOURCE_ID` = the contact id, `SYNC1` = a hash of the mirrored fields.
+- **Phone → files**, on every run: a raw contact with no `SOURCE_ID` was created on the phone and becomes a new
+  contact file; a `DIRTY` one was edited and its file takes the phone's fields (the notes body is the note field;
+  unknown frontmatter keys, attachments and a number's own spelling or label are kept when the phone left it as it
+  was; phone types without a Mémento label keep a French one: "fax travail", "principal"…); a `DELETED` one was
+  deleted, its file goes to an app-private trash for 7 days and the app shows "Contact supprimé sur le téléphone :
+  Annuler" the next time it is open. A file edited since the last run wins over a deletion on the phone.
+- **Files → phone** as before, by hash: insert, rewrite (the photo and other rows the app does not handle are kept),
+  remove when the file is gone. A file deleted while the phone edited its contact comes back from the phone.
+- **Both sides changed** since the last run: the most recent change wins (the file's modification time against the
+  phone's last-updated time of the contact), and the other version's differing fields are appended to the notes
+  ("Version du téléphone remplacée le … :" or "Version de Mémento remplacée le … :"), so nothing is lost.
+- **When it runs**: app start and resume, a change of the files, after an edit or an import, a change of the phone's
+  contacts while the app is alive (a `ContentObserver`), and, app closed, when Android starts the account's sync
+  adapter because contacts are dirty (automatic sync must be on in the phone's settings). One run at a time; each one
+  is idempotent, applies the files first, then the provider in batches of at most 400 operations, all off the main
+  thread. The settings show "Dernière synchro des contacts : …" with the counts, or the error.
+- **Safety**: an empty `contacts/` folder never removes or rewrites anything on the phone (a folder that cannot be
+  read looks empty); only contacts newly created on the phone are still saved. A run that failed half way is simply
+  done again (a contact created on the phone whose file was written is not created twice). Turning the setting off
+  first saves what the phone changed, then removes the account and its copies; removing the account in the phone's
+  settings turns the setting off.
+
+Pure decisions in `contacts/MirrorSync.kt` and `contacts/MirrorPlan.kt` (JVM-tested against a fake provider),
+app-private state and trash in `contacts/MirrorStore.kt`, provider glue in `contacts/ContactsMirror.kt`, the
+authenticator and sync adapter in `contacts/MirrorServices.kt`.
 
 ### Mémento as the contacts app (Android)
 
@@ -337,7 +366,8 @@ and the chooser's **Toujours** makes it the one they open (Settings → Contacts
   contact of another account offers an import (its data rows read into the editor). Needs READ_CONTACTS, asked then
   if missing.
 - `contacts.xml` declares `inviteContactActivity`, the only standard hook: a contacts app honouring it shows
-  "Ajouter à Mémento" on the contacts of other accounts. The mirrored contacts stay read-only there (no `EditSchema`).
+  "Ajouter à Mémento" on the contacts of other accounts. The mirrored contacts themselves are editable there (its
+  `EditSchema`, see above), and those edits come back into the files.
 
 Started just for such an action, the app finishes once the contact is saved or the action cancelled, back to the
 app that asked. Pure parsing in `contacts/ExternalContact.kt` (tested), provider glue and flow in

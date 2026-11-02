@@ -184,7 +184,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- The account of the contacts mirrored into the phone: a stub authenticator and a contacts sync adapter. -->
+        <!-- The account of the contacts mirrored with the phone (both ways): a stub authenticator and a contacts sync adapter. -->
         <service
             android:name=".contacts.MirrorAuthenticatorService"
             android:exported="true">

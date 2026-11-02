@@ -59,6 +59,10 @@ class ContactBook(private val fs: () -> Fs) {
 
     fun byId(id: String): Contact? = _contacts.value.firstOrNull { it.id == id && !it.conflict }
 
+    /** Modification time of each contact file as last read or written, by contact id (conflict copies left out). */
+    @Synchronized
+    fun modifiedById(): Map<String, Long> = parsed.values.filter { !it.second.conflict }.associate { it.second.id to it.first }
+
     private fun newId(): String {
         val ids = _contacts.value.map { it.id }.toSet()
         var id = NoteFormat.generateId()
@@ -88,6 +92,9 @@ class ContactBook(private val fs: () -> Fs) {
         }
         return write(x)
     }
+
+    /** The file's text as it is now. */
+    fun text(c: Contact): String? = fs().readText(c.path)
 
     /** Deletes the file; returns its text so the deletion can be undone with [restore]. */
     @Synchronized

@@ -1,14 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Lets the contacts app show the account's contacts with the standard fields. No EditSchema on purpose: the
-    mirrored copies stay read-only in the phone's contacts app (the files are the truth, see ContactsMirror).
+    The account type as the contacts apps read it (AOSP ExternalAccountType; Samsung Contacts follows it).
 
-    inviteContactActivity / inviteContactActionLabel are the only standard hooks (AOSP ExternalAccountType, no
-    namespace): on a contact of ANOTHER account the contacts app may offer "Ajouter à Mémento", which starts
-    MainActivity with com.android.contacts.action.INVITE_CONTACT and the contact's lookup URI (an import into
-    Mémento, ContactRequestFlow). The platform has no "edit with this app" attribute for an account's own raw
-    contacts (editContactActivity does not exist); editing goes through the ACTION_EDIT intent filter instead.
+    EditSchema: declares the fields a contact of the account may hold, which makes the account writable: the
+    phone's contacts app then offers "Mémento" when a contact is created (the "save to" list, default storage)
+    and edits its contacts with exactly these fields, those of a Mémento contact (MirrorPlan.rows): name, phones
+    with their type, e-mails, one postal address (a single formatted field), the birthday (year optional), a note.
+    ExternalAccountType rejects an EditSchema without "name" and "photo" (the whole account type is then
+    ignored), and requires supportsDisplayName and the three supportsPhonetic* to be true on "name". A photo
+    is accepted by the phone but not copied into the files (its row is left as it is).
+
+    inviteContactActivity / inviteContactActionLabel (no namespace, also read by ExternalAccountType): on a
+    contact of ANOTHER account the contacts app may offer "Ajouter à Mémento", which starts MainActivity with
+    com.android.contacts.action.INVITE_CONTACT and the contact's lookup URI (an import, ContactRequestFlow).
 -->
 <ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android"
     inviteContactActivity="app.memento.MainActivity"
-    inviteContactActionLabel="@string/invite_contact_label" />
+    inviteContactActionLabel="@string/invite_contact_label">
+    <EditSchema>
+        <DataKind
+            kind="name"
+            maxOccurs="1"
+            supportsDisplayName="true"
+            supportsPrefix="false"
+            supportsMiddleName="false"
+            supportsSuffix="false"
+            supportsPhoneticFamilyName="true"
+            supportsPhoneticMiddleName="true"
+            supportsPhoneticGivenName="true" />
+        <DataKind kind="photo" maxOccurs="1" />
+        <DataKind kind="phone">
+            <Type type="mobile" />
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="other" />
+            <Type type="custom" />
+        </DataKind>
+        <DataKind kind="email">
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="other" />
+            <Type type="custom" />
+        </DataKind>
+        <DataKind kind="postal" maxOccurs="1" needsStructured="false">
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="other" />
+        </DataKind>
+        <DataKind kind="event" maxOccurs="1" dateWithTime="false">
+            <Type type="birthday" maxOccurs="1" yearOptional="true" />
+        </DataKind>
+        <DataKind kind="note" maxOccurs="1" />
+    </EditSchema>
+</ContactsAccountType>

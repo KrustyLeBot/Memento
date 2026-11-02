@@ -292,6 +292,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         stopSync?.invoke()
+        contacts.close()
     }
 
     fun onPause() {

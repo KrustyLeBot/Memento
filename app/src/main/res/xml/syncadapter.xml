@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Makes the account a contacts account, read-only for the phone's apps (the app's files are the truth). -->
+<!--
+    Makes the account a writable contacts account. supportsUploading="true" is what the contacts apps (AOSP
+    AccountTypeManager, Samsung Contacts) need, with the EditSchema of contacts.xml, to list "Mémento" among the
+    accounts a new contact can be saved to (and as the default storage). It also makes the provider request an
+    upload sync when a contact of the account is created, edited or deleted on the phone (DIRTY): Android then
+    calls MirrorSyncAdapter, which writes the change into the files (contacts/MirrorServices.kt).
+-->
 <sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
     android:contentAuthority="com.android.contacts"
     android:accountType="app.memento.contacts"
-    android:supportsUploading="false"
-    android:userVisible="true" />
+    android:supportsUploading="true"
+    android:userVisible="true"
+    android:allowParallelSyncs="false"
+    android:isAlwaysSyncable="true" />

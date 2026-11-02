@@ -15,19 +15,40 @@ import android.provider.ContactsContract.CommonDataKinds
 import android.provider.ContactsContract.Data
 import android.provider.ContactsContract.RawContacts
 import androidx.core.content.ContextCompat
+import app.memento.NoteFormat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import java.io.File
+import java.time.ZoneId
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
-/** What one run of the mirror did. */
-data class MirrorResult(val inserted: Int, val updated: Int, val deleted: Int, val total: Int, val keptBecauseEmpty: Boolean = false)
+/** What one run of the mirror did, both ways. */
+data class MirrorResult(
+    val inserted: Int,
+    val updated: Int,
+    val deleted: Int,
+    val total: Int,
+    val keptBecauseEmpty: Boolean = false,
+    /** Contacts created on the phone, now files. */
+    val created: Int = 0,
+    /** Files rewritten from the phone's edits (conflicts included). */
+    val edited: Int = 0,
+    /** Contacts deleted on the phone, their files put in the trash. */
+    val trashed: Int = 0,
+    val conflicts: Int = 0,
+)
 
 /**
- * Writes a copy of the contacts into the phone's contacts provider under the app's own account, so the dialer
- * and the messaging apps know the names (Part C §5 L1). One way: the files are the truth, edits made in the
- * phone's contacts app are overwritten. All decisions are in [MirrorPlan]; this is the provider glue.
- * Blocking: call from an I/O dispatcher.
+ * The two-way mirror between the `contacts/` files and the phone's contacts provider, under the app's own
+ * account (Part C §5 L2). All decisions are in [MirrorSync]; this is the provider and file glue. One run at a
+ * time per process (the app, the provider observer and the sync adapter share [lock]).
+ * Blocking: call from an I/O dispatcher or the sync adapter's thread.
  */
 class ContactsMirror(private val context: Context) {
     private val resolver: ContentResolver = context.contentResolver
     private val accounts: AccountManager = AccountManager.get(context)
+    val store = MirrorStore(File(context.filesDir, "contacts-mirror"))
 
     fun hasPermissions(): Boolean = PERMISSIONS.all {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
@@ -36,13 +57,18 @@ class ContactsMirror(private val context: Context) {
     /** The app's account, if it exists (an account of its own type needs no permission to be listed). */
     fun account(): Account? = accounts.getAccountsByType(MirrorPlan.ACCOUNT_TYPE).firstOrNull()
 
-    /** Creates the account if needed and makes its contacts visible in the dialer and the contacts app. */
+    /**
+     * Creates the account if needed and makes its contacts visible. Automatic sync is on so that an edit made in
+     * the phone's contacts app (which marks the raw contact DIRTY) makes Android call [MirrorSyncService].
+     */
     fun ensureAccount(): Account {
         val account = account() ?: Account(MirrorPlan.ACCOUNT_NAME, MirrorPlan.ACCOUNT_TYPE).also {
             if (!accounts.addAccountExplicitly(it, null, null)) throw IllegalStateException("Impossible de créer le compte ${it.name}")
         }
-        ContentResolver.setIsSyncable(account, ContactsContract.AUTHORITY, 1)
-        ContentResolver.setSyncAutomatically(account, ContactsContract.AUTHORITY, false)
+        if (ContentResolver.getIsSyncable(account, ContactsContract.AUTHORITY) <= 0) ContentResolver.setIsSyncable(account, ContactsContract.AUTHORITY, 1)
+        if (!ContentResolver.getSyncAutomatically(account, ContactsContract.AUTHORITY)) {
+            ContentResolver.setSyncAutomatically(account, ContactsContract.AUTHORITY, true)
+        }
         ensureVisible(account)
         return account
     }
@@ -77,44 +103,160 @@ class ContactsMirror(private val context: Context) {
         }
     }
 
-    private fun existing(account: Account): List<MirrorRaw> {
+    // ---- reading the provider ----
+
+    private fun existing(account: Account, now: Long): List<MirrorRaw> {
         val uri = syncUri(RawContacts.CONTENT_URI, account)
-        val cols = arrayOf(RawContacts._ID, RawContacts.SOURCE_ID, RawContacts.SYNC1, RawContacts.DIRTY, RawContacts.DELETED)
+        val cols = arrayOf(
+            RawContacts._ID, RawContacts.SOURCE_ID, RawContacts.SYNC1, RawContacts.DIRTY, RawContacts.DELETED,
+            RawContacts.STARRED, RawContacts.CONTACT_ID,
+        )
         val out = ArrayList<MirrorRaw>()
+        val contactOf = HashMap<Long, Long>()
         resolver.query(uri, cols, "${RawContacts.ACCOUNT_TYPE}=? AND ${RawContacts.ACCOUNT_NAME}=?", arrayOf(account.type, account.name), null)
             ?.use { c ->
                 while (c.moveToNext()) {
-                    out.add(MirrorRaw(c.getLong(0), c.getString(1), c.getString(2), c.getInt(3) != 0, c.getInt(4) != 0))
+                    val r = MirrorRaw(
+                        c.getLong(0), c.getString(1)?.ifEmpty { null }, c.getString(2), c.getInt(3) != 0, c.getInt(4) != 0, c.getInt(5) != 0,
+                    )
+                    if (!c.isNull(6)) contactOf[r.rawId] = c.getLong(6)
+                    out.add(r)
                 }
             } ?: throw IllegalStateException("Le carnet d'adresses du téléphone ne répond pas")
+        val needed = out.filter { !it.deleted && (it.dirty || it.sourceId == null) }
+        if (needed.isEmpty()) return out
+        val ids = needed.map { it.rawId }.toHashSet()
+        val rows = dataRows(ids.toList())
+        val updatedAt = lastUpdated(needed.mapNotNull { contactOf[it.rawId] })
+        return out.map { r ->
+            if (r.rawId !in ids) r
+            else r.copy(rows = rows[r.rawId].orEmpty(), changedAt = contactOf[r.rawId]?.let { updatedAt[it] }?.takeIf { it > 0 } ?: now)
+        }
+    }
+
+    private fun inList(ids: List<Long>) = ids.joinToString(",", "(", ")")
+
+    /** The mirrored kinds of data rows of [rawIds], as [MirrorRow]s (other kinds, a photo, are not read). */
+    private fun dataRows(rawIds: List<Long>): Map<Long, List<MirrorRow>> {
+        val out = HashMap<Long, MutableList<MirrorRow>>()
+        val cols = arrayOf(Data.RAW_CONTACT_ID, Data.MIMETYPE) + (1..10).map { "data$it" }
+        for (chunk in rawIds.chunked(400)) {
+            resolver.query(Data.CONTENT_URI, cols, "${Data.RAW_CONTACT_ID} IN ${inList(chunk)}", null, "${Data._ID} ASC")?.use { c ->
+                while (c.moveToNext()) {
+                    fun s(i: Int): String = c.getString(i + 1).orEmpty().trim()
+                    val row: MirrorRow? = when (c.getString(1)) {
+                        CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE ->
+                            // data1 display, data2 given, data3 family, data5 middle (kept with the first name)
+                            MirrorRow.Name(listOf(s(2), s(5)).filter { it.isNotEmpty() }.joinToString(" "), s(3), s(1))
+                        CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> s(1).takeIf { it.isNotEmpty() }?.let {
+                            val (kind, label) = MirrorPlan.phoneType(s(2).toIntOrNull() ?: 0, s(3).ifEmpty { null })
+                            MirrorRow.Tel(it, kind, label)
+                        }
+                        CommonDataKinds.Email.CONTENT_ITEM_TYPE -> s(1).takeIf { it.isNotEmpty() }?.let { MirrorRow.Mail(it) }
+                        CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE -> {
+                            // data1 formatted; else data4 street, data9 postcode, data7 city, data8 region, data10 country
+                            val formatted = s(1).ifEmpty {
+                                listOf(s(4), listOf(s(9), s(7)).filter { it.isNotEmpty() }.joinToString(" "), s(8), s(10))
+                                    .filter { it.isNotEmpty() }.joinToString("\n")
+                            }
+                            formatted.takeIf { it.isNotEmpty() }?.let { MirrorRow.Postal(it) }
+                        }
+                        CommonDataKinds.Event.CONTENT_ITEM_TYPE ->
+                            if (s(2).toIntOrNull() == CommonDataKinds.Event.TYPE_BIRTHDAY && s(1).isNotEmpty()) MirrorRow.Birthday(s(1)) else null
+                        CommonDataKinds.Note.CONTENT_ITEM_TYPE -> s(1).takeIf { it.isNotEmpty() }?.let { MirrorRow.Note(it) }
+                        else -> null
+                    }
+                    if (row != null) out.getOrPut(c.getLong(0)) { ArrayList() }.add(row)
+                }
+            } ?: throw IllegalStateException("Le carnet d'adresses du téléphone ne répond pas")
+        }
         return out
     }
 
-    /** Brings the provider in line with [contacts]. Throws on any failure (permission, provider): nothing is hidden. */
-    fun sync(contacts: List<Contact>): MirrorResult {
+    /** When each aggregate contact last changed: the closest the provider gives to "when the user edited it". */
+    private fun lastUpdated(contactIds: List<Long>): Map<Long, Long> {
+        val out = HashMap<Long, Long>()
+        val cols = arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP)
+        for (chunk in contactIds.distinct().chunked(400)) {
+            resolver.query(ContactsContract.Contacts.CONTENT_URI, cols, "${ContactsContract.Contacts._ID} IN ${inList(chunk)}", null, null)?.use { c ->
+                while (c.moveToNext()) if (!c.isNull(1)) out[c.getLong(0)] = c.getLong(1)
+            }
+        }
+        return out
+    }
+
+    // ---- one run ----
+
+    /**
+     * Brings the files and the provider in line, both ways (see [MirrorSync]). Throws on any failure (permission,
+     * provider, files): nothing is hidden, and a failed run is simply done again by the next one.
+     */
+    fun sync(book: ContactBook, now: Long = System.currentTimeMillis()): MirrorResult = lock.withLock {
         if (!hasPermissions()) throw SecurityException("Autorisation Contacts refusée")
         val account = ensureAccount()
-        val existing = existing(account)
-        val wanted = MirrorPlan.mirrored(contacts)
-        // An unreadable folder (sync in progress, SAF trouble) looks empty: never wipe the phone on that.
-        val keep = wanted.isEmpty() && existing.any { !it.deleted }
-        val ops = if (keep) emptyList() else MirrorPlan.diff(contacts, existing)
-        for (batch in MirrorPlan.batches(ops)) {
+        book.scan()
+        val files = book.contacts.value
+        val state = store.read()
+        store.purge(now)
+        val raws = MirrorSync.resume(existing(account, now), state.pending, files.map { it.id }.toSet())
+        val plan = MirrorSync.reconcile(files, book.modifiedById(), raws, state.synced, now, ZoneId.systemDefault()) { NoteFormat.generateId() }
+
+        // Files first: the provider is told a phone change is settled (DIRTY cleared) only once its file holds it.
+        val createdIds = plan.files.filterIsInstance<FileOp.Create>().map { it.contact.id }.toSet()
+        store.addPending(plan.provider.filterIsInstance<MirrorOp.Ack>().filter { it.sourceId in createdIds }.associate { it.rawId to it.sourceId })
+        for (op in plan.files) {
+            when (op) {
+                is FileOp.Create -> {
+                    val saved = book.save(op.contact, now)
+                    if (saved.id != op.contact.id) throw IllegalStateException("Identifiant de contact déjà pris : ${op.contact.id}")
+                }
+                is FileOp.Write -> book.save(op.contact, now)
+                is FileOp.Trash -> {
+                    val text = book.text(op.contact)
+                    if (text != null) store.trash(op.contact.path, op.contact.displayName, text, now)
+                    book.delete(op.contact)
+                }
+            }
+        }
+        for (batch in MirrorPlan.batches(plan.provider)) {
             val list = ArrayList<ContentProviderOperation>()
             batch.forEach { add(list, it, account) }
             resolver.applyBatch(ContactsContract.AUTHORITY, list)
         }
-        return MirrorResult(
-            ops.count { it is MirrorOp.Insert }, ops.count { it is MirrorOp.Update }, ops.count { it is MirrorOp.Delete },
-            wanted.size, keep,
+        store.write(MirrorStore.State(plan.synced, emptyMap()))
+
+        val result = MirrorResult(
+            inserted = plan.provider.count { it is MirrorOp.Insert },
+            updated = plan.provider.count { it is MirrorOp.Update },
+            deleted = plan.provider.count { it is MirrorOp.Delete },
+            total = MirrorPlan.mirrored(book.contacts.value).size,
+            keptBecauseEmpty = plan.keptBecauseEmpty,
+            created = createdIds.size,
+            edited = plan.files.count { it is FileOp.Write },
+            trashed = plan.files.count { it is FileOp.Trash },
+            conflicts = plan.conflicts,
         )
+        record(context, describe(result), error = false, now = now)
+        result
     }
+
+    private val mirroredMimes = listOf(
+        CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE, CommonDataKinds.Phone.CONTENT_ITEM_TYPE, CommonDataKinds.Email.CONTENT_ITEM_TYPE,
+        CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE, CommonDataKinds.Event.CONTENT_ITEM_TYPE, CommonDataKinds.Note.CONTENT_ITEM_TYPE,
+    )
 
     private fun add(list: ArrayList<ContentProviderOperation>, op: MirrorOp, account: Account) {
         val raws = syncUri(RawContacts.CONTENT_URI, account)
         val data = syncUri(Data.CONTENT_URI, account)
         when (op) {
             is MirrorOp.Delete -> list.add(ContentProviderOperation.newDelete(ContentUris.withAppendedId(raws, op.rawId)).build())
+            is MirrorOp.Ack -> list.add(
+                ContentProviderOperation.newUpdate(ContentUris.withAppendedId(raws, op.rawId))
+                    .withValue(RawContacts.SOURCE_ID, op.sourceId)
+                    .withValue(RawContacts.SYNC1, op.hash)
+                    .withValue(RawContacts.DIRTY, 0)
+                    .build(),
+            )
             is MirrorOp.Insert -> {
                 val back = list.size
                 list.add(
@@ -131,7 +273,12 @@ class ContactsMirror(private val context: Context) {
                 }
             }
             is MirrorOp.Update -> {
-                list.add(ContentProviderOperation.newDelete(data).withSelection("${Data.RAW_CONTACT_ID}=?", arrayOf(op.rawId.toString())).build())
+                val marks = mirroredMimes.joinToString(",") { "?" }
+                list.add(
+                    ContentProviderOperation.newDelete(data)
+                        .withSelection("${Data.RAW_CONTACT_ID}=? AND ${Data.MIMETYPE} IN ($marks)", arrayOf(op.rawId.toString()) + mirroredMimes)
+                        .build(),
+                )
                 list.add(
                     ContentProviderOperation.newUpdate(ContentUris.withAppendedId(raws, op.rawId))
                         .withValue(RawContacts.SYNC1, op.hash)
@@ -179,5 +326,43 @@ class ContactsMirror(private val context: Context) {
 
     companion object {
         val PERMISSIONS = arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
+
+        private val lock = ReentrantLock()
+
+        /** The app's contact index while its screens are alive: the sync adapter writes through it, so the list follows. */
+        @Volatile var liveBook: ContactBook? = null
+
+        private val _runs = MutableStateFlow(0L)
+        /** Bumped after every run or failure, whoever ran it (status line, trash snackbar). */
+        val runs: StateFlow<Long> = _runs
+
+        private const val PREFS = "contacts"
+
+        /** Keeps the outcome of the last run, read by the settings ("Dernière synchro des contacts : …"). */
+        fun record(context: Context, text: String, error: Boolean, now: Long = System.currentTimeMillis()) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString("mirror_status", text).putLong("mirror_status_at", now).putBoolean("mirror_status_error", error).apply()
+            _runs.value = now
+        }
+
+        /** The last run's outcome: (time, text, failed), or null before the first run. */
+        fun lastStatus(context: Context): Triple<Long, String, Boolean>? {
+            val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val text = p.getString("mirror_status", null) ?: return null
+            return Triple(p.getLong("mirror_status_at", 0), text, p.getBoolean("mirror_status_error", false))
+        }
+
+        fun describe(r: MirrorResult): String {
+            if (r.keptBecauseEmpty) {
+                return "aucun contact lu dans le dossier : rien n'a été retiré du téléphone" +
+                    (if (r.created > 0) " (${r.created} créé${if (r.created > 1) "s" else ""} sur le téléphone, enregistré${if (r.created > 1) "s" else ""})" else "")
+            }
+            val parts = buildList {
+                if (r.inserted + r.updated + r.deleted > 0) add("vers le téléphone : ${r.inserted} ajoutés, ${r.updated} mis à jour, ${r.deleted} retirés")
+                if (r.created + r.edited + r.trashed > 0) add("depuis le téléphone : ${r.created} créés, ${r.edited} modifiés, ${r.trashed} supprimés")
+                if (r.conflicts > 0) add("${r.conflicts} modifié${if (r.conflicts > 1) "s" else ""} des deux côtés (l'autre version est dans les notes)")
+            }
+            return "${ContactList.countLabel(r.total)}, " + (if (parts.isEmpty()) "à jour" else parts.joinToString(" ; "))
+        }
     }
 }

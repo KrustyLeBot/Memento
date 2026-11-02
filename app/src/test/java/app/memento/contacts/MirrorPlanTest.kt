@@ -36,8 +36,11 @@ class MirrorPlanTest {
         assertNotEquals(MirrorPlan.hash(c), MirrorPlan.hash(c.copy(phones = listOf(Phone("07")))))
     }
 
+    private fun plan(files: List<Contact>, raws: List<MirrorRaw>) =
+        MirrorSync.reconcile(files, emptyMap(), raws, emptyMap(), 0, java.time.ZoneOffset.UTC) { error("no new contact expected") }
+
     @Test
-    fun diffInsertsUpdatesDeletesAndIsIdempotent() {
+    fun filesToPhoneInsertsUpdatesDeletesAndIsIdempotent() {
         val a = contact("a", "06")
         val b = contact("b", "07")
         val c = contact("c", "08")
@@ -46,26 +49,22 @@ class MirrorPlanTest {
             MirrorRaw(2, "b", "old"), // changed in the file
             MirrorRaw(3, "gone", "x"), // file deleted
             MirrorRaw(4, "a", MirrorPlan.hash(a)), // duplicate row
-            MirrorRaw(5, null, null), // not ours
-            MirrorRaw(6, "c", MirrorPlan.hash(c), deleted = true), // deleted in the phone: comes back
         )
-        val ops = MirrorPlan.diff(listOf(a, b, c, c.copy(path = "contacts/c.md.conflict1", conflict = true)), existing)
+        val p = plan(listOf(a, b, c, c.copy(path = "contacts/c.md.conflict1", conflict = true)), existing)
+        assertTrue(p.files.isEmpty())
         assertEquals(
-            setOf(MirrorOp.Delete(3), MirrorOp.Delete(4), MirrorOp.Delete(5), MirrorOp.Delete(6),
-                MirrorOp.Update(2, b, MirrorPlan.hash(b)), MirrorOp.Insert(c, MirrorPlan.hash(c))),
-            ops.toSet(),
+            setOf(MirrorOp.Delete(3), MirrorOp.Delete(4), MirrorOp.Update(2, b, MirrorPlan.hash(b)), MirrorOp.Insert(c, MirrorPlan.hash(c))),
+            p.provider.toSet(),
         )
         // after applying, nothing left to do
         val after = listOf(MirrorRaw(1, "a", MirrorPlan.hash(a)), MirrorRaw(2, "b", MirrorPlan.hash(b)), MirrorRaw(7, "c", MirrorPlan.hash(c)))
-        assertTrue(MirrorPlan.diff(listOf(a, b, c), after).isEmpty())
-        // an edit made in the phone's contacts app (dirty) is overwritten
-        assertEquals(listOf(MirrorOp.Update(1, a, MirrorPlan.hash(a))), MirrorPlan.diff(listOf(a), listOf(MirrorRaw(1, "a", MirrorPlan.hash(a), dirty = true))))
+        assertTrue(plan(listOf(a, b, c), after).isEmpty)
     }
 
     @Test
     fun batchesStayUnderTheLimitAndKeepAContactTogether() {
         val contacts = (1..300).map { contact("c$it", "06 00 00 00 ${it % 100}", "07 00 00 00 01") }
-        val ops = MirrorPlan.diff(contacts, emptyList())
+        val ops = plan(contacts, emptyList()).provider
         assertEquals(300, ops.size)
         val batches = MirrorPlan.batches(ops)
         assertTrue(batches.all { b -> b.sumOf { MirrorPlan.size(it) } <= MirrorPlan.MAX_BATCH })

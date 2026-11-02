@@ -133,11 +133,15 @@ fun ContactsSettings(vm: MainViewModel) {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Afficher mes contacts dans le téléphone (appels, SMS…)", fontWeight = FontWeight.SemiBold)
+                Text("Mes contacts dans le téléphone (appels, SMS, app Contacts)", fontWeight = FontWeight.SemiBold)
                 SettingsHint(
-                    "Copie les contacts dans ceux du téléphone, sous un compte « $appName » : leur nom s'affiche lors d'un appel, " +
-                        "dans les SMS, les messageries, la voiture. Les modifications faites dans l'app Contacts du téléphone sont " +
-                        "écrasées à la mise à jour suivante : c'est ici qu'on modifie un contact. Désactiver retire ces copies du téléphone. " +
+                    "Synchronise les contacts avec ceux du téléphone, sous un compte « $appName », dans les deux sens : leur nom " +
+                        "s'affiche lors d'un appel, dans les SMS, les messageries, la voiture, et un contact créé, modifié ou " +
+                        "supprimé dans l'app Contacts du téléphone l'est aussi ici (et sur le PC, par le dossier). Modifié des deux " +
+                        "côtés entre deux synchros : la version la plus récente gagne, l'autre est ajoutée à ses notes. Supprimé sur " +
+                        "le téléphone : $appName propose de l'annuler pendant 7 jours. Dans l'app Contacts de Samsung, réglez " +
+                        "« Emplacement de stockage par défaut » sur $appName (Contacts → menu → Paramètres) pour que les " +
+                        "nouveaux contacts y soient enregistrés. Désactiver retire ces copies du téléphone (les fichiers restent). " +
                         "Demande l'accès aux contacts.",
                 )
             }
@@ -149,7 +153,7 @@ fun ContactsSettings(vm: MainViewModel) {
                 }
             })
         }
-        c.mirrorStatus?.let { SettingsHint(it) }
+        c.mirrorStatus?.let { if (c.mirrorFailed) Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) else SettingsHint(it) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (c.mirrorEnabled) OutlinedButton(onClick = { c.runMirror() }) { Text("Mettre à jour maintenant") }
             if (refused || (c.mirrorEnabled && !c.mirrorPermissionsGranted())) {
@@ -167,7 +171,7 @@ fun ContactsSettings(vm: MainViewModel) {
                 "Android n'a pas de réglage « app de contacts par défaut ». La première fois qu'une app propose " +
                     "« Créer un contact », « Ajouter aux contacts » ou ouvre un contact, choisis $appName puis « Toujours » : " +
                     "ces actions ouvriront ensuite la fiche ou l'éditeur de $appName. L'app Contacts du téléphone affiche toujours " +
-                    "les contacts copiés (copie ci-dessus activée), en lecture seule. Un contact d'un autre compte ouvert " +
+                    "les contacts synchronisés (réglage ci-dessus activé) et permet de les modifier. Un contact d'un autre compte ouvert " +
                     "ainsi peut être importé dans $appName. Pour revenir en arrière : Paramètres du téléphone → Applications → " +
                     "$appName → Définir par défaut → Effacer les valeurs par défaut.",
             )

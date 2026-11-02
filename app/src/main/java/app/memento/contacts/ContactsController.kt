@@ -132,13 +132,11 @@ class ContactsController(
     private val scannedFlow = MutableStateFlow(false)
     private val scanned: Boolean get() = scannedFlow.value
 
-    /** Re-reads the folder (blocking). The first read also starts the mirror, later ones run it when something changed. */
+    /** Re-reads the folder (blocking) and runs the mirror (app start, resume, files changed): cheap when nothing changed. */
     fun scan() {
         book.scan()
-        if (!scanned) {
-            scannedFlow.value = true
-            runMirror()
-        }
+        if (!scanned) scannedFlow.value = true
+        runMirror()
     }
 
     /** Suspends until the folder was read. */
@@ -498,48 +496,103 @@ class ContactsController(
         }
     }
 
-    // ---- mirror into the phone's contacts ----
+    // ---- mirror with the phone's contacts (both ways) ----
 
     private val mirror = ContactsMirror(app)
     private val mirrorLock = Mutex()
 
     var mirrorEnabled by mutableStateOf(prefs.getBoolean("mirror", false))
         private set
-    /** Last result or failure of the mirror, shown in the settings. */
+    /** "Dernière synchro des contacts : …" (or why it could not run), shown in the settings. */
     var mirrorStatus by mutableStateOf<String?>(null)
         private set
+    var mirrorFailed by mutableStateOf(false)
+        private set
+
+    /** The phone's contacts changed (an edit in its contacts app, or our own writes): a run, debounced. */
+    private val providerChanged = MutableStateFlow(0L)
+    private val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { providerChanged.value = System.nanoTime() }
+    }
+    private var observing = false
 
     init {
+        ContactsMirror.liveBook = book
         scope.launch {
             contacts.debounce(1500).filter { scanned }.collect { if (mirrorEnabled) runMirror() }
         }
+        scope.launch {
+            providerChanged.filter { it != 0L }.debounce(2000).collect { if (mirrorEnabled) runMirror() }
+        }
+        scope.launch {
+            ContactsMirror.runs.collect {
+                refreshMirrorStatus()
+                scannedFlow.first { s -> s }
+                if (mirrorEnabled) announcePhoneDeletions()
+            }
+        }
+        if (mirrorEnabled) observe(true)
     }
+
+    private fun observe(on: Boolean) {
+        if (on == observing) return
+        try {
+            if (on) app.contentResolver.registerContentObserver(android.provider.ContactsContract.RawContacts.CONTENT_URI, true, observer)
+            else app.contentResolver.unregisterContentObserver(observer)
+            observing = on
+        } catch (e: SecurityException) {
+            setStatus("Autorisation Contacts refusée : ouvre les autorisations de l'app", error = true)
+        }
+    }
+
+    /** The view model is going away: stop listening to the provider (the sync adapter keeps the mirror going). */
+    fun close() {
+        observe(false)
+        if (ContactsMirror.liveBook === book) ContactsMirror.liveBook = null
+    }
+
+    private fun refreshMirrorStatus() {
+        val s = ContactsMirror.lastStatus(app)
+        mirrorFailed = s?.third == true
+        mirrorStatus = s?.let { (at, text, _) ->
+            val time = java.text.SimpleDateFormat("d MMM 'à' HH:mm", java.util.Locale.FRENCH).format(java.util.Date(at))
+            "Dernière synchro des contacts : $time — $text"
+        }
+    }
+
+    private fun setStatus(text: String, error: Boolean) = ContactsMirror.record(app, text, error)
 
     fun mirrorPermissionsGranted(): Boolean = mirror.hasPermissions()
 
     /** Called once the permissions are granted (or with false when refused). */
     fun setMirror(on: Boolean) {
         if (on) {
-            if (!mirror.hasPermissions()) { mirrorStatus = "Autorisation Contacts refusée"; return }
+            if (!mirror.hasPermissions()) { setStatus("Autorisation Contacts refusée", error = true); return }
             mirrorEnabled = true
             prefs.edit().putBoolean("mirror", true).apply()
+            observe(true)
             runMirror()
         } else {
             mirrorEnabled = false
+            observe(false)
             prefs.edit().putBoolean("mirror", false).putBoolean("mirror_account", false).apply()
             scope.launch {
                 mirrorLock.withLock {
-                    mirrorStatus = try {
-                        if (withContext(io) { mirror.removeAccount() }) "Contacts retirés du téléphone" else "Le compte n'a pas pu être supprimé"
+                    try {
+                        // what the phone created or edited since the last run is saved into the files before the copies go
+                        if (scanned && mirror.hasPermissions() && withContext(io) { mirror.account() } != null) withContext(io) { mirror.sync(book) }
+                        val removed = withContext(io) { mirror.removeAccount() }
+                        if (removed) withContext(io) { mirror.store.write(MirrorStore.State(emptyMap(), emptyMap())) }
+                        setStatus(if (removed) "contacts retirés du téléphone" else "le compte n'a pas pu être supprimé", error = !removed)
                     } catch (e: Exception) {
-                        "Suppression du compte impossible : ${e.message}"
+                        setStatus("Suppression du compte impossible : ${e.message}", error = true)
                     }
                 }
             }
         }
     }
 
-    /** Brings the phone's copies in line with the files. Safe to call often: an unchanged contact costs nothing. */
+    /** Brings the files and the phone's contacts in line, both ways. Safe to call often: nothing changed costs nothing. */
     fun runMirror() {
         if (!mirrorEnabled || !scanned) return
         scope.launch {
@@ -548,23 +601,59 @@ class ContactsController(
                 // The account was removed from the phone's settings: the user stopped the mirror there.
                 if (prefs.getBoolean("mirror_account", false) && withContext(io) { mirror.account() } == null) {
                     mirrorEnabled = false
+                    observe(false)
                     prefs.edit().putBoolean("mirror", false).putBoolean("mirror_account", false).apply()
-                    mirrorStatus = "Le compte a été supprimé dans les réglages du téléphone : copie désactivée"
+                    setStatus("le compte a été supprimé dans les réglages du téléphone : synchro désactivée", error = true)
+                    try {
+                        withContext(io) { mirror.store.write(MirrorStore.State(emptyMap(), emptyMap())) }
+                    } catch (e: java.io.IOException) {
+                        setStatus("État de la synchro non effacé : ${e.message}", error = true)
+                    }
                     return@withLock
                 }
-                mirrorStatus = try {
-                    val r = withContext(io) { mirror.sync(contacts.value) }
+                try {
+                    withContext(io) { mirror.sync(book) }
                     prefs.edit().putBoolean("mirror_account", true).apply()
-                    when {
-                        r.keptBecauseEmpty -> "Aucun contact lu dans le dossier : rien n'a été retiré du téléphone"
-                        r.inserted + r.updated + r.deleted == 0 -> "${ContactList.countLabel(r.total)} dans le téléphone, à jour"
-                        else -> "${ContactList.countLabel(r.total)} dans le téléphone (${r.inserted} ajoutés, ${r.updated} mis à jour, ${r.deleted} retirés)"
-                    }
                 } catch (e: SecurityException) {
-                    "Autorisation Contacts refusée : ouvre les autorisations de l'app"
+                    setStatus("Autorisation Contacts refusée : ouvre les autorisations de l'app", error = true)
                 } catch (e: Exception) {
-                    "Copie dans le téléphone impossible : ${e.message ?: e.javaClass.simpleName}"
+                    android.util.Log.e("ContactsController", "contacts mirror failed", e)
+                    setStatus("Échec : ${e.message ?: e.javaClass.simpleName}", error = true)
                 }
+            }
+        }
+    }
+
+    /** Contacts deleted in the phone's contacts app since the last look: one snackbar to put them back. */
+    private suspend fun announcePhoneDeletions() {
+        val fresh = try {
+            withContext(io) { mirror.store.announce(System.currentTimeMillis()) }
+        } catch (e: java.io.IOException) {
+            say(Snack("Corbeille des contacts illisible : ${e.message}"))
+            return
+        }
+        if (fresh.isEmpty()) return
+        val text = if (fresh.size == 1) "Contact supprimé sur le téléphone : ${fresh[0].name}" else "${fresh.size} contacts supprimés sur le téléphone"
+        say(Snack(text) { restorePhoneDeletions(fresh) })
+    }
+
+    private fun restorePhoneDeletions(entries: List<TrashEntry>) {
+        scope.launch {
+            try {
+                val skipped = withContext(io) {
+                    var skipped = 0
+                    for (e in entries) {
+                        val raw = mirror.store.text(e)
+                        if (raw == null || repo.fs.exists(e.path)) { skipped++; continue }
+                        book.restore(e.path, raw)
+                        mirror.store.remove(e)
+                    }
+                    skipped
+                }
+                if (skipped > 0) say(Snack("$skipped contact${if (skipped > 1) "s" else ""} non restauré${if (skipped > 1) "s" else ""} (fichier présent ou corbeille vidée)"))
+                runMirror()
+            } catch (e: Exception) {
+                say(Snack("Restauration impossible : ${e.message}"))
             }
         }
     }
