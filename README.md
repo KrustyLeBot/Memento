@@ -99,9 +99,9 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   OpenStreetMap tile is served instead. Offline route packs (Android) hold the photo of the route's square up to
   z14 and, within 1 km of the track, up to z17, within 500 MB (z17 then the band's width then z14 give way when it
   does not fit; a route so wide that even its relief does not fit gets a flat 2D pack), estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). A recording without
-  route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–14 over a square whose
-  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 12 MB in the Alps; deeper zooms show that
-  photo enlarged — z15 alone would be three quarters of the size). An optional 3D zone adds relief z6–13 (130 KB a
+  route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–13 over a square whose
+  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps); the map still zooms to z19,
+  showing that photo enlarged (blurry) while the relief keeps its full precision. An optional 3D zone adds relief z6–13 (130 KB a
   tile, the full precision of the elevation data) and peaks over its own square (5–80 km, 40 km by default; about
   30 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
   without imagery. Réglages → Cartes says whether it is asked (default: an inline question once the recording has

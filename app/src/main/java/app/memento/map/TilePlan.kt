@@ -87,12 +87,12 @@ object TilePlans {
     val CORRIDOR_STEPS = listOf(1000.0 to 17, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
 
     /**
-     * The zone pack recorded around the start without a route: the photo z8–14 over a square whose side is a setting
-     * ([ZONE_2D_KM], 40 km by default). Not z15: that level alone is three quarters of the photo; deeper zooms show
-     * the z14 photo enlarged (the tile server's overzoom), and the relief, which is what one zooms in for, keeps its
-     * full precision (it stops at z13 anyway).
+     * The zone pack recorded around the start without a route: the photo z8–13 over a square whose side is a setting
+     * ([ZONE_2D_KM], 40 km by default). The owner zooms in for the relief, not the photo: deeper zooms show the z13
+     * photo enlarged (the tile server's overzoom, up to the map's z19), and the relief keeps its full precision (it
+     * stops at z13 anyway). Each zoom level is four times the previous one: z14–15 would be 15 times the size.
      */
-    val ZONE_ZOOMS = 8..14
+    val ZONE_ZOOMS = 8..13
     const val ZONE_KM_DEFAULT = 40
     const val ZONE_KM_STEP = 5
     val ZONE_2D_KM = 10..80

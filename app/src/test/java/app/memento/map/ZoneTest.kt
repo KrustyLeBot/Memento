@@ -31,15 +31,15 @@ class ZoneTest {
     }
 
     @Test
-    fun default2dZoneIs40kmAndAbout12Mb() {
+    fun default2dZoneIs40kmAndAbout4Mb() {
         val p = TilePlans.forZone(lon, lat)
         assertEquals(40_000.0, p.square.widthM, 1.0)
         assertEquals(40_000.0, p.square.heightM, 1.0)
-        assertEquals(8..14, p.orthoZooms)
+        assertEquals(8..13, p.orthoZooms)
         assertNull(p.demZooms)
         assertNull(p.corridor)
-        assertTrue("${p.tileCount}", p.tileCount in 650..950)
-        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 9 * mb..15 * mb)
+        assertTrue("${p.tileCount}", p.tileCount in 150..350)
+        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 2 * mb..6 * mb)
     }
 
     @Test
@@ -76,10 +76,10 @@ class ZoneTest {
     @Test
     fun largestZonesStayWithinTheBudgetAtFullDefinition() {
         val p2 = TilePlans.forZone(lon, lat, 80)
-        assertEquals(14, p2.orthoZooms.last)
-        assertTrue("${p2.estimatedBytes}", p2.estimatedBytes in 30 * mb..TilePlans.ZONE_BUDGET)
+        assertEquals(13, p2.orthoZooms.last)
+        assertTrue("${p2.estimatedBytes}", p2.estimatedBytes in 8 * mb..TilePlans.ZONE_BUDGET)
         val p3 = TilePlans.forZone3d(lon, lat, 80, 80)
-        assertEquals(14, p3.orthoZooms.last)
+        assertEquals(13, p3.orthoZooms.last)
         assertTrue("${p3.estimatedBytes}", p3.estimatedBytes <= TilePlans.ZONE_BUDGET)
     }
 
