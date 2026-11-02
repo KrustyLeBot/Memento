@@ -3,4 +3,6 @@
     <string name="app_name">Mémento</string>
     <string name="widget_agenda_description">Les prochains événements, activités et notes datées</string>
     <string name="widget_today_description">Le prochain événement du jour</string>
+    <!-- The phone's contacts app shows it on contacts of other accounts (contacts.xml, inviteContactActivity). -->
+    <string name="invite_contact_label">Ajouter à Mémento</string>
 </resources>

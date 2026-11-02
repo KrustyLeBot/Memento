@@ -322,6 +322,27 @@ setting is turned on; nothing is rewritten when nothing changed. An empty `conta
 (a folder that cannot be read looks empty). Turning the setting off, or removing the account in the phone's
 settings, removes the copies.
 
+### Mémento as the contacts app (Android)
+
+Android has no "default contacts app" role, so Mémento declares the contact intents the stock contacts app handles
+and the chooser's **Toujours** makes it the one they open (Settings → Contacts says so):
+
+- `INSERT` (`dir/contact`, `dir/raw_contact`) — the dialer's "Créer un contact", "Ajouter aux contacts" in messaging —
+  opens the contact editor prefilled from the `ContactsContract.Intents.Insert` extras (name, three numbers with
+  their type, three e-mails, address, notes, company, the `DATA` rows). `INSERT_OR_EDIT` (`item/contact`) first
+  offers "Nouveau contact" or "Ajouter à un contact existant" (a searchable list; numbers and e-mails are added
+  without duplicates, what has no field left goes to the notes).
+- `VIEW`, `QUICK_CONTACT`, `EDIT` on `contacts/lookup/…`, `contacts/<id>`, `raw_contacts/<id>`: when the contact has a
+  raw contact of the mirror's account, its `SOURCE_ID` names the Mémento contact, whose detail (or editor) opens. A
+  contact of another account offers an import (its data rows read into the editor). Needs READ_CONTACTS, asked then
+  if missing.
+- `contacts.xml` declares `inviteContactActivity`, the only standard hook: a contacts app honouring it shows
+  "Ajouter à Mémento" on the contacts of other accounts. The mirrored contacts stay read-only there (no `EditSchema`).
+
+Started just for such an action, the app finishes once the contact is saved or the action cancelled, back to the
+app that asked. Pure parsing in `contacts/ExternalContact.kt` (tested), provider glue and flow in
+`contacts/ContactRequestFlow.kt`.
+
 ### Moving the contacts out of Google
 
 The menu names below are written from memory and must be checked against the real screens: items marked *(verify)*
