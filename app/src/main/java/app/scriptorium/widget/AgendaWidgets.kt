@@ -186,20 +186,27 @@ object AgendaWidgets {
      */
     fun updateAll(context: Context) {
         val app = context.applicationContext
-        thread(name = "AgendaWidgetsUpdate") {
-            try {
-                val manager = AppWidgetManager.getInstance(app)
-                val agendaIds = manager.getAppWidgetIds(ComponentName(app, AgendaWidget::class.java))
-                agendaIds.forEach { manager.updateAppWidget(it, agendaViews(app, it, manager)) }
-                if (agendaIds.isNotEmpty()) {
-                    @Suppress("DEPRECATION")
-                    manager.notifyAppWidgetViewDataChanged(agendaIds, R.id.list)
-                }
-                manager.getAppWidgetIds(ComponentName(app, TodayWidget::class.java)).forEach { manager.updateAppWidget(it, todayViews(app, it)) }
-                scheduleMidnight(app)
-            } catch (e: Exception) {
-                Log.e(TAG, "widget update failed", e)
+        thread(name = "AgendaWidgetsUpdate") { updateAllNow(app) }
+    }
+
+    /**
+     * [updateAll] on the caller's thread (blocking, never the main thread). Receivers call it inside `goAsync()`:
+     * a bare thread outliving `onReceive` may be killed with the process before the widgets are drawn.
+     */
+    fun updateAllNow(context: Context) {
+        val app = context.applicationContext
+        try {
+            val manager = AppWidgetManager.getInstance(app)
+            val agendaIds = manager.getAppWidgetIds(ComponentName(app, AgendaWidget::class.java))
+            agendaIds.forEach { manager.updateAppWidget(it, agendaViews(app, it, manager)) }
+            if (agendaIds.isNotEmpty()) {
+                @Suppress("DEPRECATION")
+                manager.notifyAppWidgetViewDataChanged(agendaIds, R.id.list)
             }
+            manager.getAppWidgetIds(ComponentName(app, TodayWidget::class.java)).forEach { manager.updateAppWidget(it, todayViews(app, it)) }
+            scheduleMidnight(app)
+        } catch (e: Exception) {
+            Log.e(TAG, "widget update failed", e)
         }
     }
 

@@ -265,7 +265,9 @@ object AgendaIndex {
     }
 
     /**
-     * Alarms falling in [now, now + horizon): event and dated-note `alerts`, note `reminder`s. Visibility does not
+     * Alarms falling in [now, now + horizon): event and dated-note `alerts`, note `reminder`s; an all-day alert is
+     * a wall time of the device zone (00:00 of the day + offset), so "2 jours avant à 09:00" stays at 09:00 across
+     * a daylight-saving change. Visibility does not
      * silence them (hiding is a view filter); cancelled events have none. Sorted by instant then key.
      */
     fun alarms(sources: AgendaSources, now: Instant, device: ZoneId, horizon: Duration = ALARM_HORIZON): List<Alarm> {
@@ -278,10 +280,13 @@ object AgendaIndex {
             if (e.alerts.isEmpty()) continue
             val lead = e.alerts.filter { it < 0 }.maxOfOrNull { -it } ?: 0
             val lag = e.alerts.filter { it > 0 }.maxOrNull() ?: 0
-            val x = RecurrenceExpander.expand(e, now.minusSeconds(lag * 60L), end.plusSeconds(lead * 60L), device, over[e.id].orEmpty())
+            // all-day alerts are wall times ("2 jours avant à 09:00"): a day of slack covers a DST change in between
+            val slack = if (e.allDay) 86_400L else 0L
+            val x = RecurrenceExpander.expand(e, now.minusSeconds(lag * 60L + slack), end.plusSeconds(lead * 60L + slack), device, over[e.id].orEmpty())
             for (o in x.occurrences) {
                 for (offset in e.alerts.toSortedSet()) {
-                    val at = o.startInstant.plusSeconds(offset * 60L)
+                    val at = if (e.allDay) Zones.toInstant(o.start.date.atStartOfDay().plusMinutes(offset.toLong()), device)
+                    else o.startInstant.plusSeconds(offset * 60L)
                     if (!at.isBefore(now) && at.isBefore(end)) {
                         out.add(Alarm("${o.key}|$offset", at, kind, e.title, e.id, e.path.ifEmpty { null }, o.startInstant, e.allDay, offset, e.location))
                     }
