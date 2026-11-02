@@ -33,6 +33,8 @@
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <!-- ContentResolver.setIsSyncable / setSyncAutomatically on the mirror's account (install-time, no prompt). -->
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
+    <!-- ContentResolver.getIsSyncable / getSyncAutomatically: without it they throw SecurityException. -->
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
 
     <!-- Lets the app see whether Synchrotron (Proton Drive sync) is installed. -->
     <queries>

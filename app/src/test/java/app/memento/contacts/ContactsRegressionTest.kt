@@ -15,6 +15,7 @@ class ContactsRegressionTest {
         val manifest = res("AndroidManifest.xml")
         // ContentResolver.setIsSyncable / setSyncAutomatically throw a SecurityException without it
         assertTrue(manifest.contains("android.permission.WRITE_SYNC_SETTINGS"))
+        assertTrue(manifest.contains("android.permission.READ_SYNC_SETTINGS"))
         val type = "android:accountType=\"${MirrorPlan.ACCOUNT_TYPE}\""
         assertTrue(res("res/xml/authenticator.xml").contains(type))
         assertTrue(res("res/xml/syncadapter.xml").contains(type))

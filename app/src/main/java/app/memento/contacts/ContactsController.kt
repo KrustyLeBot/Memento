@@ -542,9 +542,13 @@ class ContactsController(
             else app.contentResolver.unregisterContentObserver(observer)
             observing = on
         } catch (e: SecurityException) {
-            setStatus("Autorisation Contacts refusée : ouvre les autorisations de l'app", error = true)
+            setStatus(securityMessage(e), error = true)
         }
     }
+
+    private fun securityMessage(e: SecurityException): String =
+        if (!mirror.hasPermissions()) "Autorisation Contacts refusée : ouvre les autorisations de l'app"
+        else "Accès refusé par Android : ${e.message ?: e.javaClass.simpleName}"
 
     /** The view model is going away: stop listening to the provider (the sync adapter keeps the mirror going). */
     fun close() {
@@ -624,7 +628,9 @@ class ContactsController(
                     withContext(io) { mirror.sync(book) }
                     prefs.edit().putBoolean("mirror_account", true).apply()
                 } catch (e: SecurityException) {
-                    setStatus("Autorisation Contacts refusée : ouvre les autorisations de l'app", error = true)
+                    // the exact denial: a missing install-time permission reads the same as a refused prompt otherwise
+                    android.util.Log.e("ContactsController", "contacts mirror denied", e)
+                    setStatus(securityMessage(e), error = true)
                 } catch (e: Exception) {
                     android.util.Log.e("ContactsController", "contacts mirror failed", e)
                     setStatus("Échec : ${e.message ?: e.javaClass.simpleName}", error = true)
