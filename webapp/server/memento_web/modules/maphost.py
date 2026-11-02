@@ -210,13 +210,14 @@ class TileStore:
             return peaks.select(candidates, wanted) if candidates else []
 
 
-def default_map_dir() -> Path:
-    """web/map of the repository, or its copy in the image (/app/web/map)."""
-    here = Path(__file__).resolve()
-    for base in (here.parents[2], here.parents[4]):
+def default_map_dir(here: Path | None = None) -> Path:
+    """web/map next to the package's parents: /app/web/map in the image, <repo>/web/map in a checkout."""
+    here = (here or Path(__file__)).resolve()
+    # the image is only 3 levels deep (/app/memento_web/modules): never index a parent that may not exist
+    for base in here.parents:
         if (base / "web" / "map" / "index.html").is_file():
             return base / "web" / "map"
-    return here.parents[4] / "web" / "map"
+    raise RuntimeError("page de la carte introuvable (web/map) : définir MEMENTO_MAP")
 
 
 class MapHost:
