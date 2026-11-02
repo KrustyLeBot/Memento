@@ -1,4 +1,4 @@
-"""Renders the Scriptorium icon (branding/scriptorium.svg, the same as the Android launcher icon) as icon.png and icon.ico.
+"""Renders the Mémento icon (branding/memento.svg, the same as the Android launcher icon) as icon.png and icon.ico.
 
 Usage: python tools/make_icon.py   (needs PySide6 and Pillow)
 """
@@ -12,7 +12,7 @@ from PIL import Image
 from PySide6.QtGui import QGuiApplication, QImage, QPainter
 from PySide6.QtSvg import QSvgRenderer
 
-MASTER = Path(__file__).resolve().parents[2] / "branding" / "scriptorium.svg"
+MASTER = Path(__file__).resolve().parents[2] / "branding" / "memento.svg"
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 out = Path(__file__).resolve().parent.parent / "scriptorium_win" / "assets"
