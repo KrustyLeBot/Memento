@@ -57,6 +57,39 @@ def test_keep_conflict_copy_replaces_the_original(tmp_path):
     assert len(notes) == 1 and notes[0].body == "nouveau" and not notes[0].conflict
 
 
+def _with_shared_attachments(tmp_path):
+    """A note with a scan and an attachment, and its sync conflict copy listing the same files."""
+    store = Store(tmp_path)
+    (tmp_path / "attachments").mkdir()
+    for name in ("photo-abc.jpg", "scan-abc.pdf"):
+        (tmp_path / "attachments" / name).write_bytes(b"data")
+    original = store.save(fmt.Note(path="", id="abc123", title="Courses", body="ancien", created=now_ms(),
+                                   updated=now_ms(), pdf="attachments/scan-abc.pdf",
+                                   attachments=["attachments/photo-abc.jpg"]))
+    (tmp_path / f"courses-{original.id}.conflict-1.md").write_text(fmt.serialize(original.copy(body="nouveau")))
+    copy = next(n for n in store.scan() if n.conflict)
+    return store, original, copy
+
+
+def test_keeping_a_conflict_copy_keeps_the_attachments_it_shares(tmp_path):
+    store, original, copy = _with_shared_attachments(tmp_path)
+    kept = store.keep_conflict_copy(copy)
+    assert kept.path == original.path and not (tmp_path / copy.path).exists()
+    assert (tmp_path / "attachments" / "photo-abc.jpg").exists() and (tmp_path / "attachments" / "scan-abc.pdf").exists()
+    assert store.scan()[0].attachments == ["attachments/photo-abc.jpg"]
+
+
+def test_deleting_a_conflict_copy_or_its_original_keeps_what_the_other_uses(tmp_path):
+    store, original, copy = _with_shared_attachments(tmp_path)
+    store.delete(copy)
+    assert (tmp_path / "attachments" / "photo-abc.jpg").exists() and (tmp_path / "attachments" / "scan-abc.pdf").exists()
+    (tmp_path / f"courses-{original.id}.conflict-1.md").write_text(fmt.serialize(original.copy(body="nouveau")))
+    store.delete(original)
+    assert (tmp_path / "attachments" / "photo-abc.jpg").exists() and (tmp_path / "attachments" / "scan-abc.pdf").exists()
+    store.delete(next(n for n in store.scan() if n.conflict))  # the last note using them: they go
+    assert not list((tmp_path / "attachments").iterdir())
+
+
 def test_deleting_a_scan_note_deletes_its_pdf(tmp_path):
     from memento_win.core.note import Note
     from memento_win.core.store import Store, now_ms

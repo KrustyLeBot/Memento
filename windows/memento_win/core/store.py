@@ -309,17 +309,25 @@ class Store:
                 info = ActivityInfo(**{**info.__dict__, "sport": sport})
         return self.save(note.copy(title=title.strip() or note.title, body=description.strip(), activity=info, updated=now_ms()))
 
+    def referenced_elsewhere(self, note: Note) -> set[str]:
+        """Files (scans, attachments) another note still lists: a sync conflict copy shares its original's."""
+        others = [n for n in self.scan() + self.scan_activities() if n.path != note.path]
+        return {f for n in others for f in ([n.pdf] if n.pdf else []) + n.attachments}
+
     def delete(self, note: Note) -> None:
-        for path in (self.root / note.path, self.pdf_path(note), *(self.file_path(a) for a in note.attachments)):
+        """Deletes the note and the files only it uses."""
+        shared = self.referenced_elsewhere(note)
+        owned = [f for f in ([note.pdf] if note.pdf else []) + note.attachments if f not in shared]
+        for path in (self.root / note.path, *(self.file_path(f) for f in owned)):
             try:
-                if path is not None:
-                    path.unlink()
+                path.unlink()
             except FileNotFoundError:
                 pass
         self._cache.pop(note.path, None)
 
     def keep_conflict_copy(self, copy: Note) -> Note:
-        """This copy replaces the original (same id, no "conflict" in its name)."""
+        """This copy replaces the original (same id, no "conflict" in its name). The copy's file goes, never the
+        attachments it shares with the note it now is."""
         original = next((n for n in self.scan() if n.id == copy.id and not n.conflict and n.path != copy.path), None)
         target = original.path if original else re.sub(r"(?i)[ ._-]*conflict[^.]*", "", copy.path)
         kept = copy.copy(path=target, conflict=False, updated=now_ms())

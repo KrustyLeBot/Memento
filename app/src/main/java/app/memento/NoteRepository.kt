@@ -223,8 +223,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
             return
         }
         fs.delete(note.path)
-        note.pdf?.let { fs.delete(it) }
-        note.attachments.forEach { fs.delete(it) }
+        ownedFiles(note, _notes.value + _activities.value + _agenda.value.events.map { it.note }).forEach { fs.delete(it) }
         parsed.remove(note.path)
         if (isActivityPath(note.path)) _activities.value = _activities.value.filter { it.path != note.path }
         else _notes.value = _notes.value.filter { it.path != note.path }
@@ -273,5 +272,11 @@ class NoteRepository(private val context: Context, private val settings: Setting
         fun isAgendaPath(path: String) = path.startsWith("${app.memento.agenda.EventFormat.AGENDA_DIR}/")
         private val WATCHED_FOLDERS = setOf(ACTIVITIES_DIR, app.memento.contacts.ContactFormat.DIR, app.memento.agenda.EventFormat.AGENDA_DIR)
         private val CONFLICT_COPY = Regex(""".+\.md\.conflict\d+""")
+
+        /** The files (scan, attachments) of [note] no other note of [all] lists: a sync conflict copy shares its original's. */
+        fun ownedFiles(note: Note, all: List<Note>): List<String> {
+            val shared = all.filter { it.path != note.path }.flatMap { listOfNotNull(it.pdf) + it.attachments }.toSet()
+            return (listOfNotNull(note.pdf) + note.attachments).filter { it !in shared }
+        }
     }
 }
