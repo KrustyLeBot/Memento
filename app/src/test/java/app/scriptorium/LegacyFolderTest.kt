@@ -30,6 +30,21 @@ class LegacyFolderTest {
     }
 
     @Test
+    fun emptyFoldersAndSyncLeftoversDoNotCountAsImported() {
+        val root = tmp()
+        val old = File(root, "Griffonote").apply { mkdirs() }
+        val new = File(root, "Scriptorium")
+        assertFalse(LegacyFolder.needsImport(old, new)) // nothing to bring
+        File(old, "a-abc123.md").writeText("x")
+        // the app makes the folder (and the watch its subfolders) before the offer; a sync may leave a temp file
+        File(new, "agenda/2026").mkdirs()
+        File(new, ".a-abc123.md.synctmp-9").writeText("partial")
+        assertTrue(LegacyFolder.needsImport(old, new))
+        File(new, "agenda/2026/b-def456.md").writeText("y")
+        assertFalse(LegacyFolder.needsImport(old, new))
+    }
+
+    @Test
     fun neverOverwritesAndRefusesIncompleteDelete() {
         val root = tmp()
         val old = File(root, "Griffonote").apply { mkdirs() }

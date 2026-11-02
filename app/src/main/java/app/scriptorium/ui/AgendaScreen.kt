@@ -109,7 +109,8 @@ fun AgendaScreen(vm: MainViewModel) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { c.startImport(it) }
     BackHandler(enabled = c.searching) { c.searching = false; c.query = "" }
 
-    AskReminderAccess(c, sources)
+    // never on top of the one-time import dialog (a widget can open the agenda at the very first start)
+    if (vm.legacyImport == null) AskReminderAccess(c, sources)
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },

@@ -15,8 +15,10 @@ import app.scriptorium.Snack
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -89,6 +91,8 @@ class ContactsController(
     private val io: CoroutineDispatcher,
     private val say: (Snack) -> Unit,
     private val navigate: (Screen) -> Unit,
+    /** A sync is running: the folder is read-only until it ends (the banner says why). */
+    private val syncing: () -> Boolean = { false },
 ) {
     val book = ContactBook { repo.fs }
     /** Every contact file, as the agenda reads them for the birthdays. */
@@ -119,32 +123,53 @@ class ContactsController(
     val ignoredGroups = mutableStateListOf<Set<String>>()
 
     /** True once the folder was read: before that the list is empty only because nothing was read yet. */
-    @Volatile private var scanned = false
+    private val scannedFlow = MutableStateFlow(false)
+    private val scanned: Boolean get() = scannedFlow.value
 
     /** Re-reads the folder (blocking). The first read also starts the mirror, later ones run it when something changed. */
     fun scan() {
         book.scan()
         if (!scanned) {
-            scanned = true
+            scannedFlow.value = true
             runMirror()
         }
     }
 
+    /** Runs [action] once the folder was read (a birthday or a .vcf can arrive before the first scan). */
+    fun whenScanned(action: () -> Unit) {
+        if (scanned) return action()
+        scope.launch {
+            scannedFlow.first { it }
+            action()
+        }
+    }
+
+    private fun readOnly(): Boolean {
+        if (syncing()) say(Snack("Synchronisation en cours : réessaie dans un instant"))
+        return syncing()
+    }
+
     // ---- navigation ----
 
-    fun open(c: Contact) {
+    /** Where the detail goes back to: the list, or the agenda for a birthday opened there. */
+    private var detailReturn = Screen.CONTACTS
+
+    fun open(c: Contact, returnTo: Screen = Screen.CONTACTS) {
         openId = c.id
+        detailReturn = returnTo
         navigate(Screen.CONTACT)
     }
 
     fun current(): Contact? = openId?.let { book.byId(it) }
 
     fun newContact() {
+        if (readOnly()) return
         editor = ContactEditState(null)
         navigate(Screen.CONTACT_EDIT)
     }
 
     fun edit(c: Contact) {
+        if (readOnly()) return
         editor = ContactEditState(c)
         navigate(Screen.CONTACT_EDIT)
     }
@@ -155,7 +180,7 @@ class ContactsController(
     fun back() {
         when {
             editor != null -> closeEditor(save = true)
-            openId != null -> { openId = null; navigate(Screen.CONTACTS) }
+            openId != null -> { openId = null; navigate(detailReturn); detailReturn = Screen.CONTACTS }
             else -> navigate(Screen.CONTACTS)
         }
     }
@@ -195,6 +220,7 @@ class ContactsController(
     }
 
     fun toggleFavorite(c: Contact) {
+        if (readOnly()) return
         scope.launch {
             try {
                 withContext(io) { book.save(c.copy(favorite = !c.favorite)) }
@@ -206,8 +232,10 @@ class ContactsController(
 
     /** Deletes the file; the snackbar offers to put it back exactly as it was. */
     fun delete(c: Contact) {
+        if (readOnly()) return
         openId = null
-        navigate(Screen.CONTACTS)
+        navigate(detailReturn)
+        detailReturn = Screen.CONTACTS
         scope.launch {
             try {
                 val raw = withContext(io) { book.delete(c) }
@@ -231,6 +259,7 @@ class ContactsController(
     // ---- duplicates ----
 
     fun merge(keep: Contact, others: List<Contact>) {
+        if (readOnly()) return
         scope.launch {
             try {
                 val before = withContext(io) { book.merge(keep, others) }
@@ -251,6 +280,8 @@ class ContactsController(
         importState = ContactImportState.Reading
         navigate(Screen.CONTACTS)
         scope.launch {
+            // the preview compares with the folder: before its first read every card would look new
+            scannedFlow.first { it }
             try {
                 val (result, name) = withContext(io) {
                     val bytes = app.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw java.io.IOException("Fichier illisible")
@@ -278,6 +309,7 @@ class ContactsController(
 
     fun confirmImport(policy: DuplicatePolicy) {
         val p = importState as? ContactImportState.Preview ?: return
+        if (readOnly()) return
         importState = ContactImportState.Running(0, p.result.contacts.size)
         scope.launch {
             try {
@@ -300,6 +332,7 @@ class ContactsController(
     fun closeReport() { importState = null }
 
     fun undoImport(outcome: ImportOutcome) {
+        if (readOnly()) return
         importState = null
         scope.launch {
             try {

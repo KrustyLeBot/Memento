@@ -105,30 +105,45 @@ class NoteRepository(private val context: Context, private val settings: Setting
         _scans.value = _scans.value + 1
     }
 
+    @Synchronized
     fun startWatching() {
         stopWatching()
         val fileFs = fs as? FileFs ?: return
         val mask = FileObserver.CREATE or FileObserver.DELETE or FileObserver.MODIFY or
             FileObserver.MOVED_FROM or FileObserver.MOVED_TO or FileObserver.CLOSE_WRITE
         val dir = fileFs.root
-        if (!dir.isDirectory) return
-        fun observe(d: java.io.File, accept: (String) -> Boolean = ::isNoteFile): FileObserver = object : FileObserver(d.absolutePath, mask) {
-            override fun onEvent(event: Int, path: String?) {
-                if (path != null && accept(path)) onExternalChange?.invoke()
-            }
-        }.also { it.startWatching() }
-        // agenda/ and its year folders (a year folder created later is watched from the next startWatching)
+        if (!dir.isDirectory && !dir.mkdirs()) return
+        fun observe(d: java.io.File, folders: (String) -> Boolean = { false }, accept: (String) -> Boolean = ::isNoteFile): FileObserver =
+            object : FileObserver(d.absolutePath, mask) {
+                override fun onEvent(event: Int, path: String?) {
+                    if (path == null) return
+                    val created = event and (CREATE or MOVED_TO) != 0
+                    if (created && folders(path) && java.io.File(d, path).isDirectory) {
+                        // a folder watched below appeared (activities/, contacts/, agenda/<year>/): watch it, read it
+                        onFolderAdded?.invoke()
+                        onExternalChange?.invoke()
+                    } else if (accept(path)) onExternalChange?.invoke()
+                }
+            }.also { it.startWatching() }
+        // agenda/ and its year folders; a watched folder created later restarts the watch (onFolderAdded)
         val agendaDir = java.io.File(dir, app.scriptorium.agenda.EventFormat.AGENDA_DIR)
         val agendaDirs = listOf(agendaDir) + agendaDir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }
         observers = listOfNotNull(
-            observe(dir),
+            observe(dir, folders = { it in WATCHED_FOLDERS }),
             java.io.File(dir, ACTIVITIES_DIR).takeIf { it.isDirectory }?.let { observe(it) },
             java.io.File(dir, app.scriptorium.contacts.ContactFormat.DIR).takeIf { it.isDirectory }?.let { observe(it) },
         ) + agendaDirs.filter { it.isDirectory }.map { d ->
-            observe(d) { name -> !isTempName(name) && (isNoteFile(name) || name.endsWith(".json") || '.' !in name) }
+            observe(d, folders = { d == agendaDir && !it.startsWith(".") }) { name -> !isTempName(name) && (isNoteFile(name) || name.endsWith(".json") || '.' !in name) }
         }
     }
 
+    /** Watches again (a folder was added), unless the watch was stopped meanwhile (app in the background). */
+    @Synchronized
+    fun rewatch() {
+        if (observers.isNotEmpty()) startWatching()
+    }
+
+    @Synchronized
     fun stopWatching() {
         observers.forEach { it.stopWatching() }
         observers = emptyList()
@@ -136,6 +151,9 @@ class NoteRepository(private val context: Context, private val settings: Setting
 
     /** Called (from an arbitrary thread) when a `.md` file changed on disk. */
     var onExternalChange: (() -> Unit)? = null
+
+    /** Called (from an arbitrary thread) when a folder appeared where [startWatching] must watch it too. */
+    var onFolderAdded: (() -> Unit)? = null
 
     /** A note, or a conflict copy left by the sync tool (`name.md.conflict1`, `name.md.conflict2`). */
     private fun isNoteFile(name: String) = name.endsWith(".md") || CONFLICT_COPY.matches(name)
@@ -253,6 +271,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         const val ACTIVITIES_DIR = "activities"
         fun isActivityPath(path: String) = path.startsWith("$ACTIVITIES_DIR/")
         fun isAgendaPath(path: String) = path.startsWith("${app.scriptorium.agenda.EventFormat.AGENDA_DIR}/")
+        private val WATCHED_FOLDERS = setOf(ACTIVITIES_DIR, app.scriptorium.contacts.ContactFormat.DIR, app.scriptorium.agenda.EventFormat.AGENDA_DIR)
         private val CONFLICT_COPY = Regex(""".+\.md\.conflict\d+""")
     }
 }

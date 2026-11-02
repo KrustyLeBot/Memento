@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -145,7 +146,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The Contacts module (list, detail, editor, import, mirror into the phone). */
-    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it })
+    val contacts = ContactsController(app, repo, viewModelScope, io, { snack = it }, { screen = it }, syncing = { syncing })
 
     /** Where the note editor, an activity and the calendars screen return to (they are reached from several modules). */
     private var editorReturn = Screen.LIST
@@ -158,8 +159,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         openNote = { n, ret -> openNote(n, ret) },
         openActivity = { activityReturn = Screen.AGENDA; activities.open(it) },
         openContact = { id ->
-            val c = contacts.book.byId(id)
-            if (c == null) snack = Snack("Contact introuvable") else contacts.open(c)
+            // a birthday tapped in a notification or a widget at cold start: the contacts are read after the notes
+            contacts.whenScanned {
+                val c = contacts.book.byId(id)
+                if (c == null) snack = Snack("Contact introuvable") else contacts.open(c, returnTo = Screen.AGENDA)
+            }
         },
         syncing = { syncing },
     )
@@ -185,6 +189,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val updates = SuiteUpdates(app, SuiteUpdater(app, "KrustyLeBot/Griffonote", "${app.packageName}.fileprovider"), viewModelScope)
 
     private var scanJob: Job? = null
+    private var externalJob: Job? = null
 
     /** A sync with Proton Drive (via Synchrotron) is running: notes are read-only until it ends. */
     var syncing by mutableStateOf(false)
@@ -206,7 +211,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        repo.onExternalChange = { viewModelScope.launch { delay(400); refresh() } }
+        repo.onExternalChange = {
+            viewModelScope.launch {
+                // a sync writes files in bursts: one rescan once they stop, not one per file
+                externalJob?.cancel()
+                externalJob = coroutineContext[Job]
+                delay(400)
+                refresh()
+            }
+        }
+        // a folder created after the watch started (first contact, first event of a new year, synced in)
+        repo.onFolderAdded = { viewModelScope.launch { repo.rewatch() } }
         storageReady = checkStorageReady()
         if (storageReady) refresh()
     }
@@ -245,7 +260,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Never while a note is being edited.
      */
     private fun syncOnOpen() {
-        if (syncing || screen == Screen.EDITOR || screen == Screen.EVENT_EDIT || settings.storage !is StorageConfig.Default) return
+        if (syncing || screen == Screen.EDITOR || screen == Screen.EVENT_EDIT || screen == Screen.CONTACT_EDIT || settings.storage !is StorageConfig.Default) return
         stopSync?.invoke()
         stopSync = SynchrotronClient.syncOnOpen(getApplication(), Settings.defaultDir().path) { state ->
             when (state) {
@@ -632,7 +647,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             snack = Snack(if (error == null) "Ancien dossier Griffonote supprimé" else "Suppression impossible : ${error.message}")
         }
     }
-    fun openRecord() { screen = Screen.RECORD }
+    /** The module root the record screen goes back to (the notes' "recording" card, the notification). */
+    private var recordReturn = Screen.ACTIVITIES
+
+    fun openRecord() {
+        flushEditor()
+        if (screen != Screen.RECORD) recordReturn = screen.takeIf { it.module != null } ?: Screen.ACTIVITIES
+        screen = Screen.RECORD
+    }
     fun openActivity(note: Note) { activityReturn = Screen.ACTIVITIES; activities.open(note) }
 
     fun back() {
@@ -644,7 +666,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             Screen.EVENT -> agenda.closeDetail()
             Screen.EVENT_EDIT -> agenda.cancelEditor()
             Screen.AGENDA_CALENDARS -> screen = calendarsReturn
-            Screen.RECORD -> screen = Screen.ACTIVITIES
+            Screen.RECORD -> screen = recordReturn
             Screen.CONTACT, Screen.CONTACT_EDIT, Screen.CONTACT_DUPLICATES -> contacts.back()
             Screen.DRAWING -> closeDrawing()
             Screen.PDF -> { viewingPdf = null; screen = if (editor != null) Screen.EDITOR else Screen.LIST }
@@ -685,7 +707,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Text shared from another app (e.g. Google Keep's "Send"): becomes a new note. */
     fun handleShare(subject: String?, text: String?) {
         if (text.isNullOrBlank() && subject.isNullOrBlank()) return
+        if (syncing) {
+            // read-only while the sync runs: the shared text waits for its end instead of being lost
+            viewModelScope.launch {
+                androidx.compose.runtime.snapshotFlow { syncing }.first { !it }
+                handleShare(subject, text)
+            }
+            return
+        }
         flushEditor()
+        editorReturn = Screen.LIST
         val ed = EditorState(null, isNew = true)
         ed.title = subject.orEmpty().trim()
         ed.applyBody(BodyFormat.fromShared(text.orEmpty()).trim('\n'))
@@ -758,6 +789,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ed = editor ?: return
         if (screen != Screen.EDITOR) return
         viewModelScope.launch { persist(ed) }
+    }
+
+    /**
+     * A notification, a widget or another app takes the user elsewhere: the open note (and its drawing) is
+     * saved and closed first, as back would do, instead of being left unsaved behind the new screen.
+     */
+    fun leaveNoteEditor() {
+        if (screen == Screen.DRAWING) closeDrawing()
+        if (screen == Screen.EDITOR) closeEditor()
     }
 
     fun closeEditor() {
