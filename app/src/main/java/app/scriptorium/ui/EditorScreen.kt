@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.DropdownMenu
@@ -125,6 +126,9 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
     var showLabels by remember { mutableStateOf(false) }
     var textFocused by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }
+    var showDate by remember { mutableStateOf(false) }
+    // an event's description: the event screens own its date and its deletion
+    val isEvent = app.scriptorium.NoteRepository.isAgendaPath(ed.base?.path.orEmpty())
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm.snack) {
         val s = vm.snack ?: return@LaunchedEffect
@@ -198,11 +202,16 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
                 },
                 title = {},
                 actions = {
-                    IconButton(onClick = { ed.pinned = !ed.pinned }) {
-                        Icon(
-                            Icons.Default.PushPin, if (ed.pinned) "Désépingler" else "Épingler",
-                            tint = if (ed.pinned) MaterialTheme.colorScheme.primary else fg.copy(alpha = 0.6f),
-                        )
+                    if (!isEvent) {
+                        IconButton(onClick = { showDate = true }) {
+                            Icon(androidx.compose.material.icons.Icons.Default.Event, "Ajouter à l'agenda", tint = fg.copy(alpha = 0.6f))
+                        }
+                        IconButton(onClick = { ed.pinned = !ed.pinned }) {
+                            Icon(
+                                Icons.Default.PushPin, if (ed.pinned) "Désépingler" else "Épingler",
+                                tint = if (ed.pinned) MaterialTheme.colorScheme.primary else fg.copy(alpha = 0.6f),
+                            )
+                        }
                     }
                 },
             )
@@ -254,7 +263,7 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
                             context.startActivity(Intent.createChooser(send, null))
                         }
                         Spacer(Modifier.weight(1f))
-                        IconButton(onClick = { vm.deleteEditorNote() }) {
+                        if (!isEvent) IconButton(onClick = { vm.deleteEditorNote() }) {
                             Icon(Icons.Default.Delete, "Supprimer", tint = MaterialTheme.colorScheme.error)
                         }
                     }
@@ -297,6 +306,8 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
                     }
                 },
             )
+
+            if (!isEvent) NoteDateChip(ed, fg) { showDate = true }
 
             if (ed.items.isEmpty() || ed.text.text.isNotBlank()) {
                 BasicTextField(
@@ -537,6 +548,8 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
             },
         )
     }
+
+    if (showDate) NoteDateDialog(vm, ed) { showDate = false }
 
     if (ed.externalConflict) {
         AlertDialog(

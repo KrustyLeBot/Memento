@@ -137,6 +137,105 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   are settings of the PC; the default calendar and the layers are in `calendars.json`. Windows stores reminders but
   never notifies (the phone does). Editing a whole series moves its `exdate` and its edited occurrences with the
   first start, so they keep matching.
+
+- `agenda/calendars.json` also holds the default reminders of new events: `"default_alerts": ["-15m"]` and
+  `"default_alerts_all_day": ["-6h"]` (all-day offsets count from 00:00, so `-6h` is the day before at 18:00).
+
+### Using the agenda (Android)
+
+- **Views**: *Agenda* (default; the days with entries under month headers, "Aujourd'hui" always shown, it keeps
+  loading months as you scroll either way), *Mois* (≤ 3 bars a day and "+N"; tap a day for its list, tap it again for
+  the day), *Semaine* (7 columns, all-day strip, hour grid, red line at the current time) and *Jour*. The view icon
+  in the top bar switches; swipe or tap the title (jump to a date) to move; the calendar icon returns to today.
+  Search (magnifier) covers titles, places and descriptions of events and dated notes. Week start (Monday by
+  default) and "Heures dans le fuseau de l'événement" are in Settings → Agenda; the clock follows the system 12/24 h.
+- **Layers**: activities (sport emoji, tap → the activity), dated notes (📝, tap → the note), birthdays (🎂, tap →
+  the contact). Menu ⋮ → *Agendas affichés*: show/hide each calendar and layer, rename, colour (fixed palette),
+  default calendar, new calendar, delete a calendar with its events (undo in the snackbar).
+- **New event**: the + button (the selected day; in *Semaine*/*Jour* tap an hour). The editor has Titre, Toute la
+  journée, Début/Fin, Fuseau horaire (only shown when it differs from the phone's, or via "Fuseau horaire…"),
+  Agenda, Lieu, Répétition (presets, then *Personnalisé…*: every N days/weeks/months/years, weekdays, day of the
+  month or n-th/last weekday, end never/until/after N; "Prochaines : …" previews the rule; a rule the editor cannot
+  express shows as "Règle importée" and is kept untouched), Rappels (several) and Description: it saves the event
+  and opens it in the note editor (checklists, photos, drawings work, since an event is a note).
+- **Series**: editing or deleting an occurrence asks *Cet événement* (an exception file plus an `exdate`) or *Tous
+  les événements*. An edited occurrence offers *Modifier toute la série* and *Rétablir l'occurrence d'origine*.
+  Deletes can be undone from the snackbar.
+- **Dated notes**: in the note editor, the calendar icon (*Ajouter à l'agenda*) gives a note a date, an optional
+  time and a reminder; the same dialog removes it (*Retirer de l'agenda*). A note's old `reminder` field counts as
+  dated and is converted when the date is edited.
+- **Import / export**: menu ⋮ → *Importer un fichier .ics* (or open an `.ics` from a mail or the file manager),
+  *Exporter en .ics* (one calendar, or all as a `.zip`, optionally with the activities and dated notes), *Imports
+  passés* (undo any import whose files are still there).
+
+### Reminders (Android)
+
+- Notifications on the **"Rappels d'agenda"** channel (high importance, sound): title, day, time and place, a
+  **Reporter 10 min** action; a tap opens the event (or the note). Settings → Agenda → *Canal « Rappels d'agenda »*
+  opens the channel's system page.
+- Only the next 48 hours are registered with Android (`AlarmManager`), recomputed after every change (edit, sync,
+  import, file watcher), every 6 hours, after a reboot, a time or zone change and an app update. Keys are stable
+  (event id + occurrence + offset): a resync never shows a reminder twice; vanished ones are cancelled.
+- Exact alarms need "Alarmes et rappels" (Android 12+): the app asks once with an explanation; refused, reminders
+  arrive a few minutes late. Notifications need the permission on Android 13+ (asked once from the agenda). On
+  Samsung, also exempt the app from battery optimisation (button in Settings → Agenda). *To verify on the phone.*
+
+### Widgets (Android)
+
+- **Agenda** (resizable, about 2×2 to 4×6): the weekday over the date, ⟳ (asks Synchrotron to sync, reads the folder
+  again; a spinner meanwhile) and + (new event today); then the next entries, a date block on the first row of each
+  day, the calendar's colour bar, the title on up to two lines and "20:00 - 20:30", "Toute la journée" or "Du 1 au 3
+  déc.". "Rien de prévu" when empty. A tap on a row opens it, on the date opens the agenda on today. Its settings
+  (when added, or long press → reconfigure): calendars and layers, 7/14/30/90 days, keep today's finished entries,
+  the ⟳ button, background opacity. It follows the phone's light/dark theme.
+- **Aujourd'hui** (2×1): today's next entry and how many others.
+- Both are redrawn after every change made in the app, at midnight, on time/zone changes and every 30 minutes; they
+  read the app's index off the main thread, never the files on their own.
+
+### Moving the calendars out of Google or Proton
+
+The menu names below are written from memory and must be checked against the real screens: items marked *(verify)*
+are the ones to check first. Everything is a one-time copy of files: keep the exported files, they are your backup.
+
+**Google Calendar**, on a computer (the export is not in the phone app) *(verify)*:
+
+1. Open <https://calendar.google.com> signed in to the right account.
+2. The gear (top right) → **Paramètres** (Settings).
+3. In the left column, **Importer et exporter** (Import & export), then **Exporter** (Export).
+4. A `.zip` downloads, with **one `.ics` per calendar** you own. Calendars shared with you, holidays and the
+   birthdays calendar are usually **not** included *(verify)*; to get a shared calendar, its owner has to export it.
+5. Put the `.zip` on the phone (cloud drive, cable, share) or keep it on the PC for the Windows app.
+
+Everything at once: <https://takeout.google.com> → deselect all → tick **Agenda** (Calendar) → create the export;
+the same `.ics` files come inside the archive.
+
+**Proton Calendar**, on <https://calendar.proton.me> in a browser *(verify)*:
+
+1. Gear → **Tous les paramètres** (All settings) → **Calendriers** (Calendars).
+2. Choose the calendar and its **Exporter** (Export) action: an `.ics` downloads. Repeat for each calendar.
+3. Put the `.ics` file(s) on the device.
+
+Proton encrypts the calendar end to end: the export happens in your browser after decrypting, so the file itself is
+**not encrypted**; treat it like your agenda in plain text.
+
+**Importing them into the app**:
+
+1. Agenda → menu ⋮ → **Importer un fichier .ics** and pick the `.zip` (Google) or the `.ics` files. Opening an `.ics`
+   from a mail attachment or the file manager starts the same dialog.
+2. The preview lists each calendar with its number of events and series and its date range. Rename the new
+   calendars, pick their colours, or send one into an existing calendar.
+3. By default **everything** is imported; tick **"depuis le …"** only to skip old history (the first sync of the
+   folder is slower with thousands of events).
+4. **Importer**. The report says how many events were imported and how many items were ignored.
+5. Check a few things you know: a recurring event (its next three occurrences), an all-day event, an event in
+   another time zone, a birthday or a holiday.
+6. Something wrong? **Annuler l'import** (in the report, or later from menu ⋮ → *Imports passés*) removes everything
+   that import created.
+
+Importing again later is safe: events are matched by their original ID and the default "Mettre à jour" updates the
+existing ones and adds the new ones. What is lost or changes: invitation answers (attendees become a text list),
+colours of single events, attachments, Google Meet buttons (the link stays as text), and anything that is not
+standard iCalendar.
 ## Contacts
 
 The "Contacts" module (bottom bar on the phone, left rail on the PC) keeps an address book as one note per contact
@@ -238,7 +337,7 @@ to a `.vcf` file *(verify, the path differs by manufacturer)*; the same import a
 Milestones 1–2 and 6 (partly) are implemented: text notes, checklists (drag to reorder,
 checked items folded), colours, pin, labels, full-text search,
 grid/list view, share in/out (text), conflict-file badge, external-change handling,
-settings, self-update. Images, drawings and reminders (milestones 3–5) are not done yet.
+settings, self-update, the agenda with its reminders and widgets (Android).
 
 ## Windows client
 

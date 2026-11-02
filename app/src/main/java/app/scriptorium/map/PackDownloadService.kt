@@ -94,7 +94,7 @@ class PackDownloadService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
-        return b.setSmallIcon(android.R.drawable.stat_sys_download)
+        return b.setSmallIcon(app.scriptorium.R.drawable.ic_stat_scriptorium)
             .setContentTitle("Carte hors ligne en préparation")
             .setContentText(fraction?.let { "${Math.round(it * 100)} %" } ?: "")
             .setProgress(100, Math.round((fraction ?: 0f) * 100), fraction == null)

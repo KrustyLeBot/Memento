@@ -206,7 +206,7 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
             if (it.sport.hasGps) "$clock · ${Fmt.distance(it.distance)}" else clock
         } ?: ""
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
-        return b.setSmallIcon(android.R.drawable.ic_menu_mylocation)
+        return b.setSmallIcon(app.scriptorium.R.drawable.ic_stat_scriptorium)
             .setContentTitle((live?.sport?.label ?: "Activité") + if (paused) " · en pause" else " · en cours")
             .setContentText(text)
             .setContentIntent(open)

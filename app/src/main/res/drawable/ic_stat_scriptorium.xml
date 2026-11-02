@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon: a page with a folded corner and three lines, white silhouette (holes cut with evenOdd). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
+        android:pathData="M6.5,2 H14.5 L20,7.5 V20 A2,2 0 0 1 18,22 H6.5 A2,2 0 0 1 4.5,20 V4 A2,2 0 0 1 6.5,2 Z M14,3.6 V8 H18.4 Z M7.5,11 H16.5 V12.8 H7.5 Z M7.5,14.5 H16.5 V16.3 H7.5 Z M7.5,18 H13 V19.8 H7.5 Z" />
+</vector>
