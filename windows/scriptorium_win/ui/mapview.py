@@ -84,7 +84,7 @@ class MapView(QWebEngineView):
             return
         print(f"map: renderer ended ({status}, {code}), reloading", file=sys.stderr)
         self.loaded = False
-        QTimer.singleShot(500, self.reload)
+        QTimer.singleShot(500, self, self.reload)
 
 
 def _theme() -> str:

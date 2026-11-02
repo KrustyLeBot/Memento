@@ -125,4 +125,4 @@ class UpdateToast(QFrame):
             self._fit()
             return
         self.text.setText("Redémarrage sur la nouvelle version…")
-        QTimer.singleShot(300, self.main.close)
+        QTimer.singleShot(300, self.main, self.main.close)

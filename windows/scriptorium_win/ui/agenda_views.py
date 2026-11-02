@@ -424,7 +424,7 @@ class TimeGridView(QWidget):
         key = (first, last)
         if self._scrolled_for != key:
             self._scrolled_for = key
-            QTimer.singleShot(0, self.scroll_to_now)
+            QTimer.singleShot(0, self, self.scroll_to_now)
 
     def _blocks(self, timed: list[Entry]) -> list[Block]:
         out: list[Block] = []

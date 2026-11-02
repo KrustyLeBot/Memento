@@ -147,8 +147,8 @@ class MainWindow(QMainWindow):
         self._cleanup_timer.timeout.connect(self._cleanup_old_exe)
         if not updater.cleanup_previous():
             self._cleanup_timer.start(2000)  # retry every 2 s ...
-        QTimer.singleShot(5000, self.check_updates)  # first check shortly after the start
-        QTimer.singleShot(1500, self.activities.preload_map)  # the map page loads while nothing else happens
+        QTimer.singleShot(5000, self, self.check_updates)  # first check shortly after the start
+        QTimer.singleShot(1500, self.activities, self.activities.preload_map)  # the map page loads while nothing else happens
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self.check_updates)
         self._update_timer.start(6 * 3600 * 1000)  # ... then every 6 hours
