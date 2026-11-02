@@ -429,6 +429,8 @@ class ActivitiesScreen(QWidget):
 
     def _park_map(self) -> None:
         """Takes the map out of the detail page before that page is deleted, so the loaded view survives."""
+        if self.map_panel is not None:
+            self.map_panel.collapse()  # back in the detail page, which is about to go
         if self.map_panel is not None and self.map_panel.parent() is not self:
             self.map_panel.hide()
             self.map_panel.setParent(self)

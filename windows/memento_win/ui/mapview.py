@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtPositioning import QGeoPositionInfo, QGeoPositionInfoSource
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage
@@ -156,7 +156,8 @@ class LiveLocation(QObject):
 
 
 class MapPanel(QWidget):
-    """The map with its native 3D/2D switch and a re-centre button. `mode_changed` lets the owner remember it."""
+    """The map with its native 3D/2D switch, a re-centre button and an "Agrandir" button that lays it over the whole
+    Mémento window (not full screen) until "Réduire" or Escape. `mode_changed` lets the owner remember the mode."""
     mode_changed = Signal(str)
 
     def __init__(self, mode: str = "3d", parent: QWidget | None = None):
@@ -190,11 +191,64 @@ class MapPanel(QWidget):
         recentre.setObjectName("mapButton")
         recentre.clicked.connect(lambda: self.view.call("fit"))
         bar.addWidget(recentre)
+        self.expand_button = QPushButton("Agrandir")
+        self.expand_button.setObjectName("mapButton")
+        self.expand_button.setToolTip("La carte occupe toute la fenêtre (Échap pour revenir)")
+        self.expand_button.clicked.connect(self.toggle_expanded)
+        bar.addWidget(self.expand_button)
         layout.addLayout(bar)
+        # where the panel sat before it was expanded: (parent, its layout, index in it)
+        self._home: tuple[QWidget, object, int] | None = None
         self.view = MapView(self.mode, self)
         self.view.setMinimumHeight(420)
         layout.addWidget(self.view)
         self.location = LiveLocation(self.view)
+
+    @property
+    def expanded(self) -> bool:
+        return self._home is not None
+
+    def toggle_expanded(self) -> None:
+        if self.expanded:
+            self.collapse()
+        else:
+            self.expand()
+
+    def expand(self) -> None:
+        host, parent = self.window(), self.parentWidget()
+        if self.expanded or parent is None or host is self:
+            return
+        layout = parent.layout()
+        self._home = (parent, layout, layout.indexOf(self) if layout is not None else -1)
+        # reparenting keeps the loaded page: the view is moved, never rebuilt
+        self.setParent(host)
+        self.setAutoFillBackground(True)
+        self.layout().setContentsMargins(12, 10, 12, 12)
+        self.setGeometry(host.rect())
+        host.installEventFilter(self)
+        self.expand_button.setText("Réduire")
+        self.show()
+        self.raise_()
+
+    def collapse(self) -> None:
+        if not self.expanded:
+            return
+        parent, layout, index = self._home
+        self._home = None
+        self.window().removeEventFilter(self)
+        self.setAutoFillBackground(False)
+        self.layout().setContentsMargins(0, 0, 0, 0)
+        self.expand_button.setText("Agrandir")
+        if layout is not None and index >= 0:
+            layout.insertWidget(index, self)
+        else:
+            self.setParent(parent)
+        self.show()
+
+    def eventFilter(self, watched, event) -> bool:
+        if self.expanded and watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.setGeometry(watched.rect())
+        return super().eventFilter(watched, event)
 
     def set_mode(self, mode: str) -> None:
         if mode == self.mode:

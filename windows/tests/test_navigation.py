@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta, timezone
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from agenda_ui_data import ZONE, at, populate
 from memento_win.core import contacts as ct
@@ -270,3 +270,31 @@ def test_contacts_list_keeps_its_scroll_and_the_opened_contact(window):
     moved = next(i for i in range(screen.list.count()) if screen.list.item(i).data(ID_ROLE) == path)
     rect = screen.list.visualItemRect(screen.list.item(moved))
     assert fully_visible(rect.top(), rect.bottom() + 1, screen.list.viewport().height())
+
+
+# ---- map expanded over the window ----
+
+def test_the_map_expands_over_the_window_and_comes_back_in_place(window):
+    window.show_module("activities")
+    acts = window.activities
+    panel = acts._map()
+    acts.detail_layout.addWidget(QLabel("avant"))  # the map is not first in its page
+    acts.detail_layout.addWidget(panel)
+    acts.stack.setCurrentWidget(acts.detail_page)
+    panel.show()
+    settle()
+    index = acts.detail_layout.indexOf(panel)
+    panel.expand_button.click()
+    settle()
+    assert panel.expanded and panel.parentWidget() is window and panel.geometry() == window.rect()
+    assert panel.expand_button.text() == "Réduire"
+    window.resize(1100, 760)
+    settle()
+    assert panel.geometry() == window.rect()
+    window._escape()  # Escape shrinks the map, it does not leave the activity
+    settle()
+    assert not panel.expanded and acts.detail_layout.indexOf(panel) == index and panel.isVisible()
+    assert acts.stack.currentWidget() is acts.detail_page and panel.expand_button.text() == "Agrandir"
+    panel.expand()
+    window.show_module("notes")  # leaving the module puts it back first
+    assert not panel.expanded

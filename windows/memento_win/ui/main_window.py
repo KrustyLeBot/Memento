@@ -165,6 +165,8 @@ class MainWindow(QMainWindow):
     # ---- navigation ----
 
     def show_module(self, key: str) -> None:
+        if self.activities.map_panel is not None:
+            self.activities.map_panel.collapse()
         self._origins.clear()  # a module shown (the rail, back): nothing before it to come back to
         if key in self.config.hidden_modules:
             key = "notes"
@@ -210,7 +212,10 @@ class MainWindow(QMainWindow):
 
     def _escape(self) -> None:
         current = self.stack.currentWidget()
-        if current is self.editor:
+        panel = self.activities.map_panel
+        if panel is not None and panel.expanded:
+            panel.collapse()
+        elif current is self.editor:
             self.close_editor()
         elif current is self.settings:
             self.show_module(self.module)
