@@ -116,6 +116,13 @@ def stylesheet(s: Scheme) -> str:
     QPushButton#fab:hover {{ background: {s.primary_container}; border: 2px solid {s.primary}; }}
     QPushButton#fabSmall {{ background: {s.secondary_container}; color: {s.on_secondary_container}; border-radius: 12px;
                             padding: 12px; }}
+    QFrame#mapSwitch {{ background: {s.surface_high}; border: 1px solid {s.outline_variant}; border-radius: 17px; }}
+    QPushButton#mapSegment {{ background: transparent; color: {s.on_surface}; border-radius: 14px; padding: 5px 0;
+                              font-weight: 600; }}
+    QPushButton#mapSegment:checked {{ background: {s.primary}; color: {s.on_primary}; }}
+    QPushButton#mapButton {{ background: {s.surface_high}; color: {s.on_surface}; border: 1px solid {s.outline_variant};
+                             border-radius: 17px; padding: 6px 14px; }}
+    QPushButton#mapButton:hover {{ border-color: {s.primary}; }}
     QToolButton {{ border: none; border-radius: 20px; padding: 8px; background: transparent; }}
     QToolButton:hover {{ background: rgba(128, 128, 128, 0.2); }}
     QToolButton:checked {{ background: rgba(128, 128, 128, 0.3); }}

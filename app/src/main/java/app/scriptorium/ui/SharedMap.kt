@@ -15,6 +15,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -70,21 +72,47 @@ fun SharedMap(
     }
 }
 
-/** The 3D / 2D switch drawn over a map. */
+/**
+ * What is drawn over the map: it sits on an aerial photo (snow, forest, night-dark rock), so every overlay gets a
+ * near-opaque surface, an explicit content colour and a shadow. Never a transparent background and never the
+ * ambient content colour, which outside a Scaffold (the full-screen map) is plain black. Contrast, measured on the
+ * suite palette with the 6 % of photo showing through at its worst (black or white): onSurface on
+ * surfaceContainerHighest is 8.7:1 or more in both themes, onPrimary on primary 7.7:1. onSurfaceVariant is not
+ * used: 4.3:1 in the light theme over a dark photo.
+ */
+object MapOverlay {
+    const val ALPHA = 0.94f
+    val elevation = 3.dp
+
+    val container: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = ALPHA)
+    val content: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+}
+
+/** A surface over the map, with [MapOverlay]'s colours. */
+@Composable
+fun MapOverlaySurface(modifier: Modifier = Modifier, shape: Shape = RoundedCornerShape(50), content: @Composable () -> Unit) {
+    Surface(
+        shape = shape, color = MapOverlay.container, contentColor = MapOverlay.content,
+        shadowElevation = MapOverlay.elevation, modifier = modifier, content = content,
+    )
+}
+
+/** The 3D / 2D switch drawn over a map: the selected half in primary, the other in onSurface, both always legible. */
 @Composable
 fun MapModeSwitch(is3d: Boolean, enabled: Boolean, modifier: Modifier = Modifier, onChange: (Boolean) -> Unit) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), modifier = modifier) {
-        Row(Modifier.clip(RoundedCornerShape(50))) {
+    MapOverlaySurface(modifier) {
+        Row(Modifier.padding(2.dp).clip(RoundedCornerShape(50))) {
             listOf(true to "3D", false to "2D").forEach { (v, label) ->
                 val selected = v == is3d
                 Surface(
                     onClick = { if (enabled && !selected) onChange(v) },
                     enabled = enabled,
-                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                    color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MapOverlay.content,
                     shape = RoundedCornerShape(50),
                 ) {
                     Text(
-                        label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     )

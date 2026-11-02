@@ -42,7 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** The live map, shown in 3D from a covering pack or online, otherwise in 2D: position, trail by speed, the route in grey. */
+/** The live map, shown in 3D from a covering pack or online, otherwise in 2D: position, trail by speed, the route in white. */
 @Composable
 fun LiveMap(settings: Settings, l: Live, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
@@ -125,12 +125,14 @@ fun LiveMap(settings: Settings, l: Live, modifier: Modifier = Modifier) {
             SmallFloatingActionButton(
                 onClick = { following = true; MapHost.call("setFollow", "true") },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                containerColor = MapOverlay.container, contentColor = MapOverlay.content,
             ) { Icon(Icons.Default.MyLocation, "Recentrer sur ma position") }
         } else {
             // the whole route (or the live square) at once; the button above brings the camera back
             SmallFloatingActionButton(
                 onClick = { following = false; MapHost.call("setFollow", "false"); MapHost.call("fit") },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                containerColor = MapOverlay.container, contentColor = MapOverlay.content,
             ) { Icon(Icons.Default.ZoomOutMap, "Vue d'ensemble") }
         }
     }

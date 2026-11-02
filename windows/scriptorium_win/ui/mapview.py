@@ -10,7 +10,7 @@ from PySide6.QtPositioning import QGeoPositionInfo, QGeoPositionInfoSource
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from ..services import maphost
 from . import theme
@@ -166,18 +166,28 @@ class MapPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         bar = QHBoxLayout()
+        # explicit surfaces and text colours (theme.py: mapSwitch, mapSegment, mapButton), as on Android: the selected
+        # half in primary, the other in on_surface, legible in both themes whatever the map shows
+        switch = QFrame()
+        switch.setObjectName("mapSwitch")
+        segments = QHBoxLayout(switch)
+        segments.setContentsMargins(2, 2, 2, 2)
+        segments.setSpacing(0)
         self.group = QButtonGroup(self)
         for key, label, tip in (("3d", "3D", "Relief en bloc"), ("2d", "2D", "Carte à plat")):
             button = QPushButton(label)
+            button.setObjectName("mapSegment")
             button.setCheckable(True)
             button.setChecked(key == self.mode)
             button.setToolTip(tip)
             button.setFixedWidth(48)
             button.clicked.connect(lambda _=False, k=key: self.set_mode(k))
             self.group.addButton(button)
-            bar.addWidget(button)
+            segments.addWidget(button)
+        bar.addWidget(switch)
         bar.addStretch()
         recentre = QPushButton("Recentrer")
+        recentre.setObjectName("mapButton")
         recentre.clicked.connect(lambda: self.view.call("fit"))
         bar.addWidget(recentre)
         layout.addLayout(bar)

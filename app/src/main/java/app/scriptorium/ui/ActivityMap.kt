@@ -4,14 +4,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -101,8 +99,8 @@ fun ActivityMapView(settings: Settings, detail: ActivityDetail, full: Boolean, o
             settings.map3d = it
         }
         if (forced2d) OfflineBadge(Modifier.align(Alignment.BottomStart).padding(8.dp))
-        Surface(
-            shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        MapOverlaySurface(
+            shape = CircleShape,
             modifier = Modifier.align(Alignment.TopEnd).padding(top = if (full) 40.dp else 8.dp, end = if (full) 12.dp else 8.dp),
         ) {
             IconButton(onClick = { onFull(!full) }) {
@@ -115,9 +113,9 @@ fun ActivityMapView(settings: Settings, detail: ActivityDetail, full: Boolean, o
 /** Says, discreetly, why the map is flat. */
 @Composable
 fun OfflineBadge(modifier: Modifier = Modifier) {
-    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), modifier = modifier) {
+    MapOverlaySurface(modifier) {
         Text(
-            "Hors ligne : vue 2D", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            "Hors ligne : vue 2D", style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
     }
