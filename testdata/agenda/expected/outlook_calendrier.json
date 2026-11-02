@@ -1,0 +1,94 @@
+{
+  "vector": "outlook_calendrier.ics",
+  "device_zone": "Europe/Paris",
+  "window": [
+    "2026-01-01T00:00:00Z",
+    "2027-01-01T00:00:00Z"
+  ],
+  "now_ms": 1793520000000,
+  "import_id": "20261101T092000-vector",
+  "preview": [
+    {
+      "name": "Calendrier",
+      "events": 5,
+      "series": 1,
+      "exceptions": 0,
+      "cancelled": 0,
+      "ignored": 0,
+      "unresolved_zones": 1,
+      "first": "2026-11-03",
+      "last": "2026-11-18",
+      "errors": 1
+    }
+  ],
+  "created": 5,
+  "occurrences": [
+    {
+      "title": "Point hebdo",
+      "all_day": false,
+      "start": "2026-11-03T08:00:00Z",
+      "end": "2026-11-03T08:30:00Z"
+    },
+    {
+      "title": "Call New York",
+      "all_day": false,
+      "start": "2026-11-05T14:00:00Z",
+      "end": "2026-11-05T15:00:00Z"
+    },
+    {
+      "title": "Webinaire Mars",
+      "all_day": false,
+      "start": "2026-11-10T14:00:00Z",
+      "end": "2026-11-10T15:00:00Z"
+    },
+    {
+      "title": "Comité de pilotage",
+      "all_day": false,
+      "start": "2026-11-16T13:00:00Z",
+      "end": "2026-11-16T14:30:00Z"
+    },
+    {
+      "title": "Point hebdo",
+      "all_day": false,
+      "start": "2026-11-17T08:00:00Z",
+      "end": "2026-11-17T08:30:00Z"
+    },
+    {
+      "title": "Livraison",
+      "all_day": false,
+      "start": "2026-11-18T07:00:00Z",
+      "end": "2026-11-18T08:00:00Z"
+    },
+    {
+      "title": "Point hebdo",
+      "all_day": false,
+      "start": "2026-12-01T08:00:00Z",
+      "end": "2026-12-01T08:30:00Z"
+    }
+  ],
+  "files": {
+    "Comité de pilotage": [
+      "tz: Europe/Paris",
+      "start: 2026-11-16T14:00",
+      "alerts: [-15m]",
+      "  - \"X-MICROSOFT-CDO-BUSYSTATUS:BUSY\"",
+      "Ordre du jour :\n\n- Budget\n- Planning"
+    ],
+    "Point hebdo": [
+      "tz: Europe/Paris",
+      "rrule: FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;COUNT=3"
+    ],
+    "Call New York": [
+      "tz: America/New_York",
+      "start: 2026-11-05T09:00"
+    ],
+    "Webinaire Mars": [
+      "tz: Europe/Paris",
+      "start: 2026-11-10T15:00"
+    ],
+    "Livraison": [
+      "tz: Europe/Paris",
+      "start: 2026-11-18T08:00"
+    ]
+  }
+}

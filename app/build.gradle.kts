@@ -82,5 +82,10 @@ dependencies {
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
 
+    // ICS (iCalendar) read/write and RRULE iteration for the agenda; plain Java. Jackson only serves jCal/JSON, unused.
+    implementation("net.sf.biweekly:biweekly:0.6.8") {
+        exclude(group = "com.fasterxml.jackson.core")
+    }
+
     testImplementation("junit:junit:4.13.2")
 }

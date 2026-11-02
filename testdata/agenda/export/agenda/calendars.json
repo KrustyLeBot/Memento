@@ -1,0 +1,31 @@
+{
+  "calendars": [
+    {
+      "id": "perso",
+      "name": "Perso",
+      "color": "#4F8BF5",
+      "visible": true
+    },
+    {
+      "id": "travail",
+      "name": "Travail",
+      "color": "#E0663A",
+      "visible": true
+    }
+  ],
+  "default": "perso",
+  "layers": {
+    "activities": {
+      "visible": true,
+      "color": "#2E9E5B"
+    },
+    "notes": {
+      "visible": true,
+      "color": "#8E63CE"
+    },
+    "birthdays": {
+      "visible": true,
+      "color": "#D64D6F"
+    }
+  }
+}
