@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.core.content.FileProvider
 import app.memento.NoteFormat
 import app.memento.ContactEditorDraft
@@ -579,8 +580,14 @@ class ContactsController(
             scope.launch {
                 mirrorLock.withLock {
                     try {
-                        // what the phone created or edited since the last run is saved into the files before the copies go
-                        if (scanned && mirror.hasPermissions() && withContext(io) { mirror.account() } != null) withContext(io) { mirror.sync(book) }
+                        // what the phone created or edited since the last run is saved into the files before the copies go:
+                        // without a complete run the account (and what only the phone holds) is kept
+                        if (withContext(io) { mirror.account() } != null) {
+                            if (syncing()) snapshotFlow { syncing() }.first { !it }
+                            if (!scanned || !mirror.hasPermissions()) throw IllegalStateException("contacts du téléphone non relus, compte conservé")
+                            val r = withContext(io) { mirror.sync(book) }
+                            if (r.keptBecauseEmpty) throw IllegalStateException("dossier des contacts lu vide, compte conservé")
+                        }
                         val removed = withContext(io) { mirror.removeAccount() }
                         if (removed) withContext(io) { mirror.store.write(MirrorStore.State(emptyMap(), emptyMap())) }
                         setStatus(if (removed) "contacts retirés du téléphone" else "le compte n'a pas pu être supprimé", error = !removed)
@@ -597,6 +604,8 @@ class ContactsController(
         if (!mirrorEnabled || !scanned) return
         scope.launch {
             mirrorLock.withLock {
+                // never writes into the folder while Synchrotron replaces files in it
+                if (syncing()) snapshotFlow { syncing() }.first { !it }
                 if (!mirrorEnabled) return@withLock
                 // The account was removed from the phone's settings: the user stopped the mirror there.
                 if (prefs.getBoolean("mirror_account", false) && withContext(io) { mirror.account() } == null) {

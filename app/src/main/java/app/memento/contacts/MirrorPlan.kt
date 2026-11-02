@@ -140,6 +140,28 @@ object MirrorPlan {
     private fun note(rows: List<MirrorRow>) = rows.filterIsInstance<MirrorRow.Note>().map { it.text.trim() }.filter { it.isNotEmpty() }.joinToString("\n\n")
 
     /**
+     * What the phone holds that a contact file has no field for (a second address, a date it wrote in a form
+     * Mémento does not read): kept as a paragraph of the notes rather than dropped.
+     */
+    private fun extras(rows: List<MirrorRow>): String {
+        val lines = rows.filterIsInstance<MirrorRow.Postal>().map { address(it.formatted) }.filter { it.isNotEmpty() }.distinct().drop(1)
+            .map { "Adresse : $it" } +
+            rows.filterIsInstance<MirrorRow.Birthday>().filter { Birthday.parse(it.date) == null && it.date.isNotBlank() }.map { "Anniversaire : ${it.date.trim()}" }
+        return if (lines.isEmpty()) "" else "$EXTRAS_TITLE :\n" + lines.joinToString("\n") { "- $it" }
+    }
+
+    /** The notes the phone's rows give: the note row, then [extras]. */
+    private fun phoneNotes(rows: List<MirrorRow>): String = listOf(note(rows), extras(rows)).filter { it.isNotEmpty() }.joinToString("\n\n")
+
+    private const val EXTRAS_TITLE = "Autres informations du téléphone"
+
+    /** A StructuredName row: a prefix and a middle name go with the first name, a suffix with the last name. */
+    fun nameRow(prefix: String, given: String, middle: String, family: String, suffix: String, display: String): MirrorRow.Name {
+        fun join(vararg parts: String) = parts.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
+        return MirrorRow.Name(join(prefix, given, middle), join(family, suffix), display.trim())
+    }
+
+    /**
      * [base] with the fields the phone holds in [rows]. A field whose rows say the same as the file (a number
      * typed with other spaces, `autre` written as "other") keeps the file's own spelling; everything else of the
      * file (id, path, unknown keys, attachments, uid) is kept. The notes are the note row.
@@ -163,8 +185,9 @@ object MirrorPlan {
             },
             emails = if (sameMails) base.emails else mails(rows).distinctBy { it.lowercase() },
             address = if (postal(mine) == postal(rows)) base.address else postal(rows),
-            birthday = if (birthday(mine) == birthday(rows)) base.birthday else birthday(rows),
-            notes = if (note(mine) == note(rows)) base.notes else note(rows),
+            // a birthday row the phone wrote in a form not read here never erases the file's (its text goes to the notes)
+            birthday = if (birthday(mine) == birthday(rows) || birthday(rows) == null && rows.any { it is MirrorRow.Birthday }) base.birthday else birthday(rows),
+            notes = if (phoneNotes(mine) == phoneNotes(rows)) base.notes else phoneNotes(rows),
             favorite = starred,
         )
     }

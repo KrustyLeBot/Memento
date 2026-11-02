@@ -1,14 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The account type as the contacts apps read it (AOSP ExternalAccountType; Samsung Contacts follows it).
+    The account type as the contacts apps read it (AOSP ExternalAccountType + BaseAccountType; Samsung Contacts
+    follows it). Any rule broken below makes the whole account type rejected (DefinitionException), so:
+    - EditSchema must hold "name" and "photo";
+    - "name" must have maxOccurs="1" and ALL of supportsPrefix, supportsMiddleName, supportsSuffix and the three
+      supportsPhonetic* set to true (BaseAccountType.NameKindBuilder: "For now, every thing must be supported");
+    - "photo" and "note" must have maxOccurs="1"; a kind with a type column needs at least one Type.
 
     EditSchema: declares the fields a contact of the account may hold, which makes the account writable: the
     phone's contacts app then offers "Mémento" when a contact is created (the "save to" list, default storage)
-    and edits its contacts with exactly these fields, those of a Mémento contact (MirrorPlan.rows): name, phones
-    with their type, e-mails, one postal address (a single formatted field), the birthday (year optional), a note.
-    ExternalAccountType rejects an EditSchema without "name" and "photo" (the whole account type is then
-    ignored), and requires supportsDisplayName and the three supportsPhonetic* to be true on "name". A photo
-    is accepted by the phone but not copied into the files (its row is left as it is).
+    and edits its contacts with these fields, those of a Mémento contact (MirrorPlan.rows). The prefix and the
+    middle name are read into the first name, the suffix into the last name; the phonetic name and a photo stay
+    on the phone (an update keeps them) but are not copied into the files. E-mails and the address carry no
+    type in the files, so a single type is offered for them: a type chosen on the phone would not survive.
 
     inviteContactActivity / inviteContactActionLabel (no namespace, also read by ExternalAccountType): on a
     contact of ANOTHER account the contacts app may offer "Ajouter à Mémento", which starts MainActivity with
@@ -22,9 +26,9 @@
             kind="name"
             maxOccurs="1"
             supportsDisplayName="true"
-            supportsPrefix="false"
-            supportsMiddleName="false"
-            supportsSuffix="false"
+            supportsPrefix="true"
+            supportsMiddleName="true"
+            supportsSuffix="true"
             supportsPhoneticFamilyName="true"
             supportsPhoneticMiddleName="true"
             supportsPhoneticGivenName="true" />
@@ -37,15 +41,10 @@
             <Type type="custom" />
         </DataKind>
         <DataKind kind="email">
-            <Type type="home" />
-            <Type type="work" />
             <Type type="other" />
-            <Type type="custom" />
         </DataKind>
         <DataKind kind="postal" maxOccurs="1" needsStructured="false">
             <Type type="home" />
-            <Type type="work" />
-            <Type type="other" />
         </DataKind>
         <DataKind kind="event" maxOccurs="1" dateWithTime="false">
             <Type type="birthday" maxOccurs="1" yearOptional="true" />

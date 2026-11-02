@@ -53,6 +53,20 @@ private class FakeProvider {
     }
 
     fun of(source: String) = raws.values.single { it.sourceId == source }
+
+    /** A second raw contact of the same contact, holding an edit (a restore, a provider that duplicated it). */
+    fun duplicate(source: String, at: Long, change: (List<MirrorRow>) -> List<MirrorRow>): Long {
+        val r = raws.values.first { it.sourceId == source }
+        raws[next] = Raw(source, r.hash, true, false, r.starred, change(r.rows), at)
+        return next++
+    }
+}
+
+/** A folder where some files cannot be read for a moment (SAF error, a sync replacing them). */
+private class FlakyFs(val inner: MemFs) : app.memento.Fs by inner {
+    val broken = HashSet<String>()
+    override fun readBytes(path: String): ByteArray? = if (path in broken) null else inner.readBytes(path)
+    override fun readText(path: String): String? = readBytes(path)?.toString(Charsets.UTF_8)
 }
 
 class MirrorSyncTest {
@@ -307,6 +321,148 @@ class MirrorSyncTest {
         assertEquals(MirrorPlan.hash(c), MirrorPlan.hash(book.byId(saved.id)!!))
     }
 
+    // ---- data-loss regressions ----
+
+    @Test
+    fun aPhoneThatReadsBackEmptyNeverErasesTheFile() {
+        val m = marie()
+        run()
+        val before = fs.readText(m.path)
+        phone.edit(m.id, late) { emptyList() }
+        val plan = run()
+        assertTrue(plan.files.isEmpty())
+        assertEquals(before, fs.readText(m.path))
+        assertEquals(MirrorPlan.rows(book.byId(m.id)!!), phone.of(m.id).rows)
+        assertSettled()
+    }
+
+    @Test
+    fun aBirthdayThePhoneWroteOtherwiseNeverErasesTheFiles() {
+        val m = book.save(marie().copy(birthday = Birthday(1990, 5, 14)))
+        run()
+        phone.edit(m.id, late) { rows -> rows.filter { it !is MirrorRow.Birthday } + MirrorRow.Birthday("14/05/1990") + MirrorRow.Mail("b@example.org") }
+        run()
+        val c = book.byId(m.id)!!
+        assertEquals(Birthday(1990, 5, 14), c.birthday)
+        assertEquals(listOf("marie@example.org", "b@example.org"), c.emails)
+        assertTrue(c.notes, c.notes.contains("Anniversaire : 14/05/1990"))
+        assertSettled()
+    }
+
+    @Test
+    fun aSecondAddressGoesToTheNotes() {
+        phone.create(
+            listOf(MirrorRow.Name("Jean", "Martin", "Jean Martin"), MirrorRow.Postal("1 rue A\nParis"), MirrorRow.Postal("2 rue B\nLyon"), MirrorRow.Note("Voisin")),
+            at = late,
+        )
+        run()
+        val c = book.contacts.value.single()
+        assertEquals("1 rue A, Paris", c.address)
+        assertEquals("Voisin\n\nAutres informations du téléphone :\n- Adresse : 2 rue B, Lyon", c.notes)
+        assertSettled()
+        // an edit on the phone afterwards (the two addresses still there) keeps the notes as they are
+        phone.edit(c.id, late) { rows -> rows + MirrorRow.Mail("j@example.org") }
+        run()
+        assertEquals(c.notes, book.byId(c.id)!!.notes)
+        assertSettled()
+    }
+
+    @Test
+    fun prefixMiddleNameAndSuffixAreKept() {
+        assertEquals(MirrorRow.Name("Dr Jean Paul", "de la Fontaine Jr", "Dr Jean Paul de la Fontaine Jr"),
+            MirrorPlan.nameRow("Dr", "Jean", "Paul", "de la Fontaine", "Jr", " Dr Jean Paul de la Fontaine Jr "))
+        val c = MirrorPlan.adopt(Contact(id = "x"), listOf(MirrorPlan.nameRow("", "Jean", "", "de la Fontaine", "", "Jean de la Fontaine")), false)
+        assertEquals("Jean" to "de la Fontaine", c.firstName to c.lastName)
+    }
+
+    @Test
+    fun aStateOlderThanTheProviderIsNotAConflict() {
+        val m = marie()
+        run()
+        val old = synced
+        book.save(book.byId(m.id)!!.copy(notes = "Nouveau"))
+        run() // the provider took it, then the state could not be written
+        synced = old
+        phone.edit(m.id, late) { rows -> rows.map { if (it is MirrorRow.Name) MirrorRow.Name("Marie-Claire", "Dupont", "Marie-Claire Dupont") else it } }
+        val plan = run()
+        assertEquals(0, plan.conflicts)
+        val c = book.byId(m.id)!!
+        assertEquals("Marie-Claire", c.firstName)
+        assertEquals("Nouveau", c.notes)
+        assertSettled()
+    }
+
+    @Test
+    fun manyDeletionsAtOnceKeepTheFiles() {
+        val all = (1..12).map { book.save(Contact(firstName = "P$it", phones = listOf(Phone("06 00 00 00 %02d".format(it))))) }
+        run()
+        all.forEach { phone.delete(it.id) }
+        val plan = run()
+        assertEquals(12, plan.keptBecauseMassDelete)
+        assertTrue(plan.files.isEmpty())
+        assertEquals(12, book.contacts.value.size)
+        assertEquals(12, phone.raws.size)
+        assertSettled()
+    }
+
+    @Test
+    fun aFileThatIsNotMirroredKeepsItsPhoneCopy() {
+        val m = marie()
+        book.save(Contact(firstName = "Paul"))
+        run()
+        fs.writeText(m.path, "---\nid: ${m.id}\n---\n") // a file whose fields could not be read
+        phone.edit(m.id, late) { rows -> rows + MirrorRow.Mail("x@example.org") }
+        val plan = run()
+        assertTrue(plan.provider.none { it is MirrorOp.Delete })
+        assertTrue(plan.files.isEmpty())
+        assertTrue(phone.of(m.id).rows.contains(MirrorRow.Mail("x@example.org")))
+    }
+
+    @Test
+    fun twoCopiesKeepTheEditedOne() {
+        val m = marie()
+        run()
+        phone.duplicate(m.id, late) { rows -> rows + MirrorRow.Mail("dup@example.org") }
+        run()
+        assertTrue(book.byId(m.id)!!.emails.contains("dup@example.org"))
+        assertSettled()
+    }
+
+    @Test
+    fun theBookNeverHidesAFileItCouldNotRead() {
+        val flaky = FlakyFs(MemFs())
+        val b = ContactBook { flaky }
+        val c = b.save(Contact(firstName = "Marie", lastName = "Dupont", id = "abc123"))
+        flaky.broken.add(c.path)
+        b.clear()
+        b.scan()
+        assertEquals(setOf(c.path), b.unreadable)
+        // a contact re-created from the phone under the same id never replaces that file
+        val e = runCatching { b.save(Contact(firstName = "Marie", lastName = "Dupont", id = "abc123")) }.exceptionOrNull()
+        assertTrue(e is IllegalStateException)
+        flaky.broken.clear()
+        b.scan()
+        assertTrue(b.unreadable.isEmpty())
+        val read = b.byId("abc123")!!
+        assertFalse(b.changedOnDisk(read))
+        flaky.inner.writeText(c.path, flaky.inner.readText(c.path)!! + "\nModifié sur le PC")
+        assertTrue(b.changedOnDisk(read))
+    }
+
+    @Test
+    fun theTrashKeepsWhatWasNeverShown() {
+        val store = MirrorStore(tmp.newFolder("trash"))
+        val day = 24 * 3600 * 1000L
+        store.trash("contacts/a.md", "A", "a", 0)
+        store.purge(30 * day) // deleted by the sync adapter a month ago, the app never opened since
+        assertEquals(1, store.entries().size)
+        assertEquals(listOf("A"), store.announce(30 * day).map { it.name })
+        store.purge(36 * day)
+        assertEquals(1, store.entries().size)
+        store.purge(38 * day)
+        assertTrue(store.entries().isEmpty())
+    }
+
     @Test
     fun storeKeepsStateAndTrash() {
         val store = MirrorStore(tmp.newFolder("mirror"))
@@ -318,10 +474,11 @@ class MirrorSyncTest {
         store.trash("contacts/dupont-marie-a.md", "Marie\tDupont", "---\nid: a\n---\n", 1000)
         store.trash("contacts/old-b.md", "Old", "x", 1000 - 8 * day)
         val fresh = store.announce(2000)
-        assertEquals(listOf("Marie Dupont"), fresh.map { it.name })
+        // never shown before: kept, however old
+        assertEquals(listOf("Marie Dupont", "Old"), fresh.map { it.name })
         assertEquals("---\nid: a\n---\n", store.text(fresh[0]))
         assertTrue(store.announce(3000).isEmpty())
         store.remove(fresh[0])
-        assertTrue(store.entries().isEmpty())
+        assertEquals(listOf("Old"), store.entries().map { it.name })
     }
 }

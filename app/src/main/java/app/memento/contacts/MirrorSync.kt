@@ -10,12 +10,14 @@ data class Synced(val hash: String, val at: Long)
 
 /** A change to the `contacts/` folder. */
 sealed class FileOp {
+    abstract val contact: Contact
+
     /** A contact created on the phone (or recreated from it): [contact] has its id, no path yet. */
-    data class Create(val contact: Contact) : FileOp()
+    data class Create(override val contact: Contact) : FileOp()
     /** An existing file with new fields (the phone's edit, or a conflict's merge). */
-    data class Write(val contact: Contact) : FileOp()
+    data class Write(override val contact: Contact) : FileOp()
     /** Deleted on the phone: the file goes, kept aside so the deletion can be undone. */
-    data class Trash(val contact: Contact) : FileOp()
+    data class Trash(override val contact: Contact) : FileOp()
 }
 
 data class SyncPlan(
@@ -28,6 +30,8 @@ data class SyncPlan(
     val keptBecauseEmpty: Boolean = false,
     /** Contacts changed on both sides since the last run (the loser's fields went to the notes). */
     val conflicts: Int = 0,
+    /** Phone deletions too many at once to be trusted (moved to another account, storage cleared): files kept. */
+    val keptBecauseMassDelete: Int = 0,
 ) {
     val isEmpty: Boolean get() = files.isEmpty() && provider.isEmpty()
 }
@@ -42,8 +46,13 @@ data class SyncPlan(
  *   the file changed since the last run (then the file wins and comes back on the phone);
  * - otherwise files → provider by hash, as in L1: insert, rewrite, delete when the file is gone.
  * Idempotent: applying the plan and running again gives an empty plan.
+ * What the last run agreed on is the raw contact's SYNC1 (written in the same transaction as its rows), else
+ * the saved state: SYNC1 is never older than the state, which a run that failed half-way did not write.
  */
 object MirrorSync {
+    /** More phone deletions than this in one run, and over a quarter of the contacts: not trusted (files kept). */
+    const val MASS_DELETE = 10
+
     fun reconcile(
         files: List<Contact>,
         fileTimes: Map<String, Long>,
@@ -88,26 +97,38 @@ object MirrorSync {
 
         val primary = LinkedHashMap<String, MirrorRaw>()
         for (r in live) {
-            if (r.sourceId!! in primary) ops.add(MirrorOp.Delete(r.rawId)) else primary[r.sourceId] = r
+            val src = r.sourceId!!
+            val p = primary[src]
+            when {
+                p == null -> primary[src] = r
+                // two copies of one contact: the one holding a phone edit is the one kept
+                r.dirty && !p.dirty -> { ops.add(MirrorOp.Delete(p.rawId)); primary[src] = r }
+                else -> ops.add(MirrorOp.Delete(r.rawId))
+            }
         }
         val trashed = HashSet<String>()
 
+        val toTrash = LinkedHashMap<String, Contact>()
         for (r in sorted) {
             if (!r.deleted) continue
             ops.add(MirrorOp.Delete(r.rawId))
             val src = r.sourceId ?: continue
-            if (src in primary || src in trashed) continue
+            if (src in primary || src in toTrash) continue
             val f = wanted[src] ?: continue
-            val base = synced[src]?.hash ?: r.hash
+            val base = r.hash ?: synced[src]?.hash
             // a file edited since the last run wins over the deletion: it is inserted again below
-            if (MirrorPlan.hash(f) == base) {
-                fileOps.add(FileOp.Trash(f))
-                trashed.add(src)
-            }
+            if (MirrorPlan.hash(f) == base) toTrash[src] = f
+        }
+        val massDelete = toTrash.size > MASS_DELETE && toTrash.size * 4 > wanted.size
+        if (!massDelete) {
+            toTrash.values.forEach { fileOps.add(FileOp.Trash(it)) }
+            trashed.addAll(toTrash.keys)
         }
 
         for ((src, r) in primary) {
             val f = wanted[src]
+            // a file that exists but is not mirrored (no field read, conflict copy only): its phone copy stays
+            if (f == null && src in allIds) continue
             if (f == null) {
                 // the file is gone (deleted in the app or on the PC); an edit made on the phone meanwhile brings it back
                 val back = if (r.dirty && src !in allIds) MirrorPlan.adopt(Contact(id = src), rowsOf(r), r.starred) else null
@@ -128,8 +149,14 @@ object MirrorSync {
                 continue
             }
             val phone = MirrorPlan.adopt(f, rowsOf(r), r.starred)
+            if (phone.isEmpty) {
+                // no field read back (a provider that answered empty): never taken as "everything erased"
+                ops.add(MirrorOp.Update(r.rawId, f, hf))
+                agreed(src, hf, true)
+                continue
+            }
             val hp = MirrorPlan.hash(phone)
-            val base = synced[src]?.hash ?: r.hash
+            val base = r.hash ?: synced[src]?.hash
             when {
                 hp == hf -> { ops.add(MirrorOp.Ack(r.rawId, src, hf)); agreed(src, hf, false) }
                 hf == base -> {
@@ -160,7 +187,7 @@ object MirrorSync {
             ops.add(MirrorOp.Insert(f, h))
             agreed(id, h, true)
         }
-        return SyncPlan(fileOps, ops, out, conflicts = conflicts)
+        return SyncPlan(fileOps, ops, out, conflicts = conflicts, keptBecauseMassDelete = if (massDelete) toTrash.size else 0)
     }
 
     /**
