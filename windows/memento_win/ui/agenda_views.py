@@ -377,7 +377,8 @@ class TimeGridView(QWidget):
     day_clicked = Signal(object)          # date: a header day was clicked (opens the day view)
     more_clicked = Signal(object, QPoint)  # date with hidden all-day entries
     GUTTER = 56
-    HOUR = 48
+    HOUR = 48  # replaced on resize: the 24 hours always fit the height, no vertical scrolling
+    MIN_HOUR = 14
 
     def __init__(self):
         super().__init__()
@@ -396,7 +397,7 @@ class TimeGridView(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(True)
-        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.canvas = _HourCanvas(self)
         self.scroll.setWidget(self.canvas)
@@ -476,6 +477,18 @@ class TimeGridView(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.header.relayout()
+        self.fit_hours()
+
+    def fit_hours(self) -> None:
+        """An hour is a 24th of the room under the header (a scroll bar only on a window too short for MIN_HOUR)."""
+        room = self.scroll.viewport().height() or (self.height() - self.header.height())
+        hour = max(self.MIN_HOUR, (room - 1) // 24)
+        if hour != self.HOUR:
+            self.HOUR = hour
+            self.canvas.setMinimumHeight(24 * hour + 1)
+            self.canvas.setMaximumHeight(24 * hour + 1)
+            self.canvas.updateGeometry()
+            self.canvas.update()
 
 
 class _GridHeader(QWidget):

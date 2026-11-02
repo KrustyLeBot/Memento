@@ -49,6 +49,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.memento.agenda.AgendaController
@@ -299,7 +300,6 @@ private fun SyncPager(pager: PagerState, targetPage: () -> Int, onSettled: (Int)
 
 // ---- week and day ----
 
-private val HOUR = 52.dp
 private val GUTTER = 44.dp
 
 /** Semaine (7 columns) or Jour (1): all-day strip, hour grid, current-time line; swiped between periods. */
@@ -317,27 +317,15 @@ fun TimeGridView(c: AgendaController, mem: AgendaMemory, sources: AgendaSources,
             c.selected = if (days == 7) start.plusDays(ChronoUnit.DAYS.between(startOf(c.selected), c.selected)) else start
         }
     }
-    val density = LocalDensity.current
-    val hourPx = with(density) { HOUR.toPx() }
-    // the vertical position is shared by the pages (swiping keeps the same hours in view) and kept by the view
-    // model (back from an event, the same hours are shown); first an hour before now
-    if (mem.hourScroll < 0) mem.hourScroll = ((java.time.LocalTime.now().hour - 1).coerceAtLeast(0) * hourPx).toInt()
-    var scrollY by mem::hourScroll
     HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, key = { it }) { page ->
         val start = base.plusDays((page - MID).toLong() * days)
-        TimeGridPage(c, sources, (0 until days).map { start.plusDays(it.toLong()) }, today, h24, scrollY, isCurrent = { pager.currentPage == page }) { scrollY = it }
+        TimeGridPage(c, sources, (0 until days).map { start.plusDays(it.toLong()) }, today, h24)
     }
 }
 
 @Composable
-private fun TimeGridPage(
-    c: AgendaController, sources: AgendaSources, days: List<LocalDate>, today: LocalDate, h24: Boolean,
-    initialScroll: Int, isCurrent: () -> Boolean, onScroll: (Int) -> Unit,
-) {
+private fun TimeGridPage(c: AgendaController, sources: AgendaSources, days: List<LocalDate>, today: LocalDate, h24: Boolean) {
     val zone = ZoneId.systemDefault()
-    val scroll = rememberScrollState(initialScroll)
-    LaunchedEffect(scroll) { snapshotFlow { scroll.value }.collect { if (isCurrent()) onScroll(it) } }
-    LaunchedEffect(initialScroll) { if (!isCurrent() && scroll.value != initialScroll) scroll.scrollTo(initialScroll) }
     val entries by produceState<List<Entry>>(emptyList(), sources, days) {
         value = c.entries(sources, days.first(), days.last().plusDays(1)).entries
     }
@@ -382,18 +370,21 @@ private fun TimeGridPage(
             }
         }
         HorizontalDivider()
-        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)) {
-            Row(Modifier.fillMaxWidth().height(HOUR * 24)) {
+        // the whole day fits the screen height, no vertical scrolling: an hour is a 24th of the room left
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val hour = maxHeight / 24
+            Row(Modifier.fillMaxWidth().height(hour * 24)) {
                 Column(Modifier.width(GUTTER)) {
                     (0 until 24).forEach { h ->
-                        Box(Modifier.height(HOUR).fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
-                            if (h > 0) Text(AgendaText.time(java.time.LocalTime.of(h, 0), h24).let { if (h24) it else it.replace(":00", "") },
-                                fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.offset(y = (-7).dp).padding(end = 6.dp))
+                        Box(Modifier.height(hour).fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
+                            // every other hour when rows are too short for a label each
+                            if (h > 0 && (hour >= 18.dp || h % 2 == 0)) Text(AgendaText.time(java.time.LocalTime.of(h, 0), h24).let { if (h24) it else it.replace(":00", "") },
+                                fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.offset(y = (-6).dp).padding(end = 6.dp))
                         }
                     }
                 }
                 days.forEach { d ->
-                    DayColumn(c, d, byDay[d].orEmpty(), zone, h24, AgendaLayout.nowMinute(now, d, zone), Modifier.weight(1f).fillMaxHeight())
+                    DayColumn(c, d, byDay[d].orEmpty(), zone, h24, AgendaLayout.nowMinute(now, d, zone), hour, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -401,11 +392,11 @@ private fun TimeGridPage(
 }
 
 @Composable
-private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>, zone: ZoneId, h24: Boolean, nowMinute: Int?, modifier: Modifier) {
+private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>, zone: ZoneId, h24: Boolean, nowMinute: Int?, hour: Dp, modifier: Modifier) {
     val placed = remember(entries, day) { AgendaLayout.placeTimed(entries, day, zone) }
     val line = MaterialTheme.colorScheme.outlineVariant
     val density = LocalDensity.current
-    val hourPx = with(density) { HOUR.toPx() }
+    val hourPx = with(density) { hour.toPx() }
     BoxWithConstraints(
         modifier.border(0.5.dp, line.copy(alpha = 0.4f))
             .pointerInput(day) {
@@ -417,20 +408,21 @@ private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>,
     ) {
         val width = maxWidth
         (1 until 24).forEach { h ->
-            Box(Modifier.offset(y = HOUR * h).fillMaxWidth().height(0.5.dp).background(line.copy(alpha = 0.5f)))
+            Box(Modifier.offset(y = hour * h).fillMaxWidth().height(0.5.dp).background(line.copy(alpha = 0.5f)))
         }
         placed.forEach { p ->
-            val top = HOUR * (p.startMin / 60f)
-            val height = HOUR * ((p.endMin - p.startMin) / 60f)
+            val top = hour * (p.startMin / 60f)
+            val height = hour * ((p.endMin - p.startMin) / 60f)
             val w = width / p.columns
             Column(
                 Modifier.offset(x = w * p.column, y = top).width(w).height(height).padding(1.dp)
                     .clip(RoundedCornerShape(5.dp)).background(agendaChipColor(p.entry.color)).clickable { c.open(p.entry) }
-                    .padding(horizontal = 3.dp, vertical = 2.dp),
+                    .padding(horizontal = 3.dp, vertical = if (height >= 20.dp) 2.dp else 0.dp),
             ) {
-                Text(entryTitle(p.entry), color = Color.White, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = if (p.endMin - p.startMin >= 60) 2 else 1, overflow = TextOverflow.Ellipsis)
-                if (p.endMin - p.startMin >= 45) {
+                // rows are short now that the day fits the screen: text only where it has room
+                if (height >= 12.dp) Text(entryTitle(p.entry), color = Color.White, fontSize = 10.sp, lineHeight = 11.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = if (height >= 40.dp) 2 else 1, overflow = TextOverflow.Ellipsis)
+                if (height >= 34.dp) {
                     // a week column only has room for the start: the full range was cut to "07:00 -"
                     val time = AgendaText.timeLine(p.entry, zone, h24, c.eventZoneTimes)
                     Text(if (w < 96.dp) time.substringBefore(" - ") else time, color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp, maxLines = 1)
@@ -438,7 +430,7 @@ private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>,
             }
         }
         if (nowMinute != null) {
-            Box(Modifier.offset(y = HOUR * (nowMinute / 60f) - 1.dp).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.error))
+            Box(Modifier.offset(y = hour * (nowMinute / 60f) - 1.dp).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.error))
         }
     }
 }
