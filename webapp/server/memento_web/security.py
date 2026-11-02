@@ -41,14 +41,17 @@ def origin_ok(request: Request) -> bool:
 
 
 class Guard:
-    def __init__(self, app, auth: Auth):
+    def __init__(self, app, auth: Auth, on_request=None):
         self.app = app
         self.auth = auth
+        self.on_request = on_request  # the idle timer's reset
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        if self.on_request is not None:
+            self.on_request()
         request = Request(scope)
         path = scope["path"]
         is_map = path.startswith("/map/")

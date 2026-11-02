@@ -13,6 +13,9 @@ class FakeData:
     def __init__(self, store):
         self.store = store
 
+    def trim_if_idle(self):
+        return False
+
 
 def test_changed_areas_names_each_part_of_the_snapshot():
     before = ((("a.md", 1, 1),), (), (), ())

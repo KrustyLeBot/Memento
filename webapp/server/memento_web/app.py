@@ -3,6 +3,8 @@ order below (before the static UI, which answers everything else)."""
 from __future__ import annotations
 
 import contextlib
+import mimetypes
+import re
 import traceback
 from pathlib import Path
 
@@ -32,21 +34,35 @@ def default_static_dir() -> Path:
     return here.parents[1] / "ui" / "dist"
 
 
+ASSET = re.compile(r"^assets/[\w.-]+$")
+
+
 class SpaFiles(StaticFiles):
     """The built UI; any unknown path that is not an API one gets index.html (the UI routes with the hash, but a
-    reload on a deep link must still land somewhere)."""
+    reload on a deep link must still land somewhere). A `<file>.gz` made at image build time is sent instead of
+    the file to browsers that accept gzip: no compression work at request time."""
 
     async def get_response(self, path: str, scope):
-        try:
-            response = await super().get_response(path, scope)
-        except HTTPException as error:
-            if error.status_code != 404:
-                raise
-            response = await super().get_response("index.html", scope)
-        if path.startswith("assets/"):
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"  # hashed file names
+        if not ASSET.match(path):
+            try:
+                response = await super().get_response(path, scope)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+            else:
+                if path not in ("", ".", "index.html"):  # another top-level file of the build
+                    response.headers["Cache-Control"] = "no-cache"
+                    return response
+            path = "index.html"
+        gz = Path(self.directory) / f"{path}.gz"
+        accepts = any(k == b"accept-encoding" and b"gzip" in v for k, v in scope["headers"])
+        if accepts and gz.is_file():
+            response = FileResponse(gz, media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
+                                    headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
         else:
-            response.headers["Cache-Control"] = "no-cache"
+            response = await super().get_response(path, scope)
+        # hashed file names never change; index.html must be checked every time to pick up a new build
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
         return response
 
 
@@ -111,5 +127,5 @@ def create_app(config: Config, fetch=None) -> Starlette:
     app.state.data = data
     app.state.auth = auth
     app.state.maphost = maphost
-    app.add_middleware(Guard, auth=auth)
+    app.add_middleware(Guard, auth=auth, on_request=data.touch)
     return app

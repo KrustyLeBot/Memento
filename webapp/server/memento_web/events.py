@@ -58,6 +58,7 @@ class Watcher:
                 pass
             self._wake.clear()
             await self.check()
+            await run_in_threadpool(self.data.trim_if_idle)
 
     async def check(self) -> list[str]:
         snapshot = await run_in_threadpool(self.data.store.snapshot)
