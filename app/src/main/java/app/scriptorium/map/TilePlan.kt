@@ -58,10 +58,10 @@ data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: In
 object TilePlans {
     /**
      * IGN orthophoto JPEGs measured at z12-17 (3x3 tiles per zoom, Nov 2026): 10-20 KB on average in the Alps
-     * (Vanoise, Chamonix), 17-23 KB in towns (Grenoble, Annecy), never above 26 KB. 22 KB keeps the estimate on the
-     * safe side for a mixed route; the download still checks the real bytes against the budget.
+     * (Vanoise, Chamonix), 17-23 KB in towns (Grenoble, Annecy), never above 26 KB; a real 184 km loop came to 57 % of
+     * a 22 KB estimate. 15 KB keeps the shown estimate close to the download; the real bytes are checked anyway.
      */
-    const val ORTHO_TILE_BYTES = 22L * 1024
+    const val ORTHO_TILE_BYTES = 15L * 1024
     const val DEM_TILE_BYTES = 60L * 1024
     const val ROUTE_BUDGET = 500L * 1024 * 1024
     const val ORTHO_MIN_Z = 8
@@ -69,13 +69,13 @@ object TilePlans {
     val DEM_ZOOMS = 6..13
     /** Route packs: the whole square up to this zoom, higher zooms only along the route. */
     const val MID_Z = 14
-    const val CORRIDOR_M = 1500.0
+    const val CORRIDOR_M = 1000.0
 
     /**
      * What gives way when the corridor does not fit the budget, in order: z17 first, then the buffer narrows. Past the
      * last step the square's zoom goes down.
      */
-    val CORRIDOR_STEPS = listOf(1500.0 to 17, 1500.0 to 16, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
+    val CORRIDOR_STEPS = listOf(1000.0 to 17, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
 
     /** The zone pack recorded around the start without a route: 2D only, 20 km square, z8–15. */
     const val ZONE_HALF_M = 10_000.0

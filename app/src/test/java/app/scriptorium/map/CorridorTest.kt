@@ -69,16 +69,16 @@ class CorridorTest {
         assertEquals(8..14, p.orthoZooms)
         val c = p.corridor!!
         assertEquals(15..17, c.zooms)
-        assertEquals(1500.0, c.bufferM, 0.0)
+        assertEquals(1000.0, c.bufferM, 0.0)
         assertTrue(c.lons.size < r.size / 3) // simplified
         assertTrue(p.estimatedBytes <= TilePlans.ROUTE_BUDGET)
-        assertTrue(p.estimatedBytes > TilePlans.ROUTE_BUDGET / 4)
+        assertTrue(p.estimatedBytes > TilePlans.ROUTE_BUDGET / 8)
         assertEquals(17, p.topZoom)
-        assertEquals("Haute définition le long du tracé (±1,5 km), moyenne ailleurs", p.detailLabel())
+        assertEquals("Haute définition le long du tracé (±1 km), moyenne ailleurs", p.detailLabel())
 
         // z17 band: about length × (2 × buffer + a tile) of ground, within 25 %
         val tileM = Corridors.tileMetres(17, LAT0)
-        val expected = r.length * (2 * 1500 + tileM) / (tileM * tileM)
+        val expected = r.length * (2 * 1000 + tileM) / (tileM * tileM)
         val got = c.tiles(17).size.toDouble()
         assertTrue("z17 $got vs $expected", got in expected * 0.75..expected * 1.25)
 
@@ -95,7 +95,7 @@ class CorridorTest {
         val before = squareOnlyUpTo17(p.square)
         println(
             "184 km loop: before z8-${before.orthoZooms.last} over the square, ${before.tileCount} tiles, ~${before.estimatedBytes / 1_000_000} MB; " +
-                "after z8-14 + z15-17 ±1.5 km, ${p.tileCount} tiles, ~${p.estimatedBytes / 1_000_000} MB",
+                "after z8-14 + z15-17 ±1 km, ${p.tileCount} tiles, ~${p.estimatedBytes / 1_000_000} MB",
         )
         assertTrue(before.orthoZooms.last < 17)
     }
@@ -124,9 +124,9 @@ class CorridorTest {
         val full = TilePlans.forRoute(r)!!
         val noZ17 = TilePlans.forRoute(r, full.estimatedBytes - 1)!!
         assertEquals(15..16, noZ17.corridor!!.zooms)
-        assertEquals(1500.0, noZ17.corridor!!.bufferM, 0.0)
+        assertEquals(1000.0, noZ17.corridor!!.bufferM, 0.0)
         val narrower = TilePlans.forRoute(r, noZ17.estimatedBytes - 1)!!
-        assertEquals(1000.0, narrower.corridor!!.bufferM, 0.0)
+        assertEquals(500.0, narrower.corridor!!.bufferM, 0.0)
         assertEquals(8..14, narrower.orthoZooms)
         // a budget below the z14 square: the square goes down, a band stays
         val small = TilePlans.forRoute(r, TilePlan(full.square, 8..14, TilePlans.DEM_ZOOMS).estimatedBytes - 1)!!
