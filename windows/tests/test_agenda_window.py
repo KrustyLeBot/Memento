@@ -540,3 +540,24 @@ def test_dark_theme_paints_every_view(filled, app):
             assert not window.grab().isNull()
     finally:
         theme.apply_theme(app, "light")
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_an_edit_over_an_event_the_sync_replaced_asks_first(filled, monkeypatch, replace):
+    from PySide6.QtWidgets import QMessageBox
+    window, events = filled
+    screen = window.agenda
+    path = window.store.root / events["dentist"].path
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or (
+        QMessageBox.StandardButton.Yes if replace else QMessageBox.StandardButton.No))
+
+    def edit(dialog):  # the phone's version lands while the dialog is open
+        path.write_text(path.read_text(encoding="utf-8").replace("Dentiste", "Dentiste (déplacé)"), encoding="utf-8")
+        dialog.title.setText("Dentiste Dr Martin")
+        return True
+
+    screen.edit_entry(entry(screen, "Dentiste", screen.data.today()), dialog_hook=edit)
+    assert len(asked) == 1
+    text = path.read_text(encoding="utf-8")
+    assert ("Dr Martin" in text) is replace and ("(déplacé)" in text) is not replace

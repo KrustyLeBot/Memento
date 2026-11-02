@@ -174,6 +174,11 @@ class AgendaData:
 
     # ---- lookups ----
 
+    def file_stamp(self, path: str) -> tuple[int, int] | None:
+        """(mtime, size) of the file as last read: what the agenda shows."""
+        cached = self._files.get(path)
+        return cached[0] if cached else None
+
     def event(self, event_id: str) -> Event | None:
         return next((e for e in self.sources.events if e.id == event_id), None)
 

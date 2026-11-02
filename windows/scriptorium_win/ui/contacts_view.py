@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 from ..core import contacts as ct
 from ..core import vcard
-from . import icons, theme
+from . import icons, overwrite, theme
 
 MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre",
           "décembre"]
@@ -543,9 +543,16 @@ class ContactsScreen(QWidget):
     def edit_contact(self, dialog_factory=None) -> None:
         if self.current is None:
             return
-        dialog = (dialog_factory or EditDialog)(self, self.current)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.save(dialog.contact())
+        original = self.current
+        before = overwrite.stamp(self.store.root / original.path)
+        dialog = (dialog_factory or EditDialog)(self, original)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        # the dialog is modal but the sync is not: the file may have been replaced (or deleted) meanwhile
+        if not overwrite.may_overwrite(self, self.store.root / original.path, before, original.display_name):
+            self.refresh()
+            return
+        self.save(dialog.contact())
 
     def save(self, c: ct.Contact) -> ct.Contact:
         saved = self.store.contacts.save(c)

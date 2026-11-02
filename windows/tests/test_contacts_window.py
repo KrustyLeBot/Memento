@@ -149,3 +149,32 @@ def test_contact_written_by_the_phone_appears(window, tmp_path):
     window._on_disk_changed()
     assert [c.name for c in window.contacts.visible_contacts()] == ["Luc Martin"]
     assert str(tmp_path / "contacts") in window.watcher.directories()
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_an_edit_over_a_file_the_sync_replaced_asks_first(window, tmp_path, monkeypatch, replace):
+    from PySide6.QtWidgets import QDialog, QMessageBox
+    marie = add(window, first_name="Marie", last_name="Dupont")
+    screen = window.contacts
+    screen.show_contact(screen.store.contacts.by_id(marie.id))
+    path = tmp_path / marie.path
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or (
+        QMessageBox.StandardButton.Yes if replace else QMessageBox.StandardButton.No))
+
+    class Dialog:  # the user edits while the phone's version lands
+        def __init__(self, parent, c):
+            self.c = c
+
+        def exec(self):
+            path.write_text(path.read_text(encoding="utf-8").replace("Dupont", "Durand") + "notes: du téléphone\n",
+                            encoding="utf-8")
+            return QDialog.DialogCode.Accepted
+
+        def contact(self):
+            return self.c.copy(first_name="Maria")
+
+    screen.edit_contact(Dialog)
+    assert len(asked) == 1
+    text = path.read_text(encoding="utf-8")
+    assert ("Maria" in text) is replace and ("Durand" in text) is not replace
