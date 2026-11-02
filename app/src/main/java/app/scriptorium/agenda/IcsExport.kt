@@ -22,8 +22,9 @@ data class ExportResult(
  * Python's `core/agenda/ics_export.py` (CRLF, lines folded at 75 octets).
  * - all-day: `DTSTART;VALUE=DATE`, DTEND = the day after the last day; timed with a known zone: `TZID=<IANA>`
  *   plus one VTIMEZONE per zone used; floating (or an unknown zone name): no TZID;
- * - RRULE verbatim, EXDATE one line per value; an exception file becomes an override (UID of its series,
- *   RECURRENCE-ID in the series' form);
+ * - RRULE verbatim, EXDATE one line per value in DTSTART's form (a date on a timed series: that day at the
+ *   series' start time), except the occurrences an exported exception file overrides; an exception file becomes
+ *   an override (UID of its series, RECURRENCE-ID in the series' form);
  * - alerts -> VALARM; `ical_extra` verbatim (lines naming a property the export writes itself are left out and
  *   reported); DESCRIPTION = the note body;
  * - options: activities and dated notes as events (UTC times for activities and reminders).
@@ -64,7 +65,7 @@ object IcsExport {
                 "TRIGGER:${Ics.formatAlertTrigger(m)}", "END:VALARM")
         }
 
-        fun event(e: Event, series: Event?, uidSuffix: String) {
+        fun event(e: Event, series: Event?, uidSuffix: String, overridden: Set<Stamp> = emptySet()) {
             val tz = zoneOf(e)
             count++
             lines.add("BEGIN:VEVENT")
@@ -76,8 +77,9 @@ object IcsExport {
             if (e.allDay) lines.add(timeLine("DTEND", (e.end ?: e.start).plusDays(1), null))
             else e.end?.let { lines.add(timeLine("DTEND", it, tz)) }
             e.rrule?.let { lines.add("RRULE:$it") }
-            e.exdate.forEach { lines.add(timeLine("EXDATE", it, tz)) }
-            e.recurrenceAt?.let { lines.add(timeLine("RECURRENCE-ID", it, if (series != null) zoneOf(series) else tz)) }
+            // an overridden occurrence is replaced by its override, never excluded too (Google drops such overrides)
+            for (x in e.exdate.map { exdateStamp(e, it) }.distinct()) if (x !in overridden) lines.add(timeLine("EXDATE", x, tz))
+            e.recurrenceAt?.let { lines.add(timeLine("RECURRENCE-ID", if (series != null) exdateStamp(series, it) else it, if (series != null) zoneOf(series) else tz)) }
             if (e.status in setOf("confirmed", "tentative", "cancelled")) lines.add("STATUS:${e.status!!.uppercase()}")
             e.location?.let { lines.add("LOCATION:${Ics.escapeText(it)}") }
             if (e.body.isNotBlank()) lines.add("DESCRIPTION:${Ics.escapeText(e.body.trim())}")
@@ -114,6 +116,10 @@ object IcsExport {
         }
     }
 
+    /** EXDATE follows DTSTART's form: a date alone on a timed series is its occurrence at the series' start time. */
+    private fun exdateStamp(series: Event, x: Stamp): Stamp =
+        if (x.allDay && !series.allDay) Stamp(x.date, series.start.time) else if (!x.allDay && series.allDay) Stamp(x.date) else x
+
     private fun sorted(events: List<Event>) = events.sortedWith(compareBy({ it.start.toString() }, { it.title }, { it.id }))
 
     /**
@@ -127,7 +133,13 @@ object IcsExport {
         val w = Writer(now)
         val byId = events.associateBy { it.id }
         val chosen = events.filter { !it.note.conflict && (calendarId == null || settings.calendar(it.calendar).id == calendarId) }
-        for (e in sorted(chosen)) w.event(e, e.recurrenceOf?.let { byId[it] }, "scriptorium")
+        val overridden = HashMap<String, MutableSet<Stamp>>()
+        for (x in chosen) {
+            val series = x.recurrenceOf?.let { byId[it] } ?: continue
+            val at = x.recurrenceAt ?: continue
+            overridden.getOrPut(series.id) { HashSet() }.add(exdateStamp(series, at))
+        }
+        for (e in sorted(chosen)) w.event(e, e.recurrenceOf?.let { byId[it] }, "scriptorium", overridden[e.id].orEmpty())
         if (notes.isNotEmpty()) {
             val (dated, problems) = AgendaIndex.datedNotes(notes)
             w.warnings += problems

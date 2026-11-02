@@ -421,3 +421,36 @@ def test_store_paths_exceptions_and_restore(tmp_path: Path):
     (tmp_path / "agenda" / "2027" / ".x.md.synctmp-1").write_text("partial", encoding="utf-8")
     scan = store.scan()
     assert len(scan.events) == 1 and len(scan.problems) == 1 and "début illisible" in scan.problems[0]
+
+
+# ---- review fixes (same as AgendaReviewTest.kt) ----
+
+def test_export_vector_round_trips_with_overrides_and_no_exdate_for_them():
+    store = AgendaStore(DirFs(VECTORS / "export"))
+    before = occurrences(store)
+    yoga = [o["start"] for o in before if o["title"].startswith("Yoga")]
+    assert "2026-10-15T16:30:00Z" not in yoga and "2026-10-20T16:30:00Z" not in yoga and len(yoga) == 7
+    text = export_calendar(store.scan().events, store.calendars(), "perso", EXPORT_NOW).text
+    assert "EXDATE;TZID=Europe/Paris:20261015T183000" in text  # a date alone on a timed series: its start time
+    assert "EXDATE;TZID=Europe/Paris:20261020T183000" not in text  # overridden, not excluded
+    assert "RECURRENCE-ID;TZID=Europe/Paris:20261020T183000" in text
+    data, _ = export_all(store.scan().events, store.calendars(), EXPORT_NOW)
+    fresh = AgendaStore(MemoryFs())
+    parsed = read_sources([IcsSource.from_bytes("export.zip", data)], DEVICE_ZONE, NOW)
+    apply_import(fresh, parsed, ImportOptions(), [], fresh.calendars(), DEVICE_ZONE, "again", NOW)
+    assert occurrences(fresh) == before
+
+
+def test_a_date_exdate_on_a_timed_series_removes_only_the_start_time_occurrence():
+    e = ev("start: 2026-11-02T09:00\ntz: Europe/Paris\nrrule: FREQ=DAILY;BYHOUR=9,17;COUNT=4\nexdate: [2026-11-02]\n")
+    got = [o.start for o in expand(e, utc(2026, 11, 1), utc(2026, 11, 10), PARIS).occurrences]
+    assert got == [datetime(2026, 11, 2, 17), datetime(2026, 11, 3, 9), datetime(2026, 11, 3, 17)]
+
+
+def test_all_day_alerts_keep_their_wall_time_across_daylight_saving():
+    e = ev("start: 2026-03-31\nalerts: [-9540m, -2340m, -360m]\n")
+    got = alarms(AgendaSources([e]), utc(2026, 3, 24), PARIS, timedelta(days=8))
+    walls = [zones.to_wall(a.at, zones.zone(PARIS)) for a in got]
+    assert walls == [datetime(2026, 3, 24, 9), datetime(2026, 3, 29, 9), datetime(2026, 3, 30, 18)]
+    t = ev("start: 2026-03-30T09:00\ntz: Europe/Paris\nalerts: [-1d]\n")
+    assert [a.at for a in alarms(AgendaSources([t]), utc(2026, 3, 28), PARIS)] == [utc(2026, 3, 29, 7)]

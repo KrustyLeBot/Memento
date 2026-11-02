@@ -413,12 +413,12 @@ class ReminderPlannerTest {
     @Test
     fun oldFiredKeysAreForgottenAndBookRoundTrips() {
         val book = ReminderBook(fired = mapOf("x" to utc("2026-11-01T00:00:00Z").toEpochMilli(), "y" to utc("2026-11-10T00:00:00Z").toEpochMilli()),
-            snoozed = mapOf(ReminderPlanner.snoozeKey("y", 5) to utc("2026-11-11T12:10:00Z").toEpochMilli()))
+            snoozed = mapOf(ReminderPlanner.snoozeKey("y") to utc("2026-11-11T12:10:00Z").toEpochMilli()))
         val p = ReminderPlanner.plan(emptyList(), book, now)
         assertEquals(setOf("y"), p.book.fired.keys)
         assertEquals(1, p.book.snoozed.size)
         assertEquals(p.book, ReminderBook.parse(p.book.toJson()))
-        assertTrue(ReminderPlanner.isSnooze(ReminderPlanner.snoozeKey("y", 5)))
+        assertTrue(ReminderPlanner.isSnooze(ReminderPlanner.snoozeKey("y")))
     }
 
     @Test

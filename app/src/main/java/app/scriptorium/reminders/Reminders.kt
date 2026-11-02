@@ -144,14 +144,16 @@ object Reminders {
 
     /**
      * Recomputes the window from [sources] and registers it: what the planner keeps is (re)set (same key =
-     * same PendingIntent, replaced), what vanished is cancelled. Also keeps the 6-hourly re-run registered.
+     * same PendingIntent, replaced), what vanished is cancelled, snoozes of vanished reminders included. Also keeps
+     * the 6-hourly re-run registered.
      */
     fun reschedule(context: Context, sources: AgendaSources, now: Instant = Instant.now()) {
         val app = context.applicationContext
         synchronized(lock) {
             val wanted = AgendaIndex.alarms(sources, now.minus(ReminderPlanner.LATE), ZoneId.systemDefault(),
                 AgendaIndex.ALARM_HORIZON.plus(ReminderPlanner.LATE))
-            val plan = ReminderPlanner.plan(wanted, readBook(app), now)
+            val zone = ZoneId.systemDefault()
+            val plan = ReminderPlanner.plan(wanted, readBook(app), now) { AgendaIndex.alarmAlive(sources, it, zone) }
             val am = app.getSystemService(AlarmManager::class.java)
             for (key in plan.cancel) {
                 PendingIntent.getBroadcast(app, 0, fireIntent(app, key), PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
@@ -246,12 +248,15 @@ object Reminders {
         context.getSystemService(NotificationManager::class.java).notify(TAG, id, n)
     }
 
-    /** "Reporter 10 min": the notification goes, the same reminder comes back in 10 minutes. */
+    /**
+     * "Reporter 10 min": the notification goes, the same reminder comes back in 10 minutes. One snooze per
+     * notification: a second tap replaces the pending one (same key, same PendingIntent) instead of adding one.
+     */
     fun snooze(context: Context, intent: Intent) {
         val notifyKey = intent.getStringExtra(EXTRA_NOTIFY_KEY) ?: intent.getStringExtra(EXTRA_KEY) ?: return
         context.getSystemService(NotificationManager::class.java).cancel(TAG, notificationId(notifyKey))
         val until = System.currentTimeMillis() + SNOOZE_MS
-        val key = ReminderPlanner.snoozeKey(notifyKey, until)
+        val key = ReminderPlanner.snoozeKey(notifyKey)
         val fire = Intent(intent).setComponent(android.content.ComponentName(context, ReminderReceiver::class.java))
             .setAction(ACTION_FIRE).setData(alarmUri(key)).putExtra(EXTRA_KEY, key).putExtra(EXTRA_NOTIFY_KEY, notifyKey)
         synchronized(lock) {

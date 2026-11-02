@@ -47,7 +47,8 @@ data class Expansion(
  *   iterator, each wall start then becomes an instant ([Zones.toInstant]);
  * - DTSTART is always the first occurrence and counts toward COUNT (RFC 5545), even off the rule; COUNT and
  *   UNTIL are applied here: UNTIL as a date (compared to the date), a local date-time (wall time) or UTC `Z`;
- * - EXDATE and the `recurrence_at` of exception files remove occurrences (an exact stamp, or a date: the day);
+ * - EXDATE and the `recurrence_at` of exception files remove occurrences (an exact stamp; a date removes the day of
+ *   an all-day series, and the occurrence at the series' start time that day of a timed one);
  * - timed occurrences last the exact duration DTEND - DTSTART; all-day ones are dates of the device zone;
  * - in the window when overlapping it; a zero-length one when from <= start < to;
  * - at most [MAX_OCCURRENCES] per window and [MAX_ITERATIONS] rule steps, then `truncated`.
@@ -208,8 +209,9 @@ object RecurrenceExpander {
             return Expansion(if (inside(o)) listOf(o) else emptyList())
         }
         val removed = event.exdate + overridden
-        val exact = removed.filter { !it.allDay }.toSet()
-        val days = removed.filter { it.allDay }.map { it.date }.toSet() + (if (allDay) exact.map { it.date } else emptyList())
+        // a date alone on a timed series means the occurrence at the series' start time that day (as exported)
+        val exact = removed.map { if (it.allDay && !allDay) Stamp(it.date, event.start.time) else it }.filter { !it.allDay }.toSet()
+        val days = if (allDay) removed.map { it.date }.toSet() else emptySet()
         val out = ArrayList<Occurrence>()
         var truncated = false
         try {

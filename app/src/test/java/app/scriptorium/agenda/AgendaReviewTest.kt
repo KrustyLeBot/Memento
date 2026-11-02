@@ -70,4 +70,53 @@ class AgendaReviewTest {
         assertEquals(null, follow(null))
         assertEquals("FREQ=WEEKLY;BYDAY=MO", RuleEditor.followStart("FREQ=WEEKLY;BYDAY=MO", mon, Stamp(mon.date, LocalTime.of(10, 0)), "Europe/Paris", paris))
     }
+
+    @Test
+    fun exportVectorRoundTripsWithOverridesAndNoExdateForThem() {
+        val store = AgendaStore(app.scriptorium.FileFs(java.io.File(Vectors.DIR, "export")))
+        val before = Vectors.occurrences(store)
+        val yoga = before.filter { (it["title"] as String).startsWith("Yoga") }.map { it["start"] }
+        assertEquals(7, yoga.size)
+        assertTrue("2026-10-15T16:30:00Z" !in yoga && "2026-10-20T16:30:00Z" !in yoga)
+        val now = Instant.parse("2026-11-01T09:20:00Z")
+        val text = IcsExport.exportCalendar(store.scan().events, store.calendars(), "perso", now).text
+        assertTrue("EXDATE;TZID=Europe/Paris:20261015T183000" in text) // a date alone on a timed series: its start time
+        assertTrue("EXDATE;TZID=Europe/Paris:20261020T183000" !in text) // overridden, not excluded
+        assertTrue("RECURRENCE-ID;TZID=Europe/Paris:20261020T183000" in text)
+        val (zip, _) = IcsExport.exportAll(store.scan().events, store.calendars(), now)
+        val fresh = AgendaStore(MemoryFs())
+        val parsed = IcsImport.read(listOf(IcsSource.fromBytes("export.zip", zip)), Vectors.DEVICE, Vectors.NOW)
+        IcsImport.apply(fresh, parsed, ImportOptions(), emptyList(), fresh.calendars(), Vectors.DEVICE, "again", Vectors.NOW)
+        assertEquals(before, Vectors.occurrences(fresh))
+    }
+
+    @Test
+    fun aDateExdateOnATimedSeriesRemovesOnlyTheStartTimeOccurrence() {
+        val e = ev("start: 2026-11-02T09:00\ntz: Europe/Paris\nrrule: FREQ=DAILY;BYHOUR=9,17;COUNT=4\nexdate: [2026-11-02]\n")
+        val got = RecurrenceExpander.expand(e, Instant.parse("2026-11-01T00:00:00Z"), Instant.parse("2026-11-10T00:00:00Z"), paris).occurrences
+        assertEquals(listOf("2026-11-02T17:00", "2026-11-03T09:00", "2026-11-03T17:00"), got.map { it.start.toString() })
+    }
+
+    @Test
+    fun snoozesOfVanishedRemindersAreCancelledAndOneSnoozePerNotification() {
+        val series = ev("start: 2026-11-02T09:00\ntz: Europe/Paris\nrrule: FREQ=DAILY\nexdate: [2026-11-04T09:00]\nalerts: [-15m]\n")
+        val n = NoteFormat.parse("n-n00003.md", "---\nid: n00003\ntitle: Note\nreminder: 2026-11-03T12:00:00+01:00\n---\n", 0)
+        val s = AgendaSources(listOf(series), listOf(n))
+        assertTrue(AgendaIndex.alarmAlive(s, "abc123|2026-11-03T09:00|-15", paris))
+        assertTrue(AgendaIndex.alarmAlive(s, "n00003|reminder|${n.reminder}", paris))
+        assertTrue(!AgendaIndex.alarmAlive(s, "abc123|2026-11-04T09:00|-15", paris)) // occurrence deleted
+        assertTrue(!AgendaIndex.alarmAlive(s, "abc123|2026-11-03T09:00|-30", paris)) // alert removed
+        assertTrue(!AgendaIndex.alarmAlive(s, "abc123|2026-11-03T10:00|-15", paris)) // moved
+        assertTrue(!AgendaIndex.alarmAlive(AgendaSources(), "abc123|2026-11-03T09:00|-15", paris)) // event deleted
+        assertTrue(!AgendaIndex.alarmAlive(s, "n00003|reminder|1", paris))
+
+        assertEquals(ReminderPlanner.snoozeKey("abc123|2026-11-03T09:00|-15"), ReminderPlanner.snoozeKey("abc123|2026-11-03T09:00|-15"))
+        val now = Instant.parse("2026-11-03T08:00:00Z")
+        val alive = ReminderPlanner.snoozeKey("abc123|2026-11-03T09:00|-15")
+        val gone = ReminderPlanner.snoozeKey("abc123|2026-11-04T09:00|-15")
+        val book = ReminderBook(snoozed = mapOf(alive to now.toEpochMilli(), gone to now.toEpochMilli()))
+        val p = ReminderPlanner.plan(emptyList(), book, now) { AgendaIndex.alarmAlive(s, it, paris) }
+        assertEquals(listOf(gone), p.cancel)
+        assertEquals(setOf(alive), p.book.snoozed.keys)
+    }
 }

@@ -265,6 +265,29 @@ object AgendaIndex {
     }
 
     /**
+     * The reminder [notifyKey] ([Alarm.key]) still exists: its event or dated note, that occurrence and that alert
+     * offset, or the note's `reminder` at that instant. A snoozed reminder of something gone is not shown again.
+     */
+    fun alarmAlive(sources: AgendaSources, notifyKey: String, device: ZoneId): Boolean {
+        val parts = notifyKey.split('|')
+        if (parts.size != 3) return false
+        val id = parts[0]
+        if (parts[1] == "reminder") {
+            val ms = parts[2].toLongOrNull() ?: return false
+            return sources.notes.any { it.id == id && !it.conflict && it.reminder == ms }
+        }
+        val offset = parts[2].toIntOrNull() ?: return false
+        val wall = try { Stamp.parse(parts[1]) } catch (_: IllegalArgumentException) { return false }
+        val e = sources.events.firstOrNull { it.id == id && !it.note.conflict }
+            ?: datedNotes(sources.notes.filter { it.id == id }).first.firstOrNull()
+            ?: return false
+        if (offset !in e.alerts) return false
+        val at = if (wall.allDay) Zones.dayStart(wall.date, device) else Zones.toInstant(wall.dateTime(), Zones.zoneOr(e.tz, device))
+        val sub = AgendaSources(events = sources.events.filter { it.id == id || it.recurrenceOf == id }, notes = sources.notes.filter { it.id == id })
+        return entries(sub, at, at.plusSeconds(1), device, respectVisibility = false).entries.any { it.key == "$id|${parts[1]}" }
+    }
+
+    /**
      * Alarms falling in [now, now + horizon): event and dated-note `alerts`, note `reminder`s; an all-day alert is
      * a wall time of the device zone (00:00 of the day + offset), so "2 jours avant à 09:00" stays at 09:00 across
      * a daylight-saving change. Visibility does not

@@ -69,7 +69,9 @@ object AgendaWidgets {
         val zone = ZoneId.systemDefault()
         val now = Instant.now()
         val today = now.atZone(zone).toLocalDate()
-        val entries = AgendaIndex.entries(sources, Zones.dayStart(today, zone), Zones.dayStart(today.plusDays(o.days.toLong()), zone), zone).entries
+        // the widget's own configuration decides what it shows, not the app's visibility toggles
+        val entries = AgendaIndex.entries(sources, Zones.dayStart(today, zone), Zones.dayStart(today.plusDays(o.days.toLong()), zone), zone,
+            respectVisibility = false).entries
         val h24 = android.text.format.DateFormat.is24HourFormat(context)
         return WidgetRows.rows(entries, now, zone, o, h24) { key -> sportEmoji(app.scriptorium.activity.Sport.of(key)) }
     }
@@ -158,7 +160,7 @@ object AgendaWidgets {
         val today = now.atZone(zone).toLocalDate()
         val sources = AgendaData.load(context)
         val entries = if (sources == null) emptyList()
-        else AgendaIndex.entries(sources, Zones.dayStart(today, zone), Zones.dayStart(today.plusDays(1), zone), zone).entries
+        else AgendaIndex.entries(sources, Zones.dayStart(today, zone), Zones.dayStart(today.plusDays(1), zone), zone, respectVisibility = false).entries
         val t = WidgetRows.today(entries, now, zone, o)
         val h24 = android.text.format.DateFormat.is24HourFormat(context)
         val next = t.next

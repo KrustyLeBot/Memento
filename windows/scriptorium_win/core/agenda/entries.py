@@ -269,8 +269,10 @@ def build_entries(sources: AgendaSources, window_from: datetime, window_to: date
 
 def alarms(sources: AgendaSources, now: datetime, device_zone: str,
            horizon: timedelta = ALARM_HORIZON) -> list[Alarm]:
-    """Alarms falling in [now, now + horizon): event and dated-note `alerts`, note `reminder`s. Calendar and
-    layer visibility do not silence them (hiding is a view filter); cancelled events have none."""
+    """Alarms falling in [now, now + horizon): event and dated-note `alerts`, note `reminder`s; an all-day alert is
+    a wall time of the device zone (00:00 of the day + offset), so "2 jours avant à 09:00" stays at 09:00 across a
+    daylight-saving change. Calendar and layer visibility do not silence them (hiding is a view filter); cancelled
+    events have none."""
     out: list[Alarm] = []
     end = now + horizon
     overrides = _overrides(sources.events)
@@ -282,10 +284,17 @@ def alarms(sources: AgendaSources, now: datetime, device_zone: str,
             continue
         lead = max([-a for a in ev.alerts if a < 0], default=0)
         lag = max([a for a in ev.alerts if a > 0], default=0)
-        exp = expand(ev, now - timedelta(minutes=lag), end + timedelta(minutes=lead), device_zone, overrides.get(ev.id))
+        # all-day alerts are wall times: a day of slack covers a daylight-saving change in between
+        slack = timedelta(days=1) if ev.all_day else timedelta(0)
+        exp = expand(ev, now - timedelta(minutes=lag) - slack, end + timedelta(minutes=lead) + slack, device_zone,
+                     overrides.get(ev.id))
         for o in exp.occurrences:
             for offset in sorted(set(ev.alerts)):
-                at = o.start_instant + timedelta(minutes=offset)
+                if ev.all_day:
+                    wall = datetime.combine(o.start, datetime.min.time()) + timedelta(minutes=offset)
+                    at = zones.to_instant(wall, zones.zone(device_zone))
+                else:
+                    at = o.start_instant + timedelta(minutes=offset)
                 if now <= at < end:
                     out.append(Alarm(f"{o.key}|{offset}", at, kind, ev.title, ev.id, ev.path or None,
                                      o.start_instant, ev.all_day, offset, ev.location))

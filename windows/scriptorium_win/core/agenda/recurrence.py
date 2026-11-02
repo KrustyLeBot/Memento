@@ -7,8 +7,8 @@ Rules, identical on Android (`Recurrence.kt`):
 - DTSTART is always the first occurrence and counts toward COUNT (RFC 5545 3.3.10), even when it does not match
   the rule. COUNT and UNTIL are applied here, not by the library: UNTIL may be a date (compared to the date),
   a local date-time (compared in wall time) or UTC `...Z` (compared as an instant).
-- EXDATE and the `recurrence_at` of exception files remove occurrences: an exact stamp, or a date that removes
-  every occurrence of that day.
+- EXDATE and the `recurrence_at` of exception files remove occurrences: an exact stamp; a date removes the day of
+  an all-day series, and the occurrence at the series' start time that day of a timed one (as exported).
 - Timed occurrences last the exact duration DTEND - DTSTART of the first one (RFC 5545). All-day ones are dates
   of the device zone: [first day 00:00, day after the last day 00:00).
 - An occurrence is in the window when it overlaps it; a zero-length one when from <= start < to.
@@ -189,8 +189,12 @@ def expand(event: Event, window_from: datetime, window_to: datetime, device_zone
         return out
 
     removed = list(event.exdate) + list(overridden or [])
-    exact = {x for x in removed if isinstance(x, datetime)}
-    day_set = {x for x in removed if not isinstance(x, datetime)} | ({x.date() for x in exact} if all_day else set())
+    if all_day:
+        exact: set = set()
+        day_set = {x.date() if isinstance(x, datetime) else x for x in removed}
+    else:
+        exact = {x if isinstance(x, datetime) else datetime.combine(x, event.start.time()) for x in removed}
+        day_set = set()
     try:
         steps = 0
         for stamp in series_starts(event, device_zone):

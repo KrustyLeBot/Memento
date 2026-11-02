@@ -8,7 +8,7 @@ end: 2026-10-01T19:30
 tz: Europe/Paris
 calendar: perso
 rrule: FREQ=WEEKLY;BYDAY=TU,TH;COUNT=8
-exdate: [2026-10-15T18:30, 2026-10-20T18:30]
+exdate: [2026-10-15, 2026-10-20T18:30]
 alerts: [-15m, -1d]
 location: Salle B, 2e étage
 uid: yoga-004@google.com

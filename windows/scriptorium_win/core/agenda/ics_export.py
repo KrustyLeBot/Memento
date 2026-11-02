@@ -3,8 +3,9 @@ Android's `IcsExport.kt` (CRLF, lines folded at 75 octets).
 
 - all-day: `DTSTART;VALUE=DATE`, DTEND = the day after the last day (exclusive); timed with a known zone:
   `TZID=<IANA>` plus one VTIMEZONE per zone used; floating (or an unknown zone name): no TZID.
-- RRULE verbatim, EXDATE one line per value in the series' form; an exception file is written as an override
-  (UID of its series, RECURRENCE-ID in the series' form).
+- RRULE verbatim, EXDATE one line per value in DTSTART's form (a date on a timed series: that day at the
+  series' start time), except the occurrences an exported exception file overrides; an exception file is written
+  as an override (UID of its series, RECURRENCE-ID in the series' form).
 - alerts -> VALARM (ACTION:DISPLAY); `ical_extra` lines verbatim (those naming a property the export writes
   itself are left out and reported); DESCRIPTION = the note body.
 - options: the activities and the dated notes as events (UTC times for activities and reminders).
@@ -76,7 +77,7 @@ class _Writer:
             self.lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{ics.escape_text(title)}",
                            f"TRIGGER:{ics.format_alert_trigger(minutes)}", "END:VALARM"]
 
-    def event(self, ev: Event, series: Event | None, uid_suffix: str) -> None:
+    def event(self, ev: Event, series: Event | None, uid_suffix: str, overridden: set | None = None) -> None:
         tz = self.zone_of(ev)
         self.count += 1
         self.add("BEGIN:VEVENT")
@@ -91,11 +92,16 @@ class _Writer:
             self.add(_time_line("DTEND", ev.end, tz))
         if ev.rrule:
             self.add(f"RRULE:{ev.rrule}")
-        for x in ev.exdate:
-            self.add(_time_line("EXDATE", x, tz))
+        # an overridden occurrence is replaced by its override, never excluded too (Google drops such overrides)
+        written: list[date] = []
+        for x in (_exdate_stamp(ev, v) for v in ev.exdate):
+            if x not in written and x not in (overridden or set()):
+                written.append(x)
+                self.add(_time_line("EXDATE", x, tz))
         if ev.recurrence_at is not None:
             stz = self.zone_of(series) if series is not None else tz
-            self.add(_time_line("RECURRENCE-ID", ev.recurrence_at, stz))
+            at = _exdate_stamp(series, ev.recurrence_at) if series is not None else ev.recurrence_at
+            self.add(_time_line("RECURRENCE-ID", at, stz))
         if ev.status in ("confirmed", "tentative", "cancelled"):
             self.add(f"STATUS:{ev.status.upper()}")
         if ev.location:
@@ -135,6 +141,15 @@ class _Writer:
         return "".join(ics.fold(line) for line in head + self.lines + ["END:VCALENDAR"])
 
 
+def _exdate_stamp(series: Event, x: date) -> date:
+    """EXDATE follows DTSTART's form: a date alone on a timed series is its occurrence at the series' start time."""
+    if is_all_day(x) and not series.all_day:
+        return datetime.combine(x, series.start.time())
+    if not is_all_day(x) and series.all_day:
+        return x.date()
+    return x
+
+
 def _sorted(events: list[Event]) -> list[Event]:
     return sorted(events, key=lambda e: (format_stamp(e.start), e.title, e.id))
 
@@ -148,9 +163,14 @@ def export_calendar(events: list[Event], settings: CalendarSettings, calendar_id
     by_id = {e.id: e for e in events}
     chosen = [e for e in events if not e.note.conflict and
               (calendar_id is None or settings.calendar(e.calendar).id == calendar_id)]
+    overridden: dict[str, set] = {}
+    for x in chosen:
+        series = by_id.get(x.recurrence_of) if x.recurrence_of else None
+        if series is not None and x.recurrence_at is not None:
+            overridden.setdefault(series.id, set()).add(_exdate_stamp(series, x.recurrence_at))
     for ev in _sorted(chosen):
         series = by_id.get(ev.recurrence_of) if ev.recurrence_of else None
-        w.event(ev, series, "scriptorium")
+        w.event(ev, series, "scriptorium", overridden.get(ev.id))
     if notes:
         dated, problems = dated_notes(notes)
         w.warnings += problems

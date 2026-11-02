@@ -26,7 +26,6 @@ DTSTART;TZID=Europe/Paris:20261001T183000
 DTEND;TZID=Europe/Paris:20261001T193000
 RRULE:FREQ=WEEKLY;BYDAY=TU,TH;COUNT=8
 EXDATE;TZID=Europe/Paris:20261015T183000
-EXDATE;TZID=Europe/Paris:20261020T183000
 LOCATION:Salle B\, 2e étage
 DESCRIPTION:Tapis fourni\; apporter une serviette.\n- [ ] serviette\n- [x] 
  gourde

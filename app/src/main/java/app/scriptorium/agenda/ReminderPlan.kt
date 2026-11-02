@@ -26,7 +26,7 @@ data class ReminderBook(
     }
 }
 
-/** One run of the planner: alarms to (re)register, keys to cancel, and the book to store. */
+/** One run of the planner: alarms to (re)register, keys to cancel (snoozes included), and the book to store. */
 data class ReminderPlan(val schedule: List<Alarm>, val cancel: List<String>, val book: ReminderBook)
 
 /**
@@ -39,13 +39,15 @@ data class ReminderPlan(val schedule: List<Alarm>, val cancel: List<String>, val
  * - an alarm whose time passed less than [LATE] ago is registered again only if it was registered before and not
  *   shown (a late or missed alarm, e.g. phone off): it fires at once. A new event's alert already in the past is not;
  * - registered alarms no longer wanted (event deleted, moved, alert removed) are cancelled;
- * - shown keys are forgotten after [KEEP_FIRED].
+ * - shown keys are forgotten after [KEEP_FIRED];
+ * - a snooze whose reminder no longer exists ([snoozeAlive] false: event deleted, occurrence removed, alert
+ *   dropped) is cancelled with the others.
  */
 object ReminderPlanner {
     val LATE: Duration = Duration.ofHours(1)
     val KEEP_FIRED: Duration = Duration.ofDays(3)
 
-    fun plan(wanted: List<Alarm>, book: ReminderBook, now: Instant): ReminderPlan {
+    fun plan(wanted: List<Alarm>, book: ReminderBook, now: Instant, snoozeAlive: (notifyKey: String) -> Boolean = { true }): ReminderPlan {
         val nowMs = now.toEpochMilli()
         val lateMs = nowMs - LATE.toMillis()
         val schedule = ArrayList<Alarm>()
@@ -56,9 +58,10 @@ object ReminderPlanner {
             if (at >= nowMs || (at >= lateMs && a.key in book.scheduled)) schedule.add(a)
         }
         val keys = schedule.map { it.key }.toSet()
-        val cancel = book.scheduled.keys.filter { it !in keys }.sorted()
         val fired = book.fired.filterValues { it >= nowMs - KEEP_FIRED.toMillis() }
-        val snoozed = book.snoozed.filterValues { it >= nowMs - KEEP_FIRED.toMillis() }
+        val dead = book.snoozed.keys.filter { !snoozeAlive(notifyKeyOf(it)) }.toSet()
+        val snoozed = book.snoozed.filter { (k, v) -> v >= nowMs - KEEP_FIRED.toMillis() && k !in dead }
+        val cancel = (book.scheduled.keys.filter { it !in keys } + dead).sorted()
         return ReminderPlan(schedule, cancel, ReminderBook(schedule.associate { it.key to it.at.toEpochMilli() }, fired, snoozed))
     }
 
@@ -66,8 +69,11 @@ object ReminderPlanner {
     fun fired(book: ReminderBook, key: String, at: Long): ReminderBook =
         book.copy(scheduled = book.scheduled - key, fired = book.fired + (key to at), snoozed = book.snoozed - key)
 
-    /** Key of a snoozed reminder: unique per snooze, outside the planner's keys. */
-    fun snoozeKey(key: String, until: Long) = "snooze|$key|$until"
+    /** Key of a snoozed reminder, outside the planner's keys: one per notification, so snoozing again replaces it. */
+    fun snoozeKey(key: String) = "snooze|$key"
+
+    /** The planner's key a snooze stands for. */
+    fun notifyKeyOf(snoozeKey: String) = snoozeKey.removePrefix("snooze|")
 
     fun isSnooze(key: String) = key.startsWith("snooze|")
 }
