@@ -30,6 +30,10 @@ class ContactBook(private val fs: () -> Fs) {
 
     private val parsed = HashMap<String, Pair<Long, Contact>>()
 
+    /** Files listed by the last [scan] but not read (I/O error, replaced by a sync at that instant). */
+    @Volatile var unreadable: Set<String> = emptySet()
+        private set
+
     @Synchronized
     fun clear() {
         parsed.clear()
@@ -42,20 +46,27 @@ class ContactBook(private val fs: () -> Fs) {
         val f = fs()
         val out = ArrayList<Contact>()
         val seen = HashSet<String>()
+        val failed = HashSet<String>()
         for (e in f.list(ContactFormat.DIR)) {
             if (e.isDir || e.name.startsWith(".") || !(e.name.endsWith(".md") || CONFLICT_COPY.matches(e.name))) continue
             val path = "${ContactFormat.DIR}/${e.name}"
             seen.add(path)
             val cached = parsed[path]
             val c = if (cached != null && cached.first == e.lastModified) cached.second else {
-                val text = f.readText(path) ?: continue
+                val text = f.readText(path)
+                if (text == null) { failed.add(path); continue }
                 ContactFormat.fromNote(NoteFormat.parse(path, text, e.lastModified)).also { parsed[path] = e.lastModified to it }
             }
             out.add(c)
         }
         parsed.keys.retainAll(seen)
+        unreadable = failed
         _contacts.value = out
     }
+
+    /** The file of [c] changed on disk since it was last read or written here (a sync app, the PC). */
+    @Synchronized
+    fun changedOnDisk(c: Contact): Boolean = fs().lastModified(c.path) != parsed[c.path]?.first
 
     fun byId(id: String): Contact? = _contacts.value.firstOrNull { it.id == id && !it.conflict }
 
@@ -89,6 +100,8 @@ class ContactBook(private val fs: () -> Fs) {
         if (x.path.isEmpty()) {
             val id = x.id.takeIf { it.isNotEmpty() && byId(it) == null } ?: newId()
             x = x.copy(id = id, path = ContactFormat.fileNameFor(x, id))
+            // a new contact never takes the place of a file (one the last scan could not read, for instance)
+            if (fs().exists(x.path)) throw IllegalStateException("Fichier déjà présent : ${x.path}")
         }
         return write(x)
     }

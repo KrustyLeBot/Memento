@@ -75,13 +75,16 @@ class MirrorStore(private val dir: File) {
 
     fun text(e: TrashEntry): String? = File(trashDir, "${e.key}.md").takeIf { it.isFile }?.readText()
 
-    /** The entries not shown yet (marked shown now); entries older than [keepMs] are deleted first. */
+    /**
+     * The entries not shown yet, marked shown now: their [keepMs] start now, so a deletion made while the app was
+     * not opened (the sync adapter) is never purged before the user was offered to undo it.
+     */
     @Synchronized
     fun announce(now: Long, keepMs: Long = KEEP_MS): List<TrashEntry> {
         purge(now, keepMs)
         val all = entries()
         val fresh = all.filter { !it.announced }
-        if (fresh.isNotEmpty()) writeTrash(all.map { it.copy(announced = true) })
+        if (fresh.isNotEmpty()) writeTrash(all.map { if (it.announced) it else it.copy(announced = true, deletedAt = now) })
         return fresh
     }
 
@@ -93,7 +96,7 @@ class MirrorStore(private val dir: File) {
 
     @Synchronized
     fun purge(now: Long, keepMs: Long = KEEP_MS) {
-        val (old, kept) = entries().partition { now - it.deletedAt > keepMs }
+        val (old, kept) = entries().partition { it.announced && now - it.deletedAt > keepMs }
         if (old.isEmpty()) return
         old.forEach { File(trashDir, "${it.key}.md").delete() }
         writeTrash(kept)

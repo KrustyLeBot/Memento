@@ -37,6 +37,8 @@ data class MirrorResult(
     /** Contacts deleted on the phone, their files put in the trash. */
     val trashed: Int = 0,
     val conflicts: Int = 0,
+    /** Contacts deleted on the phone all at once, whose files were kept (and put back on the phone). */
+    val keptBecauseMassDelete: Int = 0,
 )
 
 /**
@@ -146,8 +148,8 @@ class ContactsMirror(private val context: Context) {
                     fun s(i: Int): String = c.getString(i + 1).orEmpty().trim()
                     val row: MirrorRow? = when (c.getString(1)) {
                         CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE ->
-                            // data1 display, data2 given, data3 family, data5 middle (kept with the first name)
-                            MirrorRow.Name(listOf(s(2), s(5)).filter { it.isNotEmpty() }.joinToString(" "), s(3), s(1))
+                            // data1 display, data2 given, data3 family, data4 prefix, data5 middle, data6 suffix
+                            MirrorPlan.nameRow(s(4), s(2), s(5), s(3), s(6), s(1))
                         CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> s(1).takeIf { it.isNotEmpty() }?.let {
                             val (kind, label) = MirrorPlan.phoneType(s(2).toIntOrNull() ?: 0, s(3).ifEmpty { null })
                             MirrorRow.Tel(it, kind, label)
@@ -195,6 +197,8 @@ class ContactsMirror(private val context: Context) {
         if (!hasPermissions()) throw SecurityException("Autorisation Contacts refusée")
         val account = ensureAccount()
         book.scan()
+        // a file missing from the index would read as deleted (its phone copy removed, or re-created over it)
+        book.unreadable.firstOrNull()?.let { throw java.io.IOException("Fichier de contact illisible : $it (nouvel essai à la prochaine synchro)") }
         val files = book.contacts.value
         val state = store.read()
         store.purge(now)
@@ -205,6 +209,10 @@ class ContactsMirror(private val context: Context) {
         val createdIds = plan.files.filterIsInstance<FileOp.Create>().map { it.contact.id }.toSet()
         store.addPending(plan.provider.filterIsInstance<MirrorOp.Ack>().filter { it.sourceId in createdIds }.associate { it.rawId to it.sourceId })
         for (op in plan.files) {
+            // the plan was made from the files as scanned: one changed since (the sync app, the PC) is never overwritten
+            if (op !is FileOp.Create && book.changedOnDisk(op.contact)) {
+                throw IllegalStateException("${op.contact.displayName} a changé pendant la synchro des contacts : nouvel essai au prochain passage")
+            }
             when (op) {
                 is FileOp.Create -> {
                     val saved = book.save(op.contact, now)
@@ -218,9 +226,10 @@ class ContactsMirror(private val context: Context) {
                 }
             }
         }
+        val phonetic = phoneticNames(plan.provider.filterIsInstance<MirrorOp.Update>().map { it.rawId })
         for (batch in MirrorPlan.batches(plan.provider)) {
             val list = ArrayList<ContentProviderOperation>()
-            batch.forEach { add(list, it, account) }
+            batch.forEach { add(list, it, account, phonetic) }
             resolver.applyBatch(ContactsContract.AUTHORITY, list)
         }
         store.write(MirrorStore.State(plan.synced, emptyMap()))
@@ -235,17 +244,37 @@ class ContactsMirror(private val context: Context) {
             edited = plan.files.count { it is FileOp.Write },
             trashed = plan.files.count { it is FileOp.Trash },
             conflicts = plan.conflicts,
+            keptBecauseMassDelete = plan.keptBecauseMassDelete,
         )
         record(context, describe(result), error = false, now = now)
         result
     }
 
+    /** Rewritten by an Update; of the events only the birthday is mirrored (an anniversary stays on the phone). */
     private val mirroredMimes = listOf(
         CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE, CommonDataKinds.Phone.CONTENT_ITEM_TYPE, CommonDataKinds.Email.CONTENT_ITEM_TYPE,
-        CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE, CommonDataKinds.Event.CONTENT_ITEM_TYPE, CommonDataKinds.Note.CONTENT_ITEM_TYPE,
+        CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE, CommonDataKinds.Note.CONTENT_ITEM_TYPE,
     )
 
-    private fun add(list: ArrayList<ContentProviderOperation>, op: MirrorOp, account: Account) {
+    /**
+     * The phonetic names (given, middle, family) of [rawIds], typed on the phone: the files have no field for
+     * them, so an Update writes them back into the new name row instead of dropping them.
+     */
+    private fun phoneticNames(rawIds: List<Long>): Map<Long, List<String?>> {
+        val out = HashMap<Long, List<String?>>()
+        val cols = arrayOf(Data.RAW_CONTACT_ID, CommonDataKinds.StructuredName.PHONETIC_GIVEN_NAME, CommonDataKinds.StructuredName.PHONETIC_MIDDLE_NAME, CommonDataKinds.StructuredName.PHONETIC_FAMILY_NAME)
+        for (chunk in rawIds.distinct().chunked(400)) {
+            resolver.query(Data.CONTENT_URI, cols, "${Data.RAW_CONTACT_ID} IN ${inList(chunk)} AND ${Data.MIMETYPE}=?", arrayOf(CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE), null)?.use { c ->
+                while (c.moveToNext()) {
+                    val v = (1..3).map { c.getString(it)?.trim()?.ifEmpty { null } }
+                    if (v.any { it != null }) out[c.getLong(0)] = v
+                }
+            } ?: throw IllegalStateException("Le carnet d'adresses du téléphone ne répond pas")
+        }
+        return out
+    }
+
+    private fun add(list: ArrayList<ContentProviderOperation>, op: MirrorOp, account: Account, phonetic: Map<Long, List<String?>>) {
         val raws = syncUri(RawContacts.CONTENT_URI, account)
         val data = syncUri(Data.CONTENT_URI, account)
         when (op) {
@@ -276,7 +305,10 @@ class ContactsMirror(private val context: Context) {
                 val marks = mirroredMimes.joinToString(",") { "?" }
                 list.add(
                     ContentProviderOperation.newDelete(data)
-                        .withSelection("${Data.RAW_CONTACT_ID}=? AND ${Data.MIMETYPE} IN ($marks)", arrayOf(op.rawId.toString()) + mirroredMimes)
+                        .withSelection(
+                            "${Data.RAW_CONTACT_ID}=? AND (${Data.MIMETYPE} IN ($marks) OR (${Data.MIMETYPE}=? AND ${CommonDataKinds.Event.TYPE}=${CommonDataKinds.Event.TYPE_BIRTHDAY}))",
+                            arrayOf(op.rawId.toString()) + mirroredMimes + CommonDataKinds.Event.CONTENT_ITEM_TYPE,
+                        )
                         .build(),
                 )
                 list.add(
@@ -287,7 +319,12 @@ class ContactsMirror(private val context: Context) {
                         .build(),
                 )
                 MirrorPlan.rows(op.contact).forEach { row ->
-                    list.add(values(ContentProviderOperation.newInsert(data).withValue(Data.RAW_CONTACT_ID, op.rawId), row).build())
+                    val b = values(ContentProviderOperation.newInsert(data).withValue(Data.RAW_CONTACT_ID, op.rawId), row)
+                    val p = phonetic[op.rawId]
+                    if (row is MirrorRow.Name && p != null) {
+                        b.withValue(CommonDataKinds.StructuredName.PHONETIC_GIVEN_NAME, p[0]).withValue(CommonDataKinds.StructuredName.PHONETIC_MIDDLE_NAME, p[1]).withValue(CommonDataKinds.StructuredName.PHONETIC_FAMILY_NAME, p[2])
+                    }
+                    list.add(b.build())
                 }
             }
         }
@@ -360,6 +397,9 @@ class ContactsMirror(private val context: Context) {
             val parts = buildList {
                 if (r.inserted + r.updated + r.deleted > 0) add("vers le téléphone : ${r.inserted} ajoutés, ${r.updated} mis à jour, ${r.deleted} retirés")
                 if (r.created + r.edited + r.trashed > 0) add("depuis le téléphone : ${r.created} créés, ${r.edited} modifiés, ${r.trashed} supprimés")
+                if (r.keptBecauseMassDelete > 0) {
+                    add("${r.keptBecauseMassDelete} supprimés d'un coup sur le téléphone : fichiers gardés, remis sur le téléphone (supprime-les dans Mémento)")
+                }
                 if (r.conflicts > 0) add("${r.conflicts} modifié${if (r.conflicts > 1) "s" else ""} des deux côtés (l'autre version est dans les notes)")
             }
             return "${ContactList.countLabel(r.total)}, " + (if (parts.isEmpty()) "à jour" else parts.joinToString(" ; "))
