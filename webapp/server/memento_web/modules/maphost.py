@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -31,13 +32,37 @@ class Offline(Exception):
     """No answer at all (DNS, refused, timeout), as opposed to a server answering an error."""
 
 
+MAX_REPLY = 8_000_000  # a tile is tens of kB, a summits answer a few hundred
+
+
+class SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """The upstream URLs are fixed (core mapcache/peaks); a redirect is followed only over https to the same host, so
+    a compromised or spoofed upstream cannot point the server at the LAN or at the metadata of the machine."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urlsplit(req.full_url), urlsplit(newurl)
+        if new.scheme != "https" or new.hostname != old.hostname:
+            raise urllib.error.HTTPError(newurl, code, f"redirect to another host refused ({new.hostname})", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(SameHostRedirects)
+
+
+def _read(reply) -> bytes:
+    data = reply.read(MAX_REPLY + 1)
+    if len(data) > MAX_REPLY:
+        raise Offline(f"answer over {MAX_REPLY} bytes")
+    return data
+
+
 def http_get(url: str) -> tuple[int, str, bytes]:
     request = urllib.request.Request(url, headers={"User-Agent": mapcache.USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=15) as reply:
-            return reply.status, reply.headers.get("Content-Type", ""), reply.read()
+        with _OPENER.open(request, timeout=15) as reply:
+            return reply.status, reply.headers.get("Content-Type", ""), _read(reply)
     except urllib.error.HTTPError as error:
-        return error.code, error.headers.get("Content-Type", ""), error.read()
+        return error.code, (error.headers or {}).get("Content-Type", ""), _read(error) if error.fp else b""
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise Offline(str(error)) from None
 

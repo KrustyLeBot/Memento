@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import io
 import secrets
 import time
 import zipfile
@@ -33,6 +34,9 @@ from ..errors import ApiError, bad_request, json_body, not_found
 from .agenda_index import zone_of
 
 MAX_UPLOAD = 40_000_000
+# A .zip is expanded in memory (core ics_import.expand_sources): its calendars together may not weigh more than a
+# plain upload, whatever the archive's own size (a zip bomb of a few kB would otherwise fill the RAM).
+MAX_ZIP_ENTRIES = 200
 IMPORT_TTL = 30 * 60
 MAX_ERRORS = 30
 
@@ -76,6 +80,22 @@ def report_json(report) -> dict:
                        "before_cutoff": c.before_cutoff, "cancelled": c.cancelled, "ignored": c.ignored,
                        "unresolved_zones": c.unresolved_zones, "errors": c.errors[:MAX_ERRORS]} for c in report.calendars],
     }
+
+
+def check_archive(name: str, raw: bytes) -> None:
+    """Refuses (413) a .zip whose .ics files would expand past MAX_UPLOAD or that holds too many of them. The sizes
+    read are the ones the archive declares; zipfile never inflates an entry past its declared size."""
+    if not name.lower().endswith(".zip"):
+        return
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            entries = [i for i in archive.infolist() if i.filename.lower().endswith(".ics") and not i.is_dir()]
+    except zipfile.BadZipFile as error:
+        raise ApiError(422, f"Import impossible : archive .zip illisible ({error})") from None
+    if len(entries) > MAX_ZIP_ENTRIES:
+        raise ApiError(413, f"Archive trop grande ({MAX_ZIP_ENTRIES} agendas au plus)")
+    if sum(i.file_size for i in entries) > MAX_UPLOAD:
+        raise ApiError(413, f"Archive trop grande une fois décompressée ({MAX_UPLOAD // 1_000_000} Mo au plus)")
 
 
 class LockedFs:
@@ -155,6 +175,7 @@ class AgendaIcs:
         del chunks
 
         def parse():
+            check_archive(name, raw)
             try:
                 return ics_import.read_sources([ics_import.IcsSource.from_bytes(name, raw)], zone)
             except zipfile.BadZipFile as error:

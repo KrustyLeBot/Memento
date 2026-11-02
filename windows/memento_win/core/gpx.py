@@ -7,14 +7,14 @@ from datetime import datetime, timezone
 from .fit import FitError
 from .track import Pause, Track, TrackPoint
 
-_TRKPT = re.compile(r"<trkpt\b([^>]*?)(/>|>(.*?)</trkpt>)", re.S)
+_TRKPT_START = re.compile(r"<trkpt\b")
 _SEG = re.compile(r"<trkseg\b")
 _LAT = re.compile(r"""\blat\s*=\s*["']([^"']+)["']""")
 _LON = re.compile(r"""\blon\s*=\s*["']([^"']+)["']""")
 _ELE = re.compile(r"<ele>\s*([^<\s]+)\s*</ele>")
 _TIME = re.compile(r"<time>\s*([^<\s]+)\s*</time>")
 _HR = re.compile(r"<(?:\w+:)?hr>\s*(\d+)\s*</(?:\w+:)?hr>")
-_NAME = re.compile(r"<trk\b[^>]*>.*?<name>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</name>", re.S)
+_TRK = re.compile(r"<trk\b[^>]*>")
 
 
 def looks_like_gpx(text: str) -> bool:
@@ -33,6 +33,38 @@ def parse_time(s: str) -> int | None:
         return None
 
 
+def _trkpts(text: str):
+    """(start, attributes, inner text) of each <trkpt>, in one linear pass: a point's inner text ends at its
+    </trkpt> and never runs past the next <trkpt (a backtracking regex over a crafted file of unclosed points was
+    quadratic: minutes for a few hundred kilobytes, under the data lock)."""
+    starts = [m.start() for m in _TRKPT_START.finditer(text)]
+    for i, start in enumerate(starts):
+        limit = starts[i + 1] if i + 1 < len(starts) else len(text)
+        close = text.find(">", start, limit)
+        if close < 0:
+            continue
+        if text[close - 1] == "/":
+            yield start, text[start + 6:close - 1], ""
+            continue
+        end = text.find("</trkpt>", close, limit)
+        if end >= 0:
+            yield start, text[start + 6:close], text[close + 1:end]
+
+
+def _name(text: str) -> str | None:
+    trk = _TRK.search(text)
+    if trk is None:
+        return None
+    start = text.find("<name>", trk.end())
+    end = text.find("</name>", start + 6) if start >= 0 else -1
+    if end < 0:
+        return None
+    name = text[start + 6:end].strip()
+    if name.startswith("<![CDATA["):
+        name = name[9:].removesuffix("]]>")
+    return name.strip() or None
+
+
 def read(text: str) -> Track:
     if not looks_like_gpx(text):
         raise FitError("Ce n'est pas un fichier GPX")
@@ -40,11 +72,10 @@ def read(text: str) -> Track:
     seg_starts: list[int] = []
     seg_pos = [m.start() for m in _SEG.finditer(text)]
     seg_idx = -1
-    for m in _TRKPT.finditer(text):
-        while seg_idx + 1 < len(seg_pos) and seg_pos[seg_idx + 1] < m.start():
+    for start, attrs, inner in _trkpts(text):
+        while seg_idx + 1 < len(seg_pos) and seg_pos[seg_idx + 1] < start:
             seg_idx += 1
             seg_starts.append(len(points))
-        attrs, inner = m.group(1), m.group(3) or ""
         la, lo = _LAT.search(attrs), _LON.search(attrs)
         tm = _TIME.search(inner)
         if not (la and lo and tm):
@@ -73,9 +104,8 @@ def read(text: str) -> Track:
                 pauses.append(Pause(a, b))
     ordered = sorted(points, key=lambda q: q.time)
     hrs = [q.hr for q in ordered if q.hr is not None]
-    name = _NAME.search(text)
     return Track(
-        points=ordered, pauses=pauses, name=(name.group(1).strip() or None) if name else None,
+        points=ordered, pauses=pauses, name=_name(text),
         start_time=ordered[0].time if ordered else None,
         hr_avg=round(sum(hrs) / len(hrs)) if hrs else None, hr_max=max(hrs) if hrs else None,
     )

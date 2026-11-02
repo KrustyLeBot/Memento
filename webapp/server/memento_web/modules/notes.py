@@ -14,7 +14,7 @@ from starlette.routing import Route
 
 from ..core import MAX_ATTACHMENT, atomic, drawing, fmt, now_ms
 from ..errors import ApiError, bad_request, json_body, not_found
-from ..files import read_versioned, require_version, unlink_quiet, write_stream
+from ..files import owned, read_versioned, require_version, unlink_quiet, write_stream
 
 NOTE_PATH = re.compile(r"^(?:[^/]+|activities/[^/]+|agenda/[^/]+/[^/]+)\.md$")
 EDITABLE = {"title", "body", "parts", "color", "pinned", "labels"}
@@ -193,7 +193,7 @@ class Notes:
         def run():
             note = self._load_expected(relative, expected)
             keep = self._referenced_elsewhere(note)
-            files = [f for f in ([note.pdf] if note.pdf else []) + note.attachments if f not in keep]
+            files = [f for f in ([note.pdf] if note.pdf else []) + note.attachments if owned(f) and f not in keep]
             token = self.data.undo.stash(self.data.root, [note.path] + files)
             for f in [note.path] + files:
                 unlink_quiet(self.data.path(f))
@@ -238,7 +238,7 @@ class Notes:
             if attachment not in note.attachments:
                 raise not_found("Cette pièce jointe n'est plus dans la note")
             result = self._save(note.copy(attachments=[a for a in note.attachments if a != attachment]))
-            if attachment not in self._referenced_elsewhere(note):
+            if owned(attachment) and attachment not in self._referenced_elsewhere(note):
                 unlink_quiet(self.data.path(attachment))
             return result
         return JSONResponse(await self.data.run(run))

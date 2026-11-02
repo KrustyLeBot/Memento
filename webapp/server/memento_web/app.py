@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import mimetypes
 import re
+import secrets
 import traceback
 from pathlib import Path
 
@@ -126,8 +127,11 @@ def create_app(config: Config, fetch=None) -> Starlette:
         return response
 
     async def unexpected(request: Request, error: Exception) -> Response:
+        # The details (paths of the server, values read) go to the log only; the page gets a reference to find them.
+        ref = secrets.token_hex(4)
+        print(f"memento-web: error {ref} on {request.method} {request.url.path}", flush=True)
         traceback.print_exception(error)
-        return JSONResponse({"error": f"Erreur du serveur : {type(error).__name__}: {error}"}, status_code=500)
+        return JSONResponse({"error": f"Erreur du serveur (réf. {ref} dans le journal du conteneur)"}, status_code=500)
 
     async def http_error(request: Request, error: HTTPException) -> Response:
         return JSONResponse({"error": error.detail}, status_code=error.status_code)

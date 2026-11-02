@@ -19,6 +19,9 @@ from .settings import PATH as SETTINGS_PATH, ActivitySettings
 from .track import Sport, Track
 
 ACTIVITIES_DIR = "activities"
+# Where file_path() points a path that would leave the folder: never created, so reading, opening or deleting it
+# finds nothing ("not synced yet") instead of touching a file outside.
+REFUSED = ".memento-refused/refused"
 
 
 # Above this, a file is refused: it is synced to every device (same limit as the Android app).
@@ -27,6 +30,22 @@ MAX_ATTACHMENT = 50_000_000
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def inside(root: Path, relative: str) -> bool:
+    """Whether `relative` (from a file's frontmatter: untrusted, it may arrive by sync) names a file inside root:
+    no absolute path, drive, UNC share, `..`, NTFS stream or NUL, and no symlink leading out."""
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        return False
+    parts = re.split(r"[\\/]", relative)
+    if any(p in ("", ".", "..") or ":" in p for p in parts):
+        return False
+    try:
+        real_root = root.resolve()
+        real = (root / relative).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return real != real_root and real_root in real.parents
 
 
 def default_title(sport: Sport, start: int, name: str | None = None) -> str:
@@ -177,10 +196,12 @@ class Store:
 
     def pdf_path(self, note: Note) -> Path | None:
         """Absolute path of the note's scanned PDF, if it has one."""
-        return self.root / note.pdf if note.pdf else None
+        return self.file_path(note.pdf) if note.pdf else None
 
     def file_path(self, relative: str) -> Path:
-        return self.root / relative
+        """A file a note lists (attachment, scan, track). The name comes from the note's frontmatter, so it is
+        checked: one leading out of the folder gives a path that never exists (see REFUSED)."""
+        return self.root / relative if inside(self.root, relative) else self.root / REFUSED
 
     def add_attachment(self, source: Path) -> str:
         """Copies the file into attachments/ and returns its path relative to the notes folder."""

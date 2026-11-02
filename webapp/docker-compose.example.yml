@@ -24,7 +24,8 @@ services:
     cap_drop: [ ALL ]
     cap_add: [ DAC_OVERRIDE ]
     read_only: true
-    tmpfs: [ /tmp ]
+    tmpfs: [ "/tmp:rw,noexec,nosuid,nodev,size=64m" ]
+    pids_limit: 128
     user: "${PUID}:${PGID}"
     env_file: .env
     environment:

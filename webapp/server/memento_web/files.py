@@ -26,7 +26,8 @@ PDF_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; 
 def resolve(root: Path, relative: str) -> Path:
     """The absolute path of `relative` inside root. Refused (400): absolute paths, `..`, backslashes, NUL, hidden or
     temporary names, and anything a symlink would carry outside the folder."""
-    if not relative or "\x00" in relative or "\\" in relative or relative.startswith("/"):
+    if not isinstance(relative, str) or not relative or "\x00" in relative or "\\" in relative \
+            or relative.startswith("/"):
         raise bad_request("Chemin invalide")
     parts = relative.split("/")
     if any(p in ("", ".", "..") or p.startswith(".") or atomic.is_temp(p) for p in parts):
@@ -40,6 +41,15 @@ def resolve(root: Path, relative: str) -> Path:
     if real != real_root and real_root not in real.parents:
         raise bad_request("Chemin invalide")
     return target
+
+
+# The only folders whose files a note owns (scans, attachments, tracks, drawings). A note's frontmatter arrives by
+# sync and may list anything (another note, a contact): deleting the note deletes only what it owns.
+OWNED_DIRS = ("attachments/", "drawings/")
+
+
+def owned(relative) -> bool:
+    return isinstance(relative, str) and relative.startswith(OWNED_DIRS) and relative.count("/") == 1
 
 
 def version_of(data: bytes) -> str:

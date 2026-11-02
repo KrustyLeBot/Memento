@@ -37,7 +37,7 @@ from starlette.concurrency import run_in_threadpool
 from ..core import ACTIVITIES_DIR, MAX_ATTACHMENT, Sport, atomic, fmt, now_ms
 from ..data import _malloc_trim
 from ..errors import ApiError, bad_request, json_body, not_found
-from ..files import read_versioned, require_version, unlink_quiet, write_stream
+from ..files import owned, read_versioned, require_version, unlink_quiet, write_stream
 
 from memento_win.core import activity as act  # noqa: E402  (..core put memento_win on the path)
 from memento_win.core import elevation, mapdata  # noqa: E402
@@ -460,7 +460,7 @@ class Activities:
             note = self._load_expected(key, expected)
             keep = self._referenced_elsewhere(note)
             own = ([note.pdf] if note.pdf else []) + note.attachments + [note.activity.file, note.activity.alt]
-            files = [f for f in dict.fromkeys(own) if f and f not in keep]
+            files = [f for f in dict.fromkeys(own) if owned(f) and f not in keep]
             token = self.data.undo.stash(self.data.root, [note.path] + files)
             for f in [note.path] + files:
                 unlink_quiet(self.data.path(f))

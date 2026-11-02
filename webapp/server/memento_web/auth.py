@@ -26,6 +26,13 @@ from .config import Config
 from .errors import ApiError
 
 COOKIE = "memento_session"
+# Over https the cookies carry the __Host- prefix: the browser then only accepts them Secure, for this exact host and
+# path /, so neither a sibling subdomain nor a plain-http page of the same name can plant or overwrite them.
+SECURE_PREFIX = "__Host-"
+# A browser that once logged in carries this signed id (one year): its logins are throttled on their own, so an
+# attacker hammering the login cannot lock the owner out (OWASP "device cookies").
+DEVICE_COOKIE = "memento_device"
+DEVICE_DAYS = 365
 MAX_SESSIONS = 50
 
 
@@ -111,7 +118,10 @@ class Throttle:
     """Per client IP, and globally (a spread-out attack): the first FREE failures cost nothing, then each failure
     closes the door for 2^(n - FREE) seconds, up to LOCKOUT (15 min). A success clears the IP's record; a record
     with no failure for an hour is forgotten. Kept in memory: a restart forgets it, which costs an attacker a
-    restart they cannot trigger."""
+    restart they cannot trigger.
+
+    A login from a known device (DEVICE_COOKIE) is counted under that device alone, never under the IP or the
+    global record: those are what an attacker can fill, and the owner's own browser must keep getting in."""
 
     FREE = 3
     GLOBAL_FREE = 30
@@ -131,15 +141,18 @@ class Throttle:
             return 0.0
         return max(0.0, last + min(2 ** (count - free), self.LOCKOUT) - now)
 
-    def retry_after(self, ip: str) -> float:
-        now = self.clock()
-        with self._lock:
-            return max(self._wait(ip, self.FREE, now), self._wait("*", self.GLOBAL_FREE, now))
+    def _keys(self, ip: str, device: str | None) -> list[tuple[str, int]]:
+        return [(f"device:{device}", self.FREE)] if device else [(ip, self.FREE), ("*", self.GLOBAL_FREE)]
 
-    def failed(self, ip: str) -> None:
+    def retry_after(self, ip: str, device: str | None = None) -> float:
         now = self.clock()
         with self._lock:
-            for key in (ip, "*"):
+            return max(self._wait(key, free, now) for key, free in self._keys(ip, device))
+
+    def failed(self, ip: str, device: str | None = None) -> None:
+        now = self.clock()
+        with self._lock:
+            for key, _free in self._keys(ip, device):
                 count, last = self._failures.get(key, (0, 0.0))
                 if now - last > self.FORGET:
                     count = 0
@@ -147,9 +160,9 @@ class Throttle:
             if len(self._failures) > 10_000:  # bounded memory under a flood of addresses
                 self._failures = {k: v for k, v in self._failures.items() if now - v[1] <= self.FORGET}
 
-    def succeeded(self, ip: str) -> None:
+    def succeeded(self, ip: str, device: str | None = None) -> None:
         with self._lock:
-            self._failures.pop(ip, None)
+            self._failures.pop(f"device:{device}" if device else ip, None)
 
 
 def _peer_trusted(request: Request, config: Config) -> bool:
@@ -187,8 +200,30 @@ def cookie_secure(request: Request, config: Config) -> bool:
     return config.cookie_secure == "true"
 
 
+def cookie_name(base: str, secure: bool) -> str:
+    return SECURE_PREFIX + base if secure else base
+
+
 def _same(a: str, b: str) -> bool:
-    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    """Constant time, the length included: both sides are hashed first."""
+    return hmac.compare_digest(hashlib.sha256(a.encode("utf-8")).digest(), hashlib.sha256(b.encode("utf-8")).digest())
+
+
+def _device_mac(config: Config, device: str) -> str:
+    return hmac.new(config.session_secret, b"memento-web-device\0" + device.encode(), hashlib.sha256).hexdigest()
+
+
+def new_device(config: Config) -> str:
+    device = secrets.token_urlsafe(16)
+    return f"{device}.{_device_mac(config, device)}"
+
+
+def device_of(config: Config, value: str | None) -> str | None:
+    """The device id of a genuine DEVICE_COOKIE value, else None."""
+    if not value or len(value) > 200 or "." not in value:
+        return None
+    device, mac = value.rsplit(".", 1)
+    return device if hmac.compare_digest(mac.encode(), _device_mac(config, device).encode()) else None
 
 
 class Auth:
@@ -197,12 +232,16 @@ class Auth:
         self.sessions = sessions or Sessions(config)
         self.throttle = throttle or Throttle()
 
+    def _cookie(self, request: Request, base: str) -> str | None:
+        return request.cookies.get(cookie_name(base, cookie_secure(request, self.config)))
+
     def session_of(self, request: Request) -> Session | None:
-        return self.sessions.get(request.cookies.get(COOKIE))
+        return self.sessions.get(self._cookie(request, COOKIE))
 
     async def login(self, request: Request) -> JSONResponse:
         ip = client_ip(request, self.config)
-        wait = self.throttle.retry_after(ip)
+        device = device_of(self.config, self._cookie(request, DEVICE_COOKIE))
+        wait = self.throttle.retry_after(ip, device)
         if wait > 0:
             seconds = int(wait) + 1
             raise ApiError(429, f"Trop de tentatives. Réessayez dans {_duration(seconds)}.", retry_after=seconds)
@@ -214,21 +253,26 @@ class Auth:
         # Both comparisons always run, so the time taken does not tell whether the user name was right.
         ok = _same(user, self.config.user) & _same(password, self.config.password)
         if not ok:
-            self.throttle.failed(ip)
-            print(f"memento-web: failed login from {ip}", flush=True)
+            self.throttle.failed(ip, device)
+            print(f"memento-web: failed login from {ip}{' (known device)' if device else ''}", flush=True)
             raise ApiError(401, "Identifiant ou mot de passe incorrect")
-        self.throttle.succeeded(ip)
+        self.throttle.succeeded(ip, device)
+        self.sessions.revoke(self._cookie(request, COOKIE))  # whatever session the browser held is replaced
         token, session = self.sessions.create()
         response = JSONResponse({"user": self.config.user, "expires": int(session.expires * 1000)})
-        response.set_cookie(COOKIE, token, max_age=self.config.session_days * 86400, path="/", httponly=True,
-                            secure=cookie_secure(request, self.config), samesite="strict")
+        secure = cookie_secure(request, self.config)
+        response.set_cookie(cookie_name(COOKIE, secure), token, max_age=self.config.session_days * 86400, path="/",
+                            httponly=True, secure=secure, samesite="strict")
+        if device is None:
+            response.set_cookie(cookie_name(DEVICE_COOKIE, secure), new_device(self.config),
+                                max_age=DEVICE_DAYS * 86400, path="/", httponly=True, secure=secure, samesite="strict")
         return response
 
     async def logout(self, request: Request) -> JSONResponse:
-        self.sessions.revoke(request.cookies.get(COOKIE))
+        self.sessions.revoke(self._cookie(request, COOKIE))
         response = JSONResponse({"ok": True})
-        response.delete_cookie(COOKIE, path="/", httponly=True, secure=cookie_secure(request, self.config),
-                               samesite="strict")
+        secure = cookie_secure(request, self.config)
+        response.delete_cookie(cookie_name(COOKIE, secure), path="/", httponly=True, secure=secure, samesite="strict")
         return response
 
     async def me(self, request: Request) -> JSONResponse:

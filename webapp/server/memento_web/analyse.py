@@ -23,8 +23,8 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         track = Store(root).read_track(info)
-    except OSError as error:
-        print(f"Fichier du tracé introuvable : {error}", file=sys.stderr)
+    except OSError:  # its message holds the server's path: not for the page
+        print("Fichier du tracé introuvable (pas encore synchronisé ?)", file=sys.stderr)
         return 4
     except Exception as error:  # noqa: BLE001 — told to the user by the server
         print(f"Tracé illisible : {error}", file=sys.stderr)

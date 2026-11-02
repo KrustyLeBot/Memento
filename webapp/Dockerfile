@@ -3,7 +3,7 @@
 #     docker build -f webapp/Dockerfile -t memento-web .
 
 # ---- the UI: Svelte + Vite, built once; .gz siblings so the server never compresses at request time ----
-FROM node:22.12.0-bookworm-slim AS ui
+FROM node:22.12.0-bookworm-slim@sha256:35531c52ce27b6575d69755c73e65d4468dba93a25644eed56dc12879cae9213 AS ui
 WORKDIR /src/webapp/ui
 COPY webapp/ui/package.json webapp/ui/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -13,7 +13,7 @@ RUN npm run build \
  && find dist -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.html' \) -exec gzip -9 -k {} +
 
 # ---- the server: python slim (glibc: musl's allocator holds more memory) ----
-FROM python:3.12.8-slim-bookworm
+FROM python:3.12.8-slim-bookworm@sha256:2199a62885a12290dc9c5be3ca0681d367576ab7bf037da120e564723292a2f0
 ARG BUILD=dev
 LABEL org.opencontainers.image.source="https://github.com/KrustyLeBot/Griffonote" \
       org.opencontainers.image.title="memento-web" \

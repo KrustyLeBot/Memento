@@ -16,8 +16,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
+from .errors import ApiError
+
 AREAS = ("notes", "activities", "agenda", "contacts")  # the order of Store.snapshot()'s parts
 HEARTBEAT = 20.0
+MAX_STREAMS = 20  # open pages; each holds a connection and a queue
 
 
 def changed_areas(before, after) -> list[str]:
@@ -77,6 +80,8 @@ class Watcher:
                 queue.put_nowait(message)
 
     async def stream(self, request: Request) -> StreamingResponse:
+        if len(self._subscribers) >= MAX_STREAMS:
+            raise ApiError(503, "Trop de pages ouvertes : fermez-en quelques-unes.")
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers.add(queue)
 
