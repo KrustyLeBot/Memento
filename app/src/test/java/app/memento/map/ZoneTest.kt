@@ -43,7 +43,7 @@ class ZoneTest {
     }
 
     @Test
-    fun default3dZoneAddsOnlyTheRelief() {
+    fun default3dZoneAddsTheReliefAndTheBuildings() {
         val p2 = TilePlans.forZone(lon, lat)
         val p3 = TilePlans.forZone3d(lon, lat)
         assertEquals(p2.square, p3.square)
@@ -53,8 +53,9 @@ class ZoneTest {
         val dem = p3.demRanges.sumOf { it.count }
         assertTrue("$dem", dem in 200..320)
         val extra = TilePlans.zone3dExtraBytes(lon, lat)
-        assertEquals(dem * TilePlans.DEM_TILE_BYTES, extra)
-        assertTrue("$extra", extra in 25 * mb..40 * mb)
+        assertEquals(Buildings.MAX_PACK_CELLS, p3.buildingCells.size)
+        assertEquals(dem * TilePlans.DEM_TILE_BYTES + p3.buildingCells.size * Buildings.CELL_BYTES, extra)
+        assertTrue("$extra", extra in 30 * mb..50 * mb)
     }
 
     @Test

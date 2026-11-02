@@ -2,7 +2,7 @@ package app.memento.map
 
 /**
  * An offline pack's manifest (`manifest.json` in its folder). [kinds] says what it holds: "ortho" tiles
- * (the IGN aerial photo), "dem" terrain tiles, "peaks". A pack from before the photo ("plan" instead of "ortho") is
+ * (the IGN aerial photo), "dem" terrain tiles, "peaks", "buildings" (the z15 cells of [Buildings]). A pack from before the photo ("plan" instead of "ortho") is
  * [obsolete]: it covers nothing, is never resumed, and goes with the others when its 24 h are up. [complete] is false while downloading, and stays false when the download
  * was interrupted (process killed, no network, disk full): such a pack can be resumed.
  */
@@ -37,7 +37,8 @@ data class Pack(
     fun expired(now: Long): Boolean = now >= expiresAt()
 
     /** The tiles this pack downloads. */
-    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor, relief)
+    fun plan(): TilePlan =
+        TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor, relief, buildings = KIND_BUILDINGS in kinds)
 
     fun toJson(): String = buildString {
         append('{')
@@ -69,6 +70,7 @@ data class Pack(
         const val KIND_ORTHO = TileKey.KIND_ORTHO
         const val KIND_DEM = TileKey.KIND_DEM
         const val KIND_PEAKS = "peaks"
+        const val KIND_BUILDINGS = TileKey.KIND_BUILDINGS
 
         fun parse(text: String): Pack {
             val o = Json.parse(text).asMap() ?: throw Json.JsonException("Manifeste invalide")

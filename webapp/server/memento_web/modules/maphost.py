@@ -1,8 +1,9 @@
 """Host side of the shared map page (web/map), with the same contract as the Android and Windows hosts:
 `/map/*` serves the page, `/t/ortho|dem/{z}/{x}/{y}` the tiles (fetched once with an identifying User-Agent, then
 from a 300 MB least-recently-used disk cache in /config/tiles, IGN's missing photo replaced by OpenStreetMap), and
-`/peaks?w&s&e&n` the labelled summits. The rules (URLs, fallback, purge, peaks selection) are core/mapcache.py and
-core/peaks.py; this file only does the I/O. The page itself asks for everything relative to `<base>` = the site root.
+`/peaks?w&s&e&n` the labelled summits, `/buildings/15/{x}/{y}` the IGN buildings of one cell. The rules (URLs,
+fallback, purge, peaks selection, buildings slimming) are core/mapcache.py, core/peaks.py and core/buildings.py; this
+file only does the I/O. The page itself asks for everything relative to `<base>` = the site root.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from ..core import mapcache, peaks
+from memento_win.core import buildings  # noqa: E402 (..core put memento_win on the path)
 from ..errors import not_found
 
 PURGE_EVERY = 20 * 1024 * 1024
@@ -32,7 +34,7 @@ class Offline(Exception):
     """No answer at all (DNS, refused, timeout), as opposed to a server answering an error."""
 
 
-MAX_REPLY = 8_000_000  # a tile is tens of kB, a summits answer a few hundred
+MAX_REPLY = 8_000_000  # a tile is tens of kB, a summits answer a few hundred, a WFS page of buildings ~1.2 MB
 
 
 class SameHostRedirects(urllib.request.HTTPRedirectHandler):
@@ -210,6 +212,34 @@ class TileStore:
             return peaks.select(candidates, wanted) if candidates else []
 
 
+    def buildings(self, req: mapcache.BuildingsRequest) -> bytes | None:
+        """The cell's slim JSON, from the cache or fetched page by page; None offline or on a WFS error."""
+        path = buildings.cache_path(self.root, req.x, req.y)
+        with self._lock_for(f"buildings/{req.x}/{req.y}"):
+            try:
+                data = path.read_bytes()
+                os.utime(path)
+                return data
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                _log(f"{path}: {error}")
+            if self.backoff.blocked(self.clock()):
+                return None
+            try:
+                data = buildings.fetch_cell(req.x, req.y, self.fetch)
+            except Offline as error:
+                self.backoff.failed(self.clock())
+                _log(f"buildings: offline ({error})")
+                return None
+            except buildings.WfsError as error:
+                _log(f"buildings {req.x}/{req.y}: {error}")
+                return None
+            self.backoff.succeeded()
+            self._store(path, data)
+            return data
+
+
 def default_map_dir(here: Path | None = None) -> Path:
     """web/map next to the package's parents: /app/web/map in the image, <repo>/web/map in a checkout."""
     here = (here or Path(__file__)).resolve()
@@ -231,6 +261,7 @@ class MapHost:
             Route("/map/{rest:path}", self.page, methods=["GET"]),
             Route("/t/{kind}/{z}/{x}/{y}", self.tile, methods=["GET"]),
             Route("/peaks", self.summits, methods=["GET"]),
+            Route("/buildings/{z}/{x}/{y}", self.buildings, methods=["GET"]),
         ]
 
     async def page(self, request: Request) -> Response:
@@ -260,3 +291,12 @@ class MapHost:
         if not isinstance(req, mapcache.PeaksRequest):
             return JSONResponse([], status_code=400)
         return JSONResponse(await run_in_threadpool(self.store.peaks, req))
+
+    async def buildings(self, request: Request) -> Response:
+        req = mapcache.parse_request(request.url.path)
+        if not isinstance(req, mapcache.BuildingsRequest):
+            raise not_found("Cellule inconnue")
+        data = await run_in_threadpool(self.store.buildings, req)
+        if data is None:
+            return Response(status_code=404, headers={"Cache-Control": "no-store"})
+        return Response(data, media_type="application/json", headers={"Cache-Control": "private, max-age=86400"})

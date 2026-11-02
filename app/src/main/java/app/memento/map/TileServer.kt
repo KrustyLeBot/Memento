@@ -25,8 +25,9 @@ class FetchedTile(val key: TileKey, val bytes: ByteArray)
 
 /**
  * Serves the map page and its data from the app's own origin (`appassets.androidplatform.net`): the page
- * from the APK assets, tiles from the offline packs, then the browsing cache, then the network, and the
- * peaks list. Runs on the WebView's background threads; every network step has a deadline.
+ * from the APK assets, tiles from the offline packs, then the browsing cache, then the network, the
+ * peaks list and the buildings cells the same way. Runs on the WebView's background threads; every network step
+ * has a deadline.
  */
 object TileServer {
     const val HOST = "appassets.androidplatform.net"
@@ -61,6 +62,7 @@ object TileServer {
                 path.startsWith("/map/") -> asset(path.removePrefix("/"))
                 path.startsWith("/t/") -> TileKey.parse(path)?.let { tile(it) } ?: notFound()
                 path == "/peaks" -> peaks(url)
+                path.startsWith("/buildings/") -> TileKey.parseBuildings(path)?.let { buildings(it) } ?: notFound()
                 else -> notFound()
             }
         } catch (e: Exception) {
@@ -135,6 +137,7 @@ object TileServer {
      * the OSM tile policy forbids bulk downloads, so only browsing falls back to it.
      */
     fun fetch(key: TileKey, allowOsm: Boolean): FetchedTile? {
+        if (key.kind == TileKey.KIND_BUILDINGS) return FetchedTile(key, Buildings.fetchCell(key.x, key.y, ::get))
         if (key.kind == TileKey.KIND_DEM) {
             val r = get(TileSources.dem(key.z, key.x, key.y))
             if (r.code == 404 || r.code == 403) return null
@@ -151,6 +154,19 @@ object TileServer {
         if (osm.code == 404) return null
         if (osm.code != 200 || osm.body.isEmpty()) throw IOException("OpenStreetMap : HTTP ${osm.code}")
         return FetchedTile(key.fallback(), osm.body)
+    }
+
+    // ---- buildings ----
+
+    /** A cell from the packs, the browsing cache, else the WFS (cached); 404 offline when none holds it. */
+    private fun buildings(key: TileKey): WebResourceResponse {
+        (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }?.let {
+            return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), it)
+        }
+        if (!NetState.online.value) return notFound()
+        val got = fetch(key, allowOsm = false) ?: return notFound()
+        cache.put(key.path, got.bytes)
+        return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), ByteArrayInputStream(got.bytes))
     }
 
     // ---- peaks ----

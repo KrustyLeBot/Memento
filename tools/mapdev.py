@@ -1,4 +1,4 @@
-"""Development server for the map page (kept out of web/: everything there ships in the APK): serves web/map and answers the host endpoints (tiles, peaks) the way the
+"""Development server for the map page (kept out of web/: everything there ships in the APK): serves web/map and answers the host endpoints (tiles, peaks, buildings) the way the
 apps do, with the Windows host's own logic (windows/memento_win/core). Open
 http://127.0.0.1:8765/map/index.html?mode=3d and drive window.SMap from the console.
 
@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "windows"))
-from memento_win.core import mapcache, peaks  # noqa: E402
+from memento_win.core import buildings, mapcache, peaks  # noqa: E402
 
 WEB = ROOT / "web"
 CACHE = Path(tempfile.gettempdir()) / "memento-map-dev"
@@ -72,6 +72,20 @@ def peak_list(r: mapcache.PeaksRequest) -> list[dict]:
     return peaks.select(candidates, (r.w, r.s, r.e, r.n))
 
 
+def building_cell(r: mapcache.BuildingsRequest) -> bytes | None:
+    path = buildings.cache_path(CACHE, r.x, r.y)
+    if path.is_file():
+        return path.read_bytes()
+    try:
+        data = buildings.fetch_cell(r.x, r.y, get)
+    except (buildings.WfsError, OSError) as error:
+        sys.stderr.write(f"buildings {r.x}/{r.y}: {error}\n")
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return data
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB), **kwargs)
@@ -84,6 +98,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send(200, *found) if found else self.send_error(404)
         if isinstance(req, mapcache.PeaksRequest):
             return self._send(200, "application/json", json.dumps(peak_list(req)).encode())
+        if isinstance(req, mapcache.BuildingsRequest):
+            found = building_cell(req)
+            return self._send(200, "application/json", found) if found else self.send_error(404)
         if isinstance(req, mapcache.FileRequest) or url.path.startswith("/map/"):
             return super().do_GET()
         self.send_error(404)

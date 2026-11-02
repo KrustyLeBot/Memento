@@ -17,7 +17,8 @@ class TileGroup(val kind: String, val z: Int, val inCorridor: Boolean, val count
 
 /**
  * What an offline pack downloads: aerial-photo zooms over the whole square, the higher ones along the route only
- * ([corridor]), terrain (DEM) zooms over the square, and the estimate the budget is checked on.
+ * ([corridor]), terrain (DEM) zooms over the square, the buildings of the 3D area ([Buildings.packCells]), and the
+ * estimate the budget is checked on.
  */
 data class TilePlan(
     val square: Bbox,
@@ -26,21 +27,30 @@ data class TilePlan(
     val corridor: Corridor? = null,
     /** Where the relief goes when it covers less than the photo (a 3D zone smaller than its 2D one); null = [square]. */
     val demSquare: Bbox? = null,
+    /** With the buildings cells of the 3D area (packs with relief only). */
+    val buildings: Boolean = false,
 ) {
+    /** The z15 cells of buildings, packed as [Corridors.pack]; computed once (a long route's corridor takes a while). */
+    val buildingCells: LongArray by lazy {
+        if (buildings && demZooms != null) Buildings.packCells(demSquare ?: square, corridor) else LongArray(0)
+    }
     val orthoRanges: List<TileRange> get() = orthoZooms.map { TilePlans.range(square, it) }
     val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(demSquare ?: square, it) }.orEmpty()
     val corridorCount: Long get() = corridor?.tileCount ?: 0L
-    val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count }
+    val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count } + buildingCells.size
     val estimatedBytes: Long
-        get() = (orthoRanges.sumOf { it.count } + corridorCount) * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES
+        get() = (orthoRanges.sumOf { it.count } + corridorCount) * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES +
+            buildingCells.size * Buildings.CELL_BYTES
 
     /** The highest aerial-photo zoom anywhere in the pack. */
     val topZoom: Int get() = corridor?.zooms?.takeIf { !it.isEmpty() }?.last ?: orthoZooms.last
 
-    /** Relief first (the 3D view needs it), then the photo over the square, then the corridor, zoom by zoom. */
+    /** Relief first (the 3D view needs it), the buildings, then the photo over the square, then the corridor, zoom by zoom. */
     fun groups(): List<TileGroup> {
         val out = ArrayList<TileGroup>()
         for (r in demRanges) out.add(TileGroup(TileKey.KIND_DEM, r.z, false, r.count) { f -> r.forEach(f) })
+        val cells = buildingCells
+        if (cells.isNotEmpty()) out.add(TileGroup(TileKey.KIND_BUILDINGS, Buildings.Z, false, cells.size.toLong()) { f -> for (v in cells) f(Corridors.x(v), Corridors.y(v)) })
         for (r in orthoRanges) out.add(TileGroup(TileKey.KIND_ORTHO, r.z, false, r.count) { f -> r.forEach(f) })
         corridor?.let { c ->
             for (z in c.zooms) {
@@ -138,12 +148,12 @@ object TilePlans {
     fun forRoute(route: Route, budget: Long = ROUTE_BUDGET): TilePlan? {
         val box = route.bbox ?: return null
         val square = MapSquare.of(box)
-        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS).let { if (it.estimatedBytes <= budget) return it }
+        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
         val line = Corridors.of(route, 0.0, IntRange.EMPTY)
         val counts = HashMap<Pair<Double, Int>, Long>()
         fun count(buf: Double, z: Int) = counts.getOrPut(buf to z) { Corridors.select(line.lons, line.lats, buf, z).size.toLong() }
         for (mid in MID_Z downTo ORTHO_MIN_Z) {
-            val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS)
+            val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS, buildings = true)
             if (base.estimatedBytes > budget) continue
             for ((buf, top) in CORRIDOR_STEPS) {
                 if (top <= mid) continue
@@ -162,7 +172,7 @@ object TilePlans {
         for (dem in listOf(DEM_ZOOMS, null)) {
             var best: TilePlan? = null
             for (zmax in ORTHO_MIN_Z..MID_Z) {
-                val p = TilePlan(square, ORTHO_MIN_Z..zmax, dem)
+                val p = TilePlan(square, ORTHO_MIN_Z..zmax, dem, buildings = dem != null)
                 if (p.estimatedBytes > budget) break
                 best = p
             }
@@ -194,7 +204,7 @@ object TilePlans {
         val sq2 = zoneSquare(lon, lat, side2dKm)
         val sq3 = zoneSquare(lon, lat, side3dKm)
         // no high-definition photo around the start: the owner zooms in for the relief, not the photo
-        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, null, sq3))
+        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, null, sq3, buildings = true))
     }
 
     /** What answering yes to the 3D zone adds to the 2D zone already on its way: the figure asked about. */
