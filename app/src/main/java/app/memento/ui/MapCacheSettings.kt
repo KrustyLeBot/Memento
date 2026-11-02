@@ -1,6 +1,13 @@
 package app.memento.ui
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -13,10 +20,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import app.memento.MainViewModel
+import app.memento.Settings
 import app.memento.Snack
+import app.memento.Zone3dPolicy
+import app.memento.map.TilePlan
+import app.memento.map.TilePlans
 import app.memento.map.OfflinePacks
 import app.memento.map.TileServer
 import app.memento.suite.SectionTitle
@@ -55,9 +68,10 @@ fun MapCacheSettings(vm: MainViewModel) {
             else "Cache de navigation : ${mb(u.cacheBytes)} Mo · Parcours préparés : ${u.packs} (${mb(u.packBytes)} Mo)",
             fontWeight = FontWeight.SemiBold,
         )
-        SettingsHint("Le cache garde les cartes déjà vues (300 Mo au plus). Les parcours préparés sont supprimés d'eux-mêmes après 24 h.")
+        SettingsHint("Le cache garde les cartes déjà vues (300 Mo au plus). Les parcours préparés et les zones autour du départ sont supprimés d'eux-mêmes après 24 h.")
         OutlinedButton(onClick = { confirm = true }) { Text("Vider le cache des cartes") }
     }
+    StartZoneSettings(vm.settings)
 
     if (confirm) {
         AlertDialog(
@@ -87,6 +101,58 @@ fun MapCacheSettings(vm: MainViewModel) {
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Annuler") } },
         )
+    }
+}
+
+/** The offline zone downloaded around the start of a recording without route: the 3D question and both sizes. */
+@Composable
+private fun StartZoneSettings(settings: Settings) {
+    var policy by remember { mutableStateOf(settings.zone3d) }
+    var side2d by remember { mutableIntStateOf(settings.zone2dKm) }
+    var side3d by remember { mutableIntStateOf(settings.zone3dKm) }
+    val lat = remember { settings.lastStartLat }
+    val plan2d = remember(side2d) { TilePlans.forZone(0.0, lat, side2d) }
+    val plan3d = remember(side2d, side3d) { TilePlans.forZone3d(0.0, lat, side2d, side3d) }
+    SettingsCard {
+        Text("3D hors ligne au démarrage d'un enregistrement sans parcours", fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Zone3dPolicy.values().forEach { p ->
+                FilterChip(selected = policy == p, onClick = { policy = p; settings.zone3d = p }, label = { Text(p.label) })
+            }
+        }
+        SettingsHint(
+            "La carte 2D autour du départ se télécharge toujours (Wi-Fi ou données mobiles). La 3D (relief, sommets et " +
+                "photo plus fine à 5 km du départ) suit ce choix ; « Demander » la propose une fois l'enregistrement lancé, sans le retarder. Les deux sont gardées 24 h.",
+        )
+        KmSlider("Zone 2D hors ligne autour du départ", side2d, TilePlans.ZONE_2D_KM, "≈ ${mb(plan2d.estimatedBytes)} Mo", reduced(plan2d)) {
+            side2d = it
+            settings.zone2dKm = it
+        }
+        val extra = (plan3d.estimatedBytes - plan2d.estimatedBytes).coerceAtLeast(0)
+        KmSlider("Zone 3D hors ligne autour du départ", side3d, TilePlans.ZONE_3D_KM, "≈ ${mb(extra)} Mo en plus de la 2D", reduced(plan3d)) {
+            side3d = it
+            settings.zone3dKm = it
+        }
+        SettingsHint("Côté du carré centré sur le départ. Estimations pour une photo aérienne moyenne ; une ville pèse plus.")
+    }
+}
+
+/** The estimate gave way to [TilePlans.ZONE_BUDGET]: the zone is downloaded with a coarser photo. */
+private fun reduced(p: TilePlan) = p.orthoZooms.last < TilePlans.ZONE_ZOOMS.last || (p.demZooms != null && p.corridor == null)
+
+@Composable
+private fun KmSlider(label: String, km: Int, range: IntRange, estimate: String, reduced: Boolean, onChange: (Int) -> Unit) {
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("$label : $km km", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text(estimate, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Slider(
+            km.toFloat(), { onChange(TilePlans.snapKm(it.toInt(), range)) },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = (range.last - range.first) / TilePlans.ZONE_KM_STEP - 1,
+        )
+        if (reduced) SettingsHint("Plus de ${mb(TilePlans.ZONE_BUDGET)} Mo : photo moins fine pour tenir", MaterialTheme.colorScheme.error)
     }
 }
 

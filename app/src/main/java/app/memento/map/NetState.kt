@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 object NetState {
     private val _online = MutableStateFlow(true)
     val online: StateFlow<Boolean> = _online
+    private val _cellular = MutableStateFlow(false)
+    /** The connection is mobile data (4G/5G), said before a large download. */
+    val cellular: StateFlow<Boolean> = _cellular
     @Volatile private var registered = false
 
     @Synchronized
@@ -18,14 +21,18 @@ object NetState {
         if (registered) return
         registered = true
         val cm = context.applicationContext.getSystemService(ConnectivityManager::class.java)
-        _online.value = cm.getNetworkCapabilities(cm.activeNetwork)?.let { usable(it) } == true
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        _online.value = caps?.let { usable(it) } == true
+        _cellular.value = caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 _online.value = usable(caps)
+                _cellular.value = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
             }
 
             override fun onLost(network: Network) {
                 _online.value = false
+                _cellular.value = false
             }
         })
     }

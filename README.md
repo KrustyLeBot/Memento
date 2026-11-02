@@ -98,7 +98,16 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   offline. Where IGN has no photo (it answers 404 abroad and at sea, and a uniform white JPEG at the edge of its coverage) the
   OpenStreetMap tile is served instead. Offline route packs (Android) hold the photo of the route's square up to
   z14 and, within 1 km of the track, up to z17, within 500 MB (z17 then the band's width then z14 give way when it
-  does not fit), estimated at 22 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). Offline, a photo tile
+  does not fit), estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). A recording without
+  route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–15 over a square whose
+  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 47 MB in the Alps). An optional 3D zone adds
+  relief z6–13 and peaks over its own square (5–80 km, 40 km by default) and the photo at z16 within 5 km of the
+  start (about 21 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
+  without imagery. Réglages → Cartes says whether it is asked (default: an inline question once the recording has
+  started, never delaying it; unanswered means no), always or never downloaded, with the live estimate of each size.
+  A 2D zone pack is turned into the 3D one in place (its tiles kept). Zone packs are capped at 250 MB (the plan drops
+  the z16 disc, then z15, past it; the real bytes are held to it while downloading), kept 24 h and pinned while
+  the recording runs; offline, the live map stays 3D inside the relief square and falls back to 2D outside. Offline, a photo tile
   missing from the packs is cut from its nearest ancestor and enlarged, so zooming in off the band shows the
   medium-definition photo instead of nothing (MapLibre does not overzoom a raster tile it could not get). `tools/mapdev.py` serves
   the page with these endpoints for development (`python tools/mapdev.py`, then drive `window.SMap`).

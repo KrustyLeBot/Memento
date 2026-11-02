@@ -124,6 +124,7 @@ object Recorder {
         lastPoint = null
         follow = null
         routePack = null
+        StartZones.reset()
         clearTrail()
         _state.value = Live(sport, now)
     }
@@ -175,6 +176,7 @@ object Recorder {
         logFile = null
         follow = null
         routePack = null
+        StartZones.reset()
         clearTrail()
         _state.value = null
     }

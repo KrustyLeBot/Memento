@@ -51,7 +51,10 @@ import app.memento.activity.Sport
 import app.memento.record.Live
 import app.memento.record.Recorder
 import app.memento.record.RecordingService
+import app.memento.map.NetState
 import app.memento.map.OfflinePacks
+import app.memento.record.StartZone
+import app.memento.record.StartZones
 import app.memento.suite.ConfirmDialog
 import app.memento.suite.SuiteTopBar
 import kotlinx.coroutines.delay
@@ -247,6 +250,7 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
             Fmt.clock(elapsed), fontSize = 64.sp, fontWeight = FontWeight.Bold,
             color = if (l.paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         )
+        if (l.sport.hasGps && l.route == null && !l.finished) ZoneQuestion()
         if (l.sport.hasGps) {
             if (l.route != null) {
                 RouteFigures(l, elapsed)
@@ -287,6 +291,33 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
                 modifier = Modifier.weight(1f).height(56.dp),
             ) { Text(if (l.paused) "Reprendre" else "Pause", fontSize = 16.sp) }
             Button(onClick = onStop, modifier = Modifier.weight(1f).height(56.dp)) { Text("Terminer", fontSize = 16.sp) }
+        }
+    }
+}
+
+/**
+ * The 3D offline zone question, inline under the running recording: it never blocks or delays it. Unanswered, nothing
+ * more than the 2D zone is downloaded.
+ */
+@Composable
+private fun ZoneQuestion() {
+    val zone by StartZones.state.collectAsState()
+    val cellular by NetState.cellular.collectAsState()
+    val z = zone?.takeIf { it.answer == StartZone.Answer.PENDING } ?: return
+    androidx.compose.material3.Card(
+        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Télécharger aussi la 3D hors ligne autour de toi ?", fontWeight = FontWeight.SemiBold)
+            Text(
+                "Environ ${(z.extraBytes + 500_000) / 1_000_000} Mo" + (if (cellular) " en 4G/5G" else "") + ", gardée 24 h",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { StartZones.answer(true) }) { Text("Oui") }
+                OutlinedButton(onClick = { StartZones.answer(false) }) { Text("Non") }
+            }
         }
     }
 }

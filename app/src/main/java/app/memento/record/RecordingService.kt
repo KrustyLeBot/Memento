@@ -25,8 +25,7 @@ import app.memento.Settings
 import app.memento.activity.Fmt
 import app.memento.activity.Sport
 import app.memento.map.MapRuntime
-import app.memento.map.NetState
-import app.memento.map.OfflinePacks
+import app.memento.map.ZoneSpec
 
 /**
  * Keeps the GPS (and the barometer) running while the screen is off. It only feeds [Recorder]: the
@@ -39,9 +38,8 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
     private var pressure: Double? = null
     private var pressureAt = 0L
     private var lastNotified = 0L
-    /** Where the recording started, until the 2D zone pack around it has been asked for. */
-    private var zoneStart: Pair<Double, Double>? = null
-    private var zoneAsked = false
+    /** A followed route brings its own pack: no zone around the start. */
+    private var noZone = false
 
     override fun onCreate() {
         super.onCreate()
@@ -137,20 +135,21 @@ class RecordingService : Service(), LocationListener, SensorEventListener {
     }
 
     /**
-     * Without a route, a 2D map of the 20 km around the start is downloaded once, so the map still shows
-     * something if the network goes. Offline at the start: asked again as soon as the network is back,
-     * still around the start, never around where the user has got to.
+     * Without a route, the 2D map around the start is downloaded once, so the map still shows something if the network
+     * goes, and the 3D one if the setting or the answer to the question says so ([StartZones]). Offline at the start:
+     * asked again as soon as the network is back, still around the start, never around where the user has got to.
      */
     private fun askZonePack(lat: Double, lon: Double) {
-        if (zoneAsked) return
+        if (noZone) return
         val live = Recorder.state.value ?: return
         if (live.fixes == 0) return
-        if (zoneStart == null) zoneStart = lat to lon
-        if (Recorder.route() != null) { zoneAsked = true; return }
-        if (!NetState.online.value) return
-        zoneAsked = true
-        val (la, lo) = zoneStart!!
-        OfflinePacks.prepareZone(lo, la)
+        if (StartZones.state.value == null) {
+            if (Recorder.route() != null) { noZone = true; return }
+            val s = Settings(this)
+            s.lastStartLat = lat
+            StartZones.begin(ZoneSpec(lon, lat, s.zone2dKm, s.zone3dKm), s.zone3d)
+        }
+        StartZones.pump()
     }
 
     override fun onSensorChanged(event: SensorEvent) {

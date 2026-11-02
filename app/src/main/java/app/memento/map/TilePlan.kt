@@ -19,9 +19,16 @@ class TileGroup(val kind: String, val z: Int, val inCorridor: Boolean, val count
  * What an offline pack downloads: aerial-photo zooms over the whole square, the higher ones along the route only
  * ([corridor]), terrain (DEM) zooms over the square, and the estimate the budget is checked on.
  */
-data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: IntRange?, val corridor: Corridor? = null) {
+data class TilePlan(
+    val square: Bbox,
+    val orthoZooms: IntRange,
+    val demZooms: IntRange?,
+    val corridor: Corridor? = null,
+    /** Where the relief goes when it covers less than the photo (a 3D zone smaller than its 2D one); null = [square]. */
+    val demSquare: Bbox? = null,
+) {
     val orthoRanges: List<TileRange> get() = orthoZooms.map { TilePlans.range(square, it) }
-    val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(square, it) }.orEmpty()
+    val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(demSquare ?: square, it) }.orEmpty()
     val corridorCount: Long get() = corridor?.tileCount ?: 0L
     val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count }
     val estimatedBytes: Long
@@ -47,7 +54,9 @@ data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: In
     /** What the pack holds, said to the user before downloading. */
     fun detailLabel(): String {
         val c = corridor
-        return if (c == null || c.zooms.isEmpty()) {
+        return if (c != null && c.lons.size == 1 && !c.zooms.isEmpty()) {
+            "Haute définition à ${TilePlans.distanceLabel(c.bufferM)} autour du départ, moyenne ailleurs"
+        } else if (c == null || c.zooms.isEmpty()) {
             if (orthoZooms.last >= TilePlans.ORTHO_MAX_Z) "Haute définition sur toute la zone" else "Définition moyenne sur toute la zone"
         } else {
             "Haute définition le long du tracé (±${TilePlans.distanceLabel(c.bufferM)}), moyenne ailleurs"
@@ -77,9 +86,34 @@ object TilePlans {
      */
     val CORRIDOR_STEPS = listOf(1000.0 to 17, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
 
-    /** The zone pack recorded around the start without a route: 2D only, 20 km square, z8–15. */
-    const val ZONE_HALF_M = 10_000.0
+    /**
+     * The zone pack recorded around the start without a route: the photo z8–15 over a square whose side is a setting
+     * ([ZONE_2D_KM], 40 km by default).
+     */
     val ZONE_ZOOMS = 8..15
+    const val ZONE_KM_DEFAULT = 40
+    const val ZONE_KM_STEP = 5
+    val ZONE_2D_KM = 10..80
+    val ZONE_3D_KM = 5..80
+
+    /** Latitude the settings estimate for until a recording has started somewhere (tile sizes in metres depend on it). */
+    const val DEFAULT_LAT = 45.5
+
+    /**
+     * The optional 3D zone: relief ([DEM_ZOOMS]) and peaks over its own square (a setting, [ZONE_3D_KM]), the photo
+     * z8–15 over both squares (3D is never drawn without imagery, even when larger than the 2D zone), and the photo at
+     * [ZONE_HD_Z] within [ZONE_HD_M] of the start (a one-point corridor, stored in the manifest, so a resume fetches
+     * the same tiles).
+     */
+    const val ZONE_HD_Z = 16
+    const val ZONE_HD_M = 5_000.0
+
+    /**
+     * Ceiling on a zone pack, estimated and real. The largest settings (80 km both) are estimated at about 230 MB, so
+     * the plan rarely gives way; when it does, the z16 disc goes first, then the square's top zoom (z15, then z14…).
+     * The real bytes are held to it as for a route.
+     */
+    const val ZONE_BUDGET = 250L * 1024 * 1024
 
     fun range(b: Bbox, z: Int): TileRange {
         val max = MapMath.tileCount(z) - 1
@@ -133,6 +167,41 @@ object TilePlans {
     fun distanceLabel(m: Double): String =
         if (m >= 1000) Json.num(m / 1000, 1).replace('.', ',') + " km" else "${m.toInt()} m"
 
-    fun forZone(lon: Double, lat: Double): TilePlan =
-        TilePlan(MapSquare.centered(lon, lat, ZONE_HALF_M), ZONE_ZOOMS, null)
+    /** A zone side as the sliders offer it: in [range], on a [ZONE_KM_STEP] step. */
+    fun snapKm(km: Int, range: IntRange): Int =
+        (Math.round(km.toDouble() / ZONE_KM_STEP).toInt() * ZONE_KM_STEP).coerceIn(range)
+
+    /** The square of side [sideKm] around a point. */
+    fun zoneSquare(lon: Double, lat: Double, sideKm: Int): Bbox = MapSquare.centered(lon, lat, sideKm * 500.0)
+
+    fun forZone(lon: Double, lat: Double, sideKm: Int = ZONE_KM_DEFAULT): TilePlan =
+        fitZone(TilePlan(zoneSquare(lon, lat, sideKm), ZONE_ZOOMS, null))
+
+    /**
+     * The 3D zone with the 2D one it completes: photo over both squares, relief and peaks over the 3D square
+     * ([TilePlan.demSquare]), the high-definition disc around the start (no wider than the 3D square).
+     */
+    fun forZone3d(lon: Double, lat: Double, side2dKm: Int = ZONE_KM_DEFAULT, side3dKm: Int = ZONE_KM_DEFAULT): TilePlan {
+        val sq2 = zoneSquare(lon, lat, side2dKm)
+        val sq3 = zoneSquare(lon, lat, side3dKm)
+        val disc = Corridor(listOf(round6(lon)), listOf(round6(lat)), minOf(ZONE_HD_M, side3dKm * 500.0), ZONE_HD_Z..ZONE_HD_Z)
+        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, disc, sq3))
+    }
+
+    /** What answering yes to the 3D zone adds to the 2D zone already on its way: the figure asked about. */
+    fun zone3dExtraBytes(lon: Double, lat: Double, side2dKm: Int = ZONE_KM_DEFAULT, side3dKm: Int = ZONE_KM_DEFAULT): Long =
+        (forZone3d(lon, lat, side2dKm, side3dKm).estimatedBytes - forZone(lon, lat, side2dKm).estimatedBytes).coerceAtLeast(0)
+
+    /** Within [ZONE_BUDGET]: without the z16 disc, then with a lower top zoom over the square. */
+    private fun fitZone(p: TilePlan): TilePlan {
+        if (p.estimatedBytes <= ZONE_BUDGET) return p
+        var q = p.copy(corridor = null)
+        while (q.estimatedBytes > ZONE_BUDGET && q.orthoZooms.last > ORTHO_MIN_Z) q = q.copy(orthoZooms = ORTHO_MIN_Z until q.orthoZooms.last)
+        return q
+    }
+
+    fun union(a: Bbox, b: Bbox) = Bbox(minOf(a.w, b.w), minOf(a.s, b.s), maxOf(a.e, b.e), maxOf(a.n, b.n))
+
+    // as the manifest writes a corridor's line, so a resumed pack computes the very same tiles
+    private fun round6(v: Double) = Math.round(v * 1e6) / 1e6
 }

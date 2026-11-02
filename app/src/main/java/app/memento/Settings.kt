@@ -3,6 +3,7 @@ package app.memento
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import app.memento.map.TilePlans
 import app.memento.scan.ScanFormat
 import java.io.File
 
@@ -11,6 +12,13 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 enum class GpsMode(val label: String) {
     NORMAL("Normale"),
     ECONOMY("Économie de batterie"),
+}
+
+/** Whether a recording without route also downloads the 3D map around its start. */
+enum class Zone3dPolicy(val label: String) {
+    ASK("Demander"),
+    ALWAYS("Toujours"),
+    NEVER("Jamais"),
 }
 
 /** Where notes are stored: the shared Documents folder, or a SAF tree picked by the user. */
@@ -42,6 +50,25 @@ class Settings(context: Context) {
     var gpsMode: GpsMode
         get() = runCatching { GpsMode.valueOf(prefs.getString("gps_mode", "NORMAL")!!) }.getOrDefault(GpsMode.NORMAL)
         set(v) = prefs.edit().putString("gps_mode", v.name).apply()
+
+    var zone3d: Zone3dPolicy
+        get() = runCatching { Zone3dPolicy.valueOf(prefs.getString("zone_3d", "ASK")!!) }.getOrDefault(Zone3dPolicy.ASK)
+        set(v) = prefs.edit().putString("zone_3d", v.name).apply()
+
+    /** Side in km of the 2D offline square downloaded around the start of a recording without route. */
+    var zone2dKm: Int
+        get() = TilePlans.snapKm(prefs.getInt("zone_2d_km", TilePlans.ZONE_KM_DEFAULT), TilePlans.ZONE_2D_KM)
+        set(v) = prefs.edit().putInt("zone_2d_km", TilePlans.snapKm(v, TilePlans.ZONE_2D_KM)).apply()
+
+    /** Side in km of the optional 3D offline square. */
+    var zone3dKm: Int
+        get() = TilePlans.snapKm(prefs.getInt("zone_3d_km", TilePlans.ZONE_KM_DEFAULT), TilePlans.ZONE_3D_KM)
+        set(v) = prefs.edit().putInt("zone_3d_km", TilePlans.snapKm(v, TilePlans.ZONE_3D_KM)).apply()
+
+    /** Latitude of the last recording start, for the zone estimates shown in the settings. */
+    var lastStartLat: Double
+        get() = prefs.getFloat("last_start_lat", Float.NaN).toDouble().takeIf { !it.isNaN() } ?: TilePlans.DEFAULT_LAT
+        set(v) = prefs.edit().putFloat("last_start_lat", v.toFloat()).apply()
 
     /** Module shown when the app opens: the last one used. */
     var lastModule: Module

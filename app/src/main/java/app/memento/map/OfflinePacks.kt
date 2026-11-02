@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -147,25 +149,55 @@ object OfflinePacks {
         return pack.id
     }
 
+    // the 2D zone and its 3D upgrade can be asked for within the same second: one decision at a time
+    private val zoneLock = Mutex()
+
     /**
-     * The 2D pack of a recording without route: the aerial photo of a 20 km square around the start. Skipped when
-     * offline or when a pack already covers the place (a second recording from the same spot). Runs in
-     * the background: the caller is the GPS callback.
+     * The pack of a recording without route ([ZoneSpec]): the aerial photo of the 2D square around the start and, with
+     * [with3d], relief and peaks over the 3D square plus the z16 disc around the start ([TilePlans.forZone3d]). A pack
+     * already covering the middle of the zone (a second recording from the same spot) is reused: resumed if
+     * interrupted, and a 2D zone pack is turned into a 3D one by rewriting its manifest and resuming it, so its photo
+     * tiles are kept. [onPack] gets the id of the zone pack in use, for the recording to pin it. Skipped offline. Runs
+     * in the background: the caller is the GPS callback or the UI.
      */
-    fun prepareZone(lon: Double, lat: Double) {
+    fun ensureZone(zone: ZoneSpec, with3d: Boolean, onPack: (String) -> Unit = {}) {
         if (!::dir.isInitialized || !NetState.online.value) return
         scope.launch {
-            val now = System.currentTimeMillis()
-            val near = MapSquare.centered(lon, lat, TilePlans.ZONE_HALF_M / 2)
-            if (_packs.value.any { !it.expired(now) && !it.obsolete && it.square.covers(near) }) return@launch
-            val plan = TilePlans.forZone(lon, lat)
-            val pack = Pack(newId("z"), "Zone autour du départ (2D)", now, plan.square, plan.orthoZooms.last, setOf(Pack.KIND_ORTHO), 0, complete = false, hasRoute = false)
-            try {
-                create(pack, plan.estimatedBytes) {}
-            } catch (e: PackException) {
-                Log.w(TAG, "zone: ${e.message}")
+            zoneLock.withLock {
+                try {
+                    onPack(zonePack(zone, with3d))
+                } catch (e: PackException) {
+                    Log.w(TAG, "zone: ${e.message}")
+                }
             }
         }
+    }
+
+    private suspend fun zonePack(zone: ZoneSpec, with3d: Boolean): String {
+        val now = System.currentTimeMillis()
+        val existing = Zones.reusable(_packs.value, zone, with3d, now)
+        if (existing != null && !Zones.needsUpgrade(existing, zone, with3d)) {
+            if (!existing.complete && !isRunning(existing.id)) start(existing)
+            return existing.id
+        }
+        if (existing != null) {
+            val up = Zones.upgrade(existing, zone)
+            val more = up.plan().estimatedBytes - existing.bytes
+            if (dir.usableSpace < more + SPARE_BYTES) throw PackException("Espace insuffisant : environ ${(more + SPARE_BYTES) / 1_000_000} Mo nécessaires")
+            jobs[existing.id]?.cancelAndJoin()
+            writeManifest(up)
+            refresh()
+            start(up)
+            return up.id
+        }
+        val plan = zone.plan(with3d)
+        val pack = Pack(
+            newId("z"), Zones.name(with3d), now, plan.square, plan.orthoZooms.last,
+            if (with3d) Zones.KINDS_3D else setOf(Pack.KIND_ORTHO), 0, complete = false, hasRoute = false,
+            corridor = plan.corridor, relief = plan.demSquare,
+        )
+        create(pack, plan.estimatedBytes) {}
+        return pack.id
     }
 
     /** Resumes an interrupted pack: tiles already there are kept. */
@@ -272,7 +304,7 @@ object OfflinePacks {
     /**
      * Relief first (the 3D view needs it), then the aerial photo zoom by zoom, the square then the corridor. Should the
      * real tiles outgrow the budget, the zoom being fetched is dropped and the pack stops at the one below (the
-     * corridor's top zoom goes first): the 500 MB holds even when the estimate was low.
+     * corridor's top zoom goes first): the budget (500 MB a route, [TilePlans.ZONE_BUDGET] a zone) holds even when the estimate was low.
      */
     private suspend fun download(pack: Pack): Pack {
         val pdir = File(dir, pack.id)
@@ -283,7 +315,7 @@ object OfflinePacks {
         _progress.update { it + (pack.id to Progress(0, total, pack.bytes)) }
         val done = AtomicLong(0)
         val bytes = AtomicLong(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
-        val budget = if (pack.hasRoute) TilePlans.ROUTE_BUDGET else Long.MAX_VALUE
+        val budget = if (pack.hasRoute) TilePlans.ROUTE_BUDGET else TilePlans.ZONE_BUDGET
         var zmax = pack.zmax
         var corridor = pack.corridor
         var missed = 0
@@ -309,7 +341,7 @@ object OfflinePacks {
             }
             if (over.get()) {
                 if (kind != TileKey.KIND_ORTHO || (!group.inCorridor && group.z <= TilePlans.ORTHO_MIN_Z)) {
-                    throw PackException("Parcours trop étendu pour une carte hors ligne")
+                    throw PackException(if (pack.hasRoute) "Parcours trop étendu pour une carte hors ligne" else "Zone trop volumineuse pour une carte hors ligne")
                 }
                 // the square's zooms are all below the corridor's: this folder holds only the zoom being dropped
                 File(pdir, "${TileKey.KIND_ORTHO}/${group.z}").deleteRecursively()
@@ -332,8 +364,8 @@ object OfflinePacks {
         var kinds = pack.kinds
         if (Pack.KIND_PEAKS in kinds) {
             try {
-                val peaks = TileServer.computePeaks(pack.square)
-                TileCache.writeAtomic(File(pdir, "peaks.json"), Peaks.cacheJson(pack.square, peaks).toByteArray())
+                val peaks = TileServer.computePeaks(pack.reliefSquare)
+                TileCache.writeAtomic(File(pdir, "peaks.json"), Peaks.cacheJson(pack.reliefSquare, peaks).toByteArray())
             } catch (e: IOException) {
                 // the map stays usable without labels; the pack says it has none
                 Log.w(TAG, "${pack.id} peaks: $e")

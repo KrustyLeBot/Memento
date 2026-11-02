@@ -97,12 +97,12 @@ class TilePlanTest {
     }
 
     @Test
-    fun zonePackIsAbout700Tiles() {
+    fun zonePackIsAbout2900Tiles() {
         val z = TilePlans.forZone(LON0, LAT0)
         assertEquals(8..15, z.orthoZooms)
         assertNull(z.demZooms)
-        assertTrue("${z.tileCount}", z.tileCount in 500..1000)
-        assertEquals(20_000.0, z.square.widthM, 1.0)
+        assertTrue("${z.tileCount}", z.tileCount in 2_500..3_300)
+        assertEquals(40_000.0, z.square.widthM, 1.0)
     }
 }
 

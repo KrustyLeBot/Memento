@@ -22,7 +22,12 @@ data class Pack(
      * top zoom over the whole [square], so a manifest without it (older builds, zone packs) reads as before.
      */
     val corridor: Corridor? = null,
+    /** 3D zone packs: where the relief and the peaks are, when that is not the whole [square]. */
+    val relief: Bbox? = null,
 ) {
+    /** Where the 3D view works offline from this pack (given [has3d]). */
+    val reliefSquare: Bbox get() = relief ?: square
+
     val has3d: Boolean get() = KIND_DEM in kinds && !obsolete
 
     val obsolete: Boolean get() = KIND_ORTHO !in kinds
@@ -32,7 +37,7 @@ data class Pack(
     fun expired(now: Long): Boolean = now >= expiresAt()
 
     /** The tiles this pack downloads. */
-    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor)
+    fun plan(): TilePlan = TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor, relief)
 
     fun toJson(): String = buildString {
         append('{')
@@ -45,6 +50,7 @@ data class Pack(
         append(",\"bytes\":").append(bytes)
         append(",\"complete\":").append(complete)
         append(",\"route\":").append(hasRoute)
+        relief?.let { r -> append(",\"relief\":[").append(r.toList().joinToString(",") { Json.num(it, 7) }).append(']') }
         corridor?.let { c ->
             append(",\"corridor\":{\"buffer\":").append(Json.num(c.bufferM, 1))
             append(",\"zooms\":[").append(c.zooms.first).append(',').append(c.zooms.last).append(']')
@@ -78,6 +84,7 @@ data class Pack(
                 complete = o["complete"] as? Boolean ?: false,
                 hasRoute = o["route"] as? Boolean ?: false,
                 corridor = o["corridor"].asMap()?.let(::parseCorridor),
+                relief = Bbox.fromList(o["relief"].asList()?.mapNotNull { it.asDouble() }),
             )
         }
 
@@ -99,6 +106,6 @@ data class Pack(
          * (followed by the running recording) still counts past its 24 h: it is kept until the recording ends.
          */
         fun covers3d(packs: List<Pack>, lon: Double, lat: Double, now: Long, pinned: Set<String> = emptySet()): Boolean =
-            packs.any { it.complete && it.has3d && (!it.expired(now) || it.id in pinned) && it.square.contains(lon, lat) }
+            packs.any { it.complete && it.has3d && (!it.expired(now) || it.id in pinned) && it.reliefSquare.contains(lon, lat) }
     }
 }
