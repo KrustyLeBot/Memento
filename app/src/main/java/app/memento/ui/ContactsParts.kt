@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarHostState
@@ -154,9 +155,13 @@ fun ContactsSettings(vm: MainViewModel) {
             })
         }
         c.mirrorStatus?.let { if (c.mirrorFailed) Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) else SettingsHint(it) }
+        // asks Android directly; the settings page only once Android stops asking (refused twice)
+        if (c.mirrorEnabled && !c.mirrorPermissionsGranted()) {
+            Button(onClick = { ask.launch(ContactsMirror.PERMISSIONS) }) { Text("Autoriser l'accès aux contacts") }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (c.mirrorEnabled) OutlinedButton(onClick = { c.runMirror() }) { Text("Mettre à jour maintenant") }
-            if (refused || (c.mirrorEnabled && !c.mirrorPermissionsGranted())) {
+            if (refused) {
                 OutlinedButton(onClick = {
                     ctx.startActivity(
                         Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", ctx.packageName, null))
