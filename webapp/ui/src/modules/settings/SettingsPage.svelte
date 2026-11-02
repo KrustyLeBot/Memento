@@ -98,6 +98,9 @@
           <button role="radio" aria-checked={!$prefs.grid} class:on={!$prefs.grid} on:click={() => setPref('grid', false)}>Liste</button>
         </div>
       </div>
+      <label class="check"><input type="checkbox" checked={!!$prefs['contacts.firstNameFirst']}
+        on:change={(e) => setPref('contacts.firstNameFirst', e.currentTarget.checked)} />
+        Contacts : prénom d'abord (tri et lettres de la liste)</label>
     </div>
 
     <h2 class="section-title">Modules</h2>
