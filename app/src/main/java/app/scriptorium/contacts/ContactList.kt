@@ -112,7 +112,8 @@ object ContactList {
 
     /**
      * Every word of [query] must be found in the names, the e-mails, the address or the notes (accents and
-     * case ignored); a query of digits matches the phone numbers (`0612` finds `+33 6 12…`).
+     * case ignored, apostrophes too: `oneill` and `o'neill` find `O’Neill`); a query of digits matches the phone
+     * numbers (`0612` finds `+33 6 12…`).
      */
     fun matches(c: Contact, query: String): Boolean {
         val q = query.trim()
@@ -121,9 +122,13 @@ object ContactList {
             val forms = Phones.queryForms(q)
             if (c.phones.any { p -> Phones.searchForms(p.number).any { s -> forms.any { s.contains(it) } } }) return true
         }
-        val hay = listOf(c.firstName, c.lastName, c.emails.joinToString(" "), c.address.orEmpty(), c.notes).joinToString("\n").fold()
-        return q.fold().split(Regex("\\s+")).filter { it.isNotEmpty() }.all { hay.contains(it) }
+        val hay = listOf(c.firstName, c.lastName, c.emails.joinToString(" "), c.address.orEmpty(), c.notes).joinToString("\n").let(::searchable)
+        return searchable(q).split(Regex("\\s+")).filter { it.isNotEmpty() }.all { hay.contains(it) }
     }
+
+    private val APOSTROPHES = Regex("['’ʼ`]")
+
+    private fun searchable(s: String): String = s.fold().replace(APOSTROPHES, "")
 
     fun search(contacts: List<Contact>, query: String, firstNameFirst: Boolean): List<Contact> =
         sorted(contacts.filter { matches(it, query) }, firstNameFirst)

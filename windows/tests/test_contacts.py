@@ -186,3 +186,9 @@ def test_a_shared_home_number_is_not_the_same_person():
     assert [c.first_name for c in upd.creates] == ["Paul"]
     assert upd.updates[0][1].name == "Marie Dupont"
     assert ct.plan(r, [marie], ct.DuplicatePolicy.SKIP, "I", NOW, lambda: "new001").skipped == 1
+
+
+def test_search_ignores_apostrophes():
+    c = ct.Contact(id="x", first_name="Jean-François", last_name="O’Neill")
+    for q in ("oneill", "o'neill", "O’NEILL jean"):
+        assert ct.matches(c, q), q

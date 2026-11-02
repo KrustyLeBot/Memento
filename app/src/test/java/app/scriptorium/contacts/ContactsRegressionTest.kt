@@ -68,6 +68,33 @@ class ContactsRegressionTest {
     }
 
     @Test
+    fun awkwardValuesSurviveTheFile() {
+        val cases = listOf(
+            Contact(firstName = "Jean \"JJ\"", lastName = "d'Arc"),
+            Contact(firstName = "- dash", lastName = "#hash"),
+            Contact(firstName = "yes", lastName = "123"),
+            Contact(firstName = "a: b", lastName = "x #y", uid = "a: b # c"),
+            Contact(firstName = "tab\there", lastName = "back\\slash"),
+            Contact(firstName = "[list]", lastName = "{obj}", address = "'quoted' start"),
+            Contact(firstName = "Zoé", phones = listOf(Phone("+33 6 12", "mobile"), Phone("- 06"), Phone("06 \"x\"", "a: b"), Phone("06 [1]", "x, y"))),
+            Contact(firstName = "Q", emails = listOf("-a@b", "a,b@c", "'q'@x"), notes = "---\nfoo: bar\n---\nbody"),
+            Contact(firstName = "title: x", address = "ends with:"),
+        )
+        cases.forEachIndexed { i, c0 ->
+            val c = c0.copy(id = "abc%03d".format(i), path = "contacts/x-abc%03d.md".format(i), created = 1_793_000_000_000, updated = 1_793_000_000_000)
+            val text = app.scriptorium.NoteFormat.serialize(ContactFormat.toNote(c))
+            val back = ContactFormat.fromNote(app.scriptorium.NoteFormat.parse(c.path, text, 1_793_000_000_000))
+            assertEquals(text, Vectors.fields(c), Vectors.fields(back))
+        }
+    }
+
+    @Test
+    fun searchIgnoresApostrophes() {
+        val c = Contact(id = "x", firstName = "Jean-François", lastName = "O’Neill")
+        listOf("oneill", "o'neill", "O’NEILL jean").forEach { assertTrue(it, ContactList.matches(c, it)) }
+    }
+
+    @Test
     fun googleStarredBecomesAFavourite() {
         val text = "BEGIN:VCARD\nVERSION:3.0\nN:X;Y\nCATEGORIES:myContacts,starred\nEND:VCARD\n" +
             "BEGIN:VCARD\nVERSION:3.0\nN:Z;W\nCATEGORIES:myContacts\nEND:VCARD\n"

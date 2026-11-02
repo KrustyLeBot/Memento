@@ -351,8 +351,13 @@ def matches(c: Contact, query: str) -> bool:
         forms = query_forms(q)
         if any(f in s for p in c.phones for s in search_forms(p.number) for f in forms):
             return True
-    hay = fmt.fold("\n".join([c.first_name, c.last_name, " ".join(c.emails), c.address or "", c.notes]))
-    return all(word in hay for word in fmt.fold(q).split())
+    hay = _searchable("\n".join([c.first_name, c.last_name, " ".join(c.emails), c.address or "", c.notes]))
+    return all(word in hay for word in _searchable(q).split())
+
+
+def _searchable(s: str) -> str:
+    """Folded, apostrophes left out: oneill and o'neill find O’Neill."""
+    return re.sub(r"['’ʼ`]", "", fmt.fold(s))
 
 
 def search(contacts: list[Contact], query: str, first_name_first: bool) -> list[Contact]:
