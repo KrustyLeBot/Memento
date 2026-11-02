@@ -137,6 +137,7 @@
     try {
       const { undo: token } = await api.remove(id, version);
       alive = false;
+      stop();  // the change event of this very delete must not reload it
       go(['activities'], undefined, true);
       showSnack('Activité supprimée', { action: { label: 'Annuler', run: async () => {
         try {

@@ -20,6 +20,8 @@ import hashlib
 import json
 import os
 import secrets
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -48,6 +50,10 @@ CHART_POINTS = 400   # charts: enough for a smooth curve and a precise hover on 
 MAP_POINTS = 5000    # the map: as the Android and Windows hosts send it
 GPS_SPORTS = [Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS]
 UPLOAD_TTL = 3600
+# Above this size a track file is analysed in a child process (memento_web/analyse.py); 1 MB is ~5000 GPX points.
+SUBPROCESS_BYTES = 1_000_000
+ANALYSIS_TIMEOUT = 50  # s: under the 60 s a proxied request may last
+PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 JOB_TTL = 600
 IMAGES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 
@@ -86,6 +92,11 @@ def _r(values, digits):
 
 def _thin(n: int, limit: int) -> list[int]:
     return mapdata.thin_indices(n, limit)
+
+
+def analysis_body(track, info: act.ActivityInfo) -> bytes:
+    """The JSON bytes the page gets for this track."""
+    return json.dumps(analysis_json(analyze(track, info.sport), info.sport, info.alt), separators=(",", ":")).encode()
 
 
 def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
@@ -253,6 +264,7 @@ class Activities:
         self.cache = AnalysisCache(cache_dir)
         self.uploads = data.config.config_dir / "uploads"
         self.jobs: dict[str, Job] = {}
+        self.subprocess_bytes = SUBPROCESS_BYTES
         self.elevation_get = elevation_get or elevation.http_get
         self.elevation_pause = elevation_pause or (lambda: time.sleep(1.1))
         data.idle_hooks.append(self.cache.drop_memory)
@@ -369,20 +381,36 @@ class Activities:
 
         def compute() -> bytes:
             try:
+                size = self.data.path(info.file).stat().st_size
+            except OSError:
+                raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
+            if size > self.subprocess_bytes:
+                return self._analyse_apart(info)
+            try:
                 track = self._locked(self.data.store.read_track, info)
             except OSError:
                 raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
             except Exception as error:  # noqa: BLE001 — an unreadable file is the user's to know about
                 raise ApiError(422, f"Tracé illisible : {error}") from None
-            big = len(track.points) > 5000
-            body = json.dumps(analysis_json(analyze(track, info.sport), info.sport, info.alt),
-                              separators=(",", ":")).encode()
-            del track
-            if big:
-                _malloc_trim()  # the samples of a long track are gone: give their memory back now
-            return body
+            return analysis_body(track, info)
         body = await run_in_threadpool(self.cache.get, cache_key, compute)
         return Response(body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+    def _analyse_apart(self, info: act.ActivityInfo) -> bytes:
+        """A long track is analysed in a child process (memento_web/analyse.py), which gives all its memory back."""
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(PACKAGE_PARENT), os.environ.get("PYTHONPATH")]))}
+        try:
+            done = subprocess.run([sys.executable, "-m", "memento_web.analyse", str(self.data.root), info.to_json()],
+                                  capture_output=True, env=env, timeout=ANALYSIS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise ApiError(504, "Analyse du tracé trop longue") from None
+        if done.returncode != 0:
+            lines = done.stderr.decode("utf-8", "replace").strip().splitlines()
+            message = lines[-1] if lines else f"code {done.returncode}"
+            if done.returncode not in (3, 4):
+                _log(f"analysis process failed: {done.stderr.decode('utf-8', 'replace')[-2000:]}")
+            raise ApiError(404 if done.returncode == 4 else 422, message)
+        return done.stdout
 
     # ---- edits ----
 

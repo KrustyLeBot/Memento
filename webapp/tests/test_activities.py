@@ -154,6 +154,25 @@ def test_the_analysis_is_computed_once_then_cached_until_its_inputs_change(clien
     assert client.get(url).json()["sport"] == "bike" and cache.computed == 2
 
 
+def test_a_long_track_is_analysed_in_a_child_process_with_the_same_result(client, data_dir):
+    activities = client.app.state.activities
+    result = import_file(client, tracks.walk(T0, 900).encode(), "w.gpx", sport="walk")
+    url = f"/api/activities/{result['id']}/analysis"
+    inside = client.get(url).json()
+    activities.cache.drop_memory()
+    for f in (client.app.state.data.config.config_dir / "cache" / "activities").glob("*.json"):
+        f.unlink()
+    activities.subprocess_bytes = 0
+    assert client.get(url).json() == inside and activities.cache.computed == 2
+    activities.cache.drop_memory()
+    for f in (client.app.state.data.config.config_dir / "cache" / "activities").glob("*.json"):
+        f.unlink()
+    track = client.get(f"/api/activities/{result['id']}").json()["activity"]["file"]
+    (data_dir / track).write_text("pas un tracé", encoding="utf-8")
+    broken = client.get(url)
+    assert broken.status_code == 422 and "illisible" in broken.json()["error"]
+
+
 def test_the_analysis_cache_is_bounded_in_memory_and_on_disk(client, folders):
     cache = client.app.state.activities.cache
     cache.max_items, cache.max_bytes, cache.disk_items = 2, 10**9, 3
