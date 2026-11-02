@@ -199,7 +199,8 @@ private fun LetterScroller(letters: List<String>, modifier: Modifier, onLetter: 
     }
     Box(modifier.fillMaxHeight()) {
         Column(
-            Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(28.dp).padding(vertical = 8.dp)
+            // ends above the add button, which covered the last letters
+            Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(28.dp).padding(top = 8.dp, bottom = 88.dp)
                 .onSizeChanged { height = maxOf(1, it.height) }
                 .pointerInput(letters) {
                     detectTapGestures(onPress = { pick(it.y); tryAwaitRelease(); active = null })

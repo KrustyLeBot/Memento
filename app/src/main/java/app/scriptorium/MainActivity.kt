@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -170,6 +171,13 @@ class MainActivity : ComponentActivity() {
 
         ScriptoriumTheme(vm.theme) {
             val dark = isDarkTheme()
+            LaunchedEffect(dark) {
+                // The bar icons follow the app's theme (Paramètres → Thème), not only the phone's: dark icons on
+                // the dark theme were invisible when the two differ.
+                val bars = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                enableEdgeToEdge(bars, bars)
+            }
             LaunchedEffect(Unit) {
                 // the map page loads once in the background, so the first map opens at once
                 delay(1500)
