@@ -174,3 +174,15 @@ def test_a_label_never_reads_back_as_part_of_the_number():
     for label in ("2", "a (b)", "(x)", "  "):
         assert ct.Phone.decode(ct.Phone("06 00 00 00 03", label).encode()).number == "06 00 00 00 03"
     assert ct.Phone("06", "Pro (ancien)").encode() == "06 (Pro ancien)"
+
+
+def test_a_shared_home_number_is_not_the_same_person():
+    marie = ct.Contact(id="m1", path="contacts/m1.md", first_name="Marie", last_name="Dupont",
+                       phones=[ct.Phone("01 23 45 67 89", ct.HOME)])
+    r = vcard.parse("BEGIN:VCARD\nVERSION:3.0\nN:Dupont;Paul;;;\nTEL;TYPE=HOME:+33 1 23 45 67 89\nEND:VCARD\n"
+                    "BEGIN:VCARD\nVERSION:3.0\nFN:Marie\nTEL;TYPE=CELL:06 00 00 00 09\nTEL;TYPE=HOME:0123456789\nEND:VCARD\n")
+    assert ct.preview(r, [marie]).duplicates == 1
+    upd = ct.plan(r, [marie], ct.DuplicatePolicy.UPDATE, "I", NOW, lambda: "new001")
+    assert [c.first_name for c in upd.creates] == ["Paul"]
+    assert upd.updates[0][1].name == "Marie Dupont"
+    assert ct.plan(r, [marie], ct.DuplicatePolicy.SKIP, "I", NOW, lambda: "new001").skipped == 1

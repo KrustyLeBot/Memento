@@ -496,6 +496,15 @@ class ImportPlan:
     unchanged: int
 
 
+def _names_agree(a: Contact, b: Contact) -> bool:
+    """No name on one side, or the words of one name all in the other ("Marie" and "Marie Dupont")."""
+    ka, kb = name_key(a), name_key(b)
+    if not ka or not kb:
+        return True
+    wa, wb = set(ka.split(" ")), set(kb.split(" "))
+    return wa <= wb or wb <= wa
+
+
 def match(card: Contact, existing: list[Contact], by_name: bool) -> Contact | None:
     live = [c for c in existing if not c.conflict]
     if card.uid:
@@ -505,7 +514,7 @@ def match(card: Contact, existing: list[Contact], by_name: bool) -> Contact | No
     phones = phone_keys(card)
     if phones:
         for c in live:
-            if phone_keys(c) & phones:
+            if phone_keys(c) & phones and _names_agree(card, c):  # a shared home line is not the same person
                 return c
     if by_name and name_key(card):
         for c in live:

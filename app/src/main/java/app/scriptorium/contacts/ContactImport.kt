@@ -38,14 +38,26 @@ object ContactImport {
         ignored = result.ignored,
     )
 
-    /** The existing contact [card] duplicates: same UID, then a common number, then (when [byName]) the same name. */
+    /**
+     * The existing contact [card] duplicates: same UID, then a common number when the names do not differ (a
+     * shared home line is not the same person), then (when [byName]) the same name.
+     */
     fun match(card: Contact, existing: List<Contact>, byName: Boolean): Contact? {
         val live = existing.filter { !it.conflict }
         card.uid?.let { uid -> live.firstOrNull { it.uid == uid }?.let { return it } }
         val phones = Duplicates.phoneKeys(card)
-        if (phones.isNotEmpty()) live.firstOrNull { c -> Duplicates.phoneKeys(c).any { it in phones } }?.let { return it }
+        if (phones.isNotEmpty()) {
+            live.firstOrNull { c -> Duplicates.phoneKeys(c).any { it in phones } && namesAgree(card, c) }?.let { return it }
+        }
         if (byName) Duplicates.nameKey(card)?.let { key -> live.firstOrNull { Duplicates.nameKey(it) == key }?.let { return it } }
         return null
+    }
+
+    /** No name on one side, or the words of one name all in the other ("Marie" and "Marie Dupont"). */
+    private fun namesAgree(a: Contact, b: Contact): Boolean {
+        val ka = Duplicates.nameKey(a)?.split(' ')?.toSet() ?: return true
+        val kb = Duplicates.nameKey(b)?.split(' ')?.toSet() ?: return true
+        return ka.containsAll(kb) || kb.containsAll(ka)
     }
 
     /**

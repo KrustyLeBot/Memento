@@ -55,6 +55,19 @@ class ContactsRegressionTest {
     }
 
     @Test
+    fun aSharedHomeNumberIsNotTheSamePerson() {
+        val marie = Contact(id = "m1", path = "contacts/m1.md", firstName = "Marie", lastName = "Dupont", phones = listOf(Phone("01 23 45 67 89", "domicile")))
+        val text = "BEGIN:VCARD\nVERSION:3.0\nN:Dupont;Paul;;;\nTEL;TYPE=HOME:+33 1 23 45 67 89\nEND:VCARD\n" +
+            "BEGIN:VCARD\nVERSION:3.0\nFN:Marie\nTEL;TYPE=CELL:06 00 00 00 09\nTEL;TYPE=HOME:0123456789\nEND:VCARD\n"
+        val r = VCard.parse(text)
+        assertEquals(1, ContactImport.preview(r, listOf(marie)).duplicates)
+        val upd = ContactImport.plan(r, listOf(marie), DuplicatePolicy.UPDATE, "I", 1L) { "new001" }
+        assertEquals(listOf("Paul"), upd.creates.map { it.firstName })
+        assertEquals("Marie Dupont", upd.updates.single().second.name)
+        assertEquals(1, ContactImport.plan(r, listOf(marie), DuplicatePolicy.SKIP, "I", 1L) { "new001" }.skipped)
+    }
+
+    @Test
     fun googleStarredBecomesAFavourite() {
         val text = "BEGIN:VCARD\nVERSION:3.0\nN:X;Y\nCATEGORIES:myContacts,starred\nEND:VCARD\n" +
             "BEGIN:VCARD\nVERSION:3.0\nN:Z;W\nCATEGORIES:myContacts\nEND:VCARD\n"
