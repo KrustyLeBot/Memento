@@ -216,7 +216,7 @@ def test_notes_list_keeps_its_scroll_and_the_opened_card(window):
     card.clicked.emit(card.note)
     assert window.stack.currentWidget() is window.editor
     # a note synced in meanwhile (the oldest, at the end): the list is rebuilt, its place kept
-    window.store.save(Note(path="", id=fmt.generate_id(), title="Ancienne", created=1000, updated=1000))
+    window.store.save(Note(path="", id=fmt.generate_id(), title="Ancienne", created=1_600_000_000_000, updated=1_600_000_000_000))
     window.refresh()
     window.close_editor()
     settle()
