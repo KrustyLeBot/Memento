@@ -64,6 +64,20 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        // Robolectric renders the screenshot tests (ui/screenshots) with the real resources.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // ScreenshotAudit only runs on demand: ./gradlew testDebugUnitTest -PuiAudit=<output dir>
+            val audit = project.findProperty("uiAudit")?.toString()
+            if (audit == null) it.exclude("**/screenshots/**")
+            else {
+                it.systemProperty("uiAudit", audit)
+                it.systemProperty("roborazzi.test.record", "true")
+                it.maxHeapSize = "3g"
+                // Robolectric downloads its Android jars itself; -ProbolectricRepo points it at a Maven Central mirror.
+                project.findProperty("robolectricRepo")?.let { url -> it.systemProperty("robolectric.dependency.repo.url", url) }
+            }
+        }
     }
 }
 
@@ -91,4 +105,10 @@ dependencies {
     }
 
     testImplementation("junit:junit:4.13.2")
+    // Screenshot audit of the Compose screens on the JVM (ScreenshotAudit); test-only, not in the APK.
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.43.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.43.1")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 }

@@ -417,7 +417,9 @@ private fun DayColumn(c: AgendaController, day: LocalDate, entries: List<Entry>,
                 Text(entryTitle(p.entry), color = Color.White, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = if (p.endMin - p.startMin >= 60) 2 else 1, overflow = TextOverflow.Ellipsis)
                 if (p.endMin - p.startMin >= 45) {
-                    Text(AgendaText.timeLine(p.entry, zone, h24, c.eventZoneTimes), color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp, maxLines = 1)
+                    // a week column only has room for the start: the full range was cut to "07:00 -"
+                    val time = AgendaText.timeLine(p.entry, zone, h24, c.eventZoneTimes)
+                    Text(if (w < 96.dp) time.substringBefore(" - ") else time, color = Color.White.copy(alpha = 0.85f), fontSize = 10.sp, maxLines = 1)
                 }
             }
         }

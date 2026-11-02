@@ -264,7 +264,8 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
                         }
                         Spacer(Modifier.weight(1f))
                         if (!isEvent) IconButton(onClick = { vm.deleteEditorNote() }) {
-                            Icon(Icons.Default.Delete, "Supprimer", tint = MaterialTheme.colorScheme.error)
+                            // the error red vanishes on the coral and burgundy notes: the note's own text colour there
+                            Icon(Icons.Default.Delete, "Supprimer", tint = if (ed.color == DEFAULT_COLOR) MaterialTheme.colorScheme.error else fg)
                         }
                     }
                 }
@@ -501,7 +502,7 @@ fun EditorScreen(vm: MainViewModel, ed: EditorState) {
                                         .clickable { ed.color = c.id },
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    if (ed.color == c.id) Icon(Icons.Default.Check, c.label, tint = Color.Black.copy(alpha = if (dark) 0f else 0.7f))
+                                    if (ed.color == c.id) Icon(Icons.Default.Check, c.label, tint = if (dark) Color.White else Color.Black.copy(alpha = 0.7f))
                                 }
                             }
                         }
