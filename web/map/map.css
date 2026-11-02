@@ -4,29 +4,31 @@ html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
 #map { position: absolute; inset: 0; background: var(--bg); }
 body, .maplibregl-popup-content { font: 12px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); }
 
-#legend { position: absolute; top: 8px; left: 8px; padding: 6px 9px; border-radius: 10px; background: var(--chip);
-  border: 1px solid var(--chip-border); pointer-events: none; min-width: 120px; }
+#legend { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); padding: 6px 9px; border-radius: 10px; background: var(--chip);
+  border: 1px solid var(--chip-border); pointer-events: none; min-width: 110px; z-index: 4; }
 #legend .bar { height: 6px; border-radius: 3px; margin: 4px 0 2px;
   background: linear-gradient(90deg, rgb(215, 25, 28), rgb(255, 255, 191), rgb(26, 150, 65)); }
 #legend .ends { display: flex; justify-content: space-between; font-size: 10px; opacity: 0.75; }
 #legend-avg { font-weight: 600; }
 
-#banner { position: absolute; right: 8px; bottom: 30px; padding: 6px 10px; border-radius: 10px; background: #c62828;
+#banner { z-index: 4; position: absolute; right: 8px; bottom: 30px; padding: 6px 10px; border-radius: 10px; background: #c62828;
   color: #fff; font-weight: 600; pointer-events: none; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
 
-/* Current position: unmistakable on any map, always above the lines (markers sit above the canvas). */
-.smap-pos { position: relative; width: 26px; height: 26px; pointer-events: none; }
-.smap-pos .dot { position: absolute; inset: 3px; border-radius: 50%; background: #1a73ff; border: 4px solid #fff;
-  box-sizing: border-box; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.45); }
-.smap-pos .halo { position: absolute; inset: 0; border-radius: 50%; background: rgba(26, 115, 255, 0.45);
-  animation: smap-pulse 1.8s ease-out infinite; }
+/* Current position: dominant at arm's length while hiking, the same size near or far in 3D (a DOM marker), and above
+   the peaks' labels and every line. */
+.smap-pos { width: 32px; height: 32px; pointer-events: none; z-index: 3; }
+.smap-pos .dot { position: absolute; inset: 0; border-radius: 50%; background: #1a73ff; border: 4px solid #fff;
+  box-sizing: border-box; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.5); }
+.smap-pos .halo { position: absolute; inset: -4px; border-radius: 50%; background: rgba(26, 115, 255, 0.55);
+  border: 2px solid rgba(26, 115, 255, 0.8); animation: smap-pulse 1.6s ease-out infinite; }
 .smap-pos .arrow { position: absolute; left: 50%; top: 50%; width: 0; height: 0; display: none; }
-.smap-pos .arrow::before { content: ""; position: absolute; left: -9px; top: -27px; border-left: 9px solid transparent;
-  border-right: 9px solid transparent; border-bottom: 14px solid #1a73ff; filter: drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1px #fff); }
+.smap-pos .arrow::before { content: ""; position: absolute; left: -15px; top: -42px; border-left: 15px solid transparent;
+  border-right: 15px solid transparent; border-bottom: 26px solid #1a73ff;
+  filter: drop-shadow(0 0 2px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); }
 .smap-pos.heading .arrow { display: block; }
-@keyframes smap-pulse { 0% { transform: scale(0.8); opacity: 0.9; } 100% { transform: scale(2.8); opacity: 0; } }
+@keyframes smap-pulse { 0% { transform: scale(0.9); opacity: 0.95; } 100% { transform: scale(2.6); opacity: 0; } }
 
-.smap-peak { display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+.smap-peak { z-index: 1; display: flex; flex-direction: column; align-items: center; cursor: pointer; }
 .smap-peak .label { padding: 2px 6px; border-radius: 8px; background: var(--chip); border: 1px solid var(--chip-border);
   white-space: nowrap; font-size: 11px; font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); }
 .smap-peak .stem { width: 2px; height: 30px; background: linear-gradient(var(--fg), rgba(0, 0, 0, 0)); opacity: 0.7; }

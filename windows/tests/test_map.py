@@ -217,3 +217,35 @@ def test_handler_serves_the_page_and_the_tiles(monkeypatch):
     assert view.state["setTrack"][0]["coords"][0] == [6.86, 45.9]
     view.close()
     view.deleteLater()
+
+
+# ---- contract with the page (web/map/map.js, read as text) ----
+
+def _page() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[2] / "web" / "map" / "map.js").read_text(encoding="utf-8")
+
+
+def test_every_function_the_windows_host_calls_is_in_the_page_api():
+    import re
+    from pathlib import Path
+    page = _page()
+    api = {name.strip().strip("'") for name in re.search(r"const API = \[([^\]]+)]", page).group(1).split(",")}
+    ui = Path(__file__).resolve().parents[1] / "scriptorium_win" / "ui"
+    called = set()
+    for file in ("mapview.py", "activities_view.py"):
+        called |= set(re.findall(r"\.call\(\"(\w+)\"", (ui / file).read_text(encoding="utf-8")))
+    from scriptorium_win.ui import mapview
+    called |= set(mapview.STATE_ORDER)
+    assert len(called) >= 8
+    assert called - api == set()
+
+
+def test_urls_the_page_requests_are_served():
+    page = _page()
+    assert "BASE + 't/plan/{z}/{x}/{y}'" in page
+    assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
+    assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
+    assert mapcache.parse_request("/t/plan/14/8501/5850") == mapcache.TileRequest("plan", 14, 8501, 5850)
+    assert mapcache.parse_request("/t/dem/13/4253/2915") == mapcache.TileRequest("dem", 13, 4253, 2915)
+    assert mapcache.parse_request("/peaks", "w=6.80000&s=45.90000&e=6.90000&n=46.00000") == mapcache.PeaksRequest(6.8, 45.9, 6.9, 46.0)

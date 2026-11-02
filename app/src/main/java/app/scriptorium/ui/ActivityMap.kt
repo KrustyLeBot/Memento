@@ -65,10 +65,11 @@ fun ActivityMapContent(detail: ActivityDetail, skiMap: SkiMap) {
             ActivityMapData(track, lines, dots, MapSquare.of(Bbox.of(lons, lats)!!))
         }
         if (!MapHost.begin(key)) return@LaunchedEffect
+        // the square first, as on Windows: the 3D block is built once, for this square, not first for the track's
+        MapHost.call("setSquare", MapPayload.bbox(data.square))
         if (data.track != null) MapHost.call("setTrack", data.track)
         MapHost.call("setLines", data.lines)
         MapHost.call("setDots", data.dots)
-        MapHost.call("setSquare", MapPayload.bbox(data.square))
         MapHost.call("fit")
     }
 }
