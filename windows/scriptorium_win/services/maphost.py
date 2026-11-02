@@ -304,6 +304,14 @@ def profile() -> QWebEngineProfile:
     return _profile
 
 
+def release_profile() -> None:
+    """Deletes the profile once every page using it is gone (Qt warns, and may crash, the other way round)."""
+    global _profile
+    if _profile is not None and shiboken6.isValid(_profile):
+        shiboken6.delete(_profile)
+    _profile = None
+
+
 def tile_store() -> TileStore:
     return profile().findChild(TileStore)
 

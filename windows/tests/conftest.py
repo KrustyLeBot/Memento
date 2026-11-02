@@ -24,3 +24,17 @@ def no_map_network(monkeypatch):
     monkeypatch.setattr(maphost.TileStore, "get", lambda self, tile, done: done(None))
     monkeypatch.setattr(maphost.TileStore, "peaks", lambda self, req, done: done([]))
     monkeypatch.setattr(mapview.LiveLocation, "enabled", False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def release_web_pages():
+    """At the end, as the app does at exit: every page (windows of the tests) before the map's profile."""
+    yield
+    import shiboken6
+    from PySide6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        return
+    for widget in QApplication.topLevelWidgets():
+        if shiboken6.isValid(widget) and widget.parent() is None:
+            shiboken6.delete(widget)
+    maphost.release_profile()
