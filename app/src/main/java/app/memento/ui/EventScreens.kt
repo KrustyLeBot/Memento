@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
@@ -70,7 +71,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,6 +88,7 @@ import app.memento.agenda.AgendaLayout
 import app.memento.agenda.AgendaText
 import app.memento.agenda.EditMode
 import app.memento.agenda.Entry
+import app.memento.agenda.Links
 import app.memento.agenda.Event
 import app.memento.agenda.EventEditor
 import app.memento.agenda.Freq
@@ -131,6 +140,28 @@ private fun ScopeDialog(title: String, onDismiss: () -> Unit, onPick: (SeriesSco
 
 /** Detail of an event occurrence: when, where, repetition, reminders, the description (the note). */
 @OptIn(ExperimentalMaterial3Api::class)
+/** Opens [url] in the browser (ACTION_VIEW), a snackbar when nothing can. */
+private fun openLink(context: android.content.Context, vm: MainViewModel, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: android.content.ActivityNotFoundException) {
+        vm.snack = app.memento.Snack("Aucune application pour ouvrir ce lien")
+    }
+}
+
+/** [text] with its links ([Links.spans]) clickable. */
+private fun linkified(text: String, color: Color, open: (String) -> Unit): AnnotatedString = buildAnnotatedString {
+    var at = 0
+    for ((range, url) in Links.spans(text)) {
+        append(text.substring(at, range.first))
+        withLink(LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = color, textDecoration = TextDecoration.Underline))) { open(url) }) {
+            append(text.substring(range.first, range.last + 1))
+        }
+        at = range.last + 1
+    }
+    append(text.substring(at))
+}
+
 @Composable
 fun EventDetailScreen(vm: MainViewModel) {
     val c = vm.agenda
@@ -225,8 +256,11 @@ fun EventDetailScreen(vm: MainViewModel) {
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         val text = event.note.plainBody().trim()
-                        Text(text.ifEmpty { "Ajouter une description, une liste, des photos…" },
-                            color = if (text.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                        if (text.isEmpty()) Text("Ajouter une description, une liste, des photos…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else {
+                            val linkColor = MaterialTheme.colorScheme.primary
+                            Text(remember(text, linkColor) { linkified(text, linkColor) { openLink(context, vm, it) } }, color = MaterialTheme.colorScheme.onSurface)
+                        }
                         val files = event.note.attachments.size + (if (event.note.pdf != null) 1 else 0)
                         if (files > 0) Text("$files pièce${if (files > 1) "s" else ""} jointe${if (files > 1) "s" else ""}",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -234,6 +268,14 @@ fun EventDetailScreen(vm: MainViewModel) {
                 }
                 if (event.isSeries) Text("La description est commune à toute la série.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+            val links = remember(event.body) { Links.extract(event.body) }
+            if (links.isNotEmpty()) InfoRow(Icons.Default.Link) {
+                Text("Liens", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                links.forEach { link ->
+                    Text(link.label, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().clickable { openLink(context, vm, link.url) }.padding(vertical = 6.dp))
+                }
             }
             if (event.importId != null || event.warnings.isNotEmpty()) {
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))

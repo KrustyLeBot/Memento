@@ -150,9 +150,17 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   than `DTSTART`'s is kept as `end_tz` (no conversion); a UTC `DTEND` is converted to the start's zone. A single UTC
   event takes the device zone; a UTC **series** keeps `tz: UTC` so it does not shift with daylight saving. Overrides
   (`RECURRENCE-ID`) become exception files; HTML descriptions become text; attendees are listed as text.
+  Target: a mail invitation goes to the default calendar; a new calendar is proposed only for a real calendar export
+  (`X-WR-CALNAME`, more than 20 events, or a `.zip`), named from `X-WR-CALNAME` (else the file name). Up to 5 events
+  are listed one by one (title, time in the event's zone and on the device, place); a single invitation gets a
+  short "Ajouter cet événement à …" dialog ("Plus d'options…" opens the full form). `LOCATION` placeholders
+  (`null`, `undefined`, `None`, blank) are no place. A Proton Meet / Google Meet / Teams / Zoom link of the
+  description becomes the first line "Visio : …" unless it is already there.
+- Event detail: a "Liens" section lists every link of the description (the meeting link first, "Rejoindre la visio
+  (Proton Meet)"), at most 10, each opening the browser; links in the description text are clickable too.
 - Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used (`end_tz` included,
   written as `DTEND;TZID=<end_tz>`); same bytes on Android
-  and Windows. Shared test vectors (synthetic Google, Proton, Outlook and airline-booking shapes): `testdata/agenda/`.
+  and Windows. Shared test vectors (synthetic Google, Proton, Outlook, airline-booking and mail-invitation shapes): `testdata/agenda/`.
 - Windows: views Agenda, Mois, Semaine, Jour (keys T, ← →, Ctrl+F), the event editor (repetition presets and a
   custom editor writing plain `RRULE`s; a rule it cannot express is shown as "Règle importée" and kept as is),
   series scopes "cet événement" / "tous les événements", delete with undo, calendars, import and export, and

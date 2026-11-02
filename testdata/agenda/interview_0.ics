@@ -1,0 +1,50 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:icalendar-ruby
+CALSCALE:GREGORIAN
+BEGIN:VTIMEZONE
+TZID:Europe/Zurich
+BEGIN:DAYLIGHT
+DTSTART:20270328T030000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3
+TZNAME:CEST
+END:DAYLIGHT
+BEGIN:STANDARD
+DTSTART:20261025T020000
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10
+TZNAME:CET
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+DTSTAMP:20261020T115905Z
+UID:00000000-test-4000-8000-interview001
+DTSTART;TZID=Europe/Zurich:20261026T170000
+DTEND;TZID=Europe/Zurich:20261026T180000
+DESCRIPTION:Hi Camille\,\n\nThank you for sharing your availability for the
+  Senior .NET Developer (Desktop/SDK) position.\n\nI'm pleased to confirm y
+ our interview schedule below:\n\nDate/Time: Oct 26\, 2026 17:00-18:00 (GMT
+ +01:00) Bern\nInterviewers: Alex Martin\, Sam Durand\n\nLink to join Meeti
+ ng: https://meet.proton.me/join/id-EXAMPLE001#pwd-testvector42\n\nIf you h
+ ave any trouble joining\, please try opening the meeting link in a differe
+ nt browser\, such as Chrome\, Edge\, Safari or Brave.\n\nPlease take a mom
+ ent to check the date\, time and time zone are correct before your intervi
+ ew.\n\nBefore your interview\n---------------------\n\n* The interview inv
+ itation includes an .ics calendar file\, which you can add to your preferr
+ ed calendar so you receive any reminders from your calendar app.\n\n* If y
+ ou're no longer able to attend\, or you're running late on the day\, pleas
+ e let me know as soon as possible by replying to this email so we can info
+ rm the interview team.\n\nThe interviewer may use an AI note-taker to help
+  them stay fully focused on your conversation. If you'd prefer they don't 
+ use it\, please let me know by replying to this email before your intervie
+ w\, and I'll let the interviewer know. That's absolutely fine.\n\nIf you h
+ ave any questions before the interview\, don't hesitate to get in touch.\n
+ \nWe look forward to speaking with you. Best of luck with your interview!\
+ n\nBest regards\,\n\nJordan Leroy
+LOCATION:null
+SUMMARY:Interview with Proton
+END:VEVENT
+END:VCALENDAR

@@ -476,6 +476,56 @@ def test_import_dialog_preview_import_and_undo(window, tmp_path):
     assert [c.name for c in screen.data.settings.calendars] == ["Perso"]
 
 
+def test_invitation_opens_the_compact_dialog_into_the_default_calendar(window):
+    screen = window.agenda
+    window.refresh()
+    seen = {}
+
+    def drive(dialog):
+        seen["page"] = dialog.pages.currentIndex()
+        seen["button"] = dialog.compact_ok.text()
+        seen["card"] = [w.text() for w in dialog.findChildren(QLabel) if "Interview with Proton" in w.text()]
+        dialog.start_import()
+        seen["title"] = dialog.report_title.text()
+
+    screen.import_ics([VECTORS / "interview_0.ics"], dialog_hook=drive)
+    assert seen["page"] == 3 and seen["button"] == "Ajouter à « Perso »"
+    assert any("lun. 26 oct. 2026, 17:00–18:00 (Zurich)" in t for t in seen["card"]), seen["card"]
+    assert seen["title"].startswith("Import terminé : 1 événement")
+    assert [c.name for c in screen.data.settings.calendars] == ["Perso"]
+    files = agenda_files(window.store.root)
+    assert len(files) == 1 and "Visio : https://meet.proton.me/" in next(iter(files.values()))
+
+
+def test_invitation_more_options_switches_to_the_full_form(window):
+    screen = window.agenda
+    window.refresh()
+
+    def drive(dialog):
+        dialog._show_full()
+        assert dialog.pages.currentIndex() == 0 and dialog.rows[0]["target"].currentData() == "perso"
+        dialog.rows[0]["target"].setCurrentIndex(dialog.rows[0]["target"].findData("__new__"))
+        assert dialog.rows[0]["name"].text() == "interview_0"
+        dialog.start_import()
+
+    screen.import_ics([VECTORS / "interview_0.ics"], dialog_hook=drive)
+    assert [c.name for c in screen.data.settings.calendars] == ["Perso", "interview_0"]
+
+
+def test_detail_card_lists_the_links(window):
+    body = "Visio : https://meet.proton.me/join/id-X\n\nDoc : <https://exemple.fr/doc>, et https://meet.proton.me/join/id-X."
+    ev = new_event("Entretien", datetime(2026, 11, 3, 17), datetime(2026, 11, 3, 18), tz=ZONE)
+    ev = ev.with_note(body=body)
+    entry = build_entries(AgendaSources(events=[ev]), datetime(2026, 11, 3, tzinfo=timezone.utc),
+                          datetime(2026, 11, 4, tzinfo=timezone.utc), ZONE).entries[0]
+    card = EventDetailDialog(window, entry, CalendarSettings(), ZONE, date(2026, 11, 2), False)
+    texts = [w.text() for w in card.findChildren(QLabel)]
+    assert "Liens" in texts
+    assert '<a href="https://meet.proton.me/join/id-X">Rejoindre la visio (Proton Meet)</a>' in texts
+    assert '<a href="https://exemple.fr/doc">exemple.fr/doc</a>' in texts
+    assert sum(1 for t in texts if t.startswith("<a href=")) == 2
+
+
 def test_import_zip_into_existing_calendar_then_past_imports(window, tmp_path):
     screen = window.agenda
     archive = tmp_path / "export.zip"

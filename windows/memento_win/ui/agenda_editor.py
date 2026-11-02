@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QCompleter, Q
                                QVBoxLayout, QWidget)
 
 from ..core import note as fmt
-from ..core.agenda import rules, zones
+from ..core.agenda import links, rules, zones
 from ..core.agenda.calendars import CalendarSettings
 from ..core.agenda.entries import Entry, EntryKind
 from ..core.agenda.frdates import (MONTHS, WEEKDAYS, alert_label, clock, day_number, departure_arrival, long_date,
@@ -872,11 +872,30 @@ class EventDetailDialog(QDialog):
         if ev is not None and ev.body.strip():
             body = QTextBrowser()
             body.setOpenExternalLinks(True)
-            body.setMarkdown(ev.body)
+            body.setMarkdown(links.markdown_autolinks(ev.body))
             body.setMinimumHeight(80)
             body.setMaximumHeight(260)
             body.setStyleSheet(f"QTextBrowser {{ background: {s.surface_container}; border: none; border-radius: 8px; padding: 6px; }}")
             layout.addWidget(body)
+        found = links.extract(ev.body) if ev is not None else []
+        if found:
+            box = QGridLayout()
+            box.setColumnStretch(1, 1)
+            box.setHorizontalSpacing(10)
+            ic = QLabel()
+            ic.setPixmap(icons.icon("link", s.on_surface_variant, 18).pixmap(18, 18))
+            box.addWidget(ic, 0, 0, Qt.AlignmentFlag.AlignTop)
+            heading = QLabel("Liens")
+            heading.setStyleSheet(f"color: {s.on_surface_variant}; font-weight: 600;")
+            box.addWidget(heading, 0, 1)
+            for r, link in enumerate(found, start=1):
+                row = QLabel(f'<a href="{_html(link.url)}">{_html(link.label)}</a>')
+                row.setToolTip(link.url)
+                row.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse
+                                            | Qt.TextInteractionFlag.LinksAccessibleByKeyboard)
+                row.linkActivated.connect(lambda _=None, u=link.url: QDesktopServices.openUrl(QUrl(u)))
+                box.addWidget(row, r, 1)
+            layout.addLayout(box)
         if ev is not None and ev.warnings:
             warn = QLabel("\n".join(ev.warnings))
             warn.setWordWrap(True)

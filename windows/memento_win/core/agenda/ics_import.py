@@ -8,7 +8,7 @@
 4. `undo_import` deletes every file of an import and removes the exdates its exception files added.
 
 Mapping (RFC 5545 -> file), identical on Android (`IcsImport.kt`):
-- SUMMARY -> title; LOCATION; UID -> uid; STATUS TENTATIVE/CONFIRMED -> status; CANCELLED: not imported
+- SUMMARY -> title; LOCATION ("null", "undefined", "None", blank: none); UID -> uid; STATUS TENTATIVE/CONFIRMED -> status; CANCELLED: not imported
   (an overridden occurrence that is cancelled becomes an exdate of its series).
 - DTSTART/DTEND/DURATION: VALUE=DATE -> all-day (exclusive DTEND -> inclusive end); TZID -> wall time + IANA
   zone (zones.resolve_tzid; unresolved -> device zone, counted); `...Z` -> wall time of the device zone + that
@@ -17,8 +17,12 @@ Mapping (RFC 5545 -> file), identical on Android (`IcsImport.kt`):
 - RRULE verbatim; EXDATE (every line, comma lists) converted to the series' form; RDATE: one extra single event
   per date; RECURRENCE-ID overrides -> exception files (recurrence_of / recurrence_at) + exdate on the series.
 - VALARM with a TRIGGER relative to the start (ACTION other than EMAIL) -> alerts; others ignored (counted).
-- DESCRIPTION -> body (HTML converted to text, links kept); X-GOOGLE-CONFERENCE / URL not already in the
-  description -> a first line "Visio : …" / "Lien : …"; ORGANIZER/ATTENDEE -> "Participants :" list at the end.
+- DESCRIPTION -> body (HTML converted to text, links kept); X-GOOGLE-CONFERENCE not already in the description
+  -> a first line "Visio : …"; without it, a meeting link of the description (`meeting_link`: Proton Meet, Meet,
+  Teams, Zoom) not already on its first line -> "Visio : …"; else a URL not in the description -> "Lien : …";
+  ORGANIZER/ATTENDEE -> "Participants :" list at the end.
+- Target: a mail invitation goes to the default calendar; only a calendar export (`calendar_export`) proposes a
+  calendar named after it (X-WR-CALNAME, else the file name).
 - Every other property of the VEVENT is kept verbatim in `ical_extra` (DTSTAMP and X-ALT-DESC excepted:
   regenerated / redundant); other components (VTODO, VJOURNAL…) and sub-components are ignored, counted.
 """
@@ -33,9 +37,10 @@ from typing import BinaryIO, Callable
 
 from .. import note as fmt
 from ..note import Note
-from . import ics, zones
+from . import frdates, ics, zones
+from .links import meeting_link
 from .calendars import Calendar, CalendarSettings, next_color, unique_calendar_id
-from .model import Event, fnv32, format_stamp, now_ms, stamp_date
+from .model import Event, fnv32, format_stamp, is_all_day, now_ms, stamp_date
 from .recurrence import MAX_ITERATIONS, series_starts
 from .store import AgendaStore
 
@@ -44,16 +49,26 @@ CONSUMED = {"UID", "SUMMARY", "DESCRIPTION", "LOCATION", "STATUS", "DTSTART", "D
             "EXDATE", "RDATE", "RECURRENCE-ID", "DTSTAMP", "X-ALT-DESC"}
 DUPLICATES = ("skip", "update", "keep")
 UNTITLED = "(Sans titre)"
+EXPORT_MIN_EVENTS = 20   # more events than this make a file without X-WR-CALNAME a calendar export
+LISTED_MAX = 5           # up to this many events, the preview lists each one
+_NO_VALUE = {"null", "undefined", "none"}
+
+
+def clean_location(raw: str | None) -> str | None:
+    """A LOCATION as written by the sender; the placeholders some generators write for "none" are no location."""
+    value = (raw or "").strip()
+    return None if not value or value.lower() in _NO_VALUE else value
 
 
 @dataclass
 class IcsSource:
     name: str                          # file name, gives the calendar name when the file has none
     open: Callable[[], BinaryIO]
+    from_archive: bool = False         # one .ics of a .zip (Google's export): a calendar export
 
     @staticmethod
-    def from_bytes(name: str, data: bytes) -> "IcsSource":
-        return IcsSource(name, lambda: io.BytesIO(data))
+    def from_bytes(name: str, data: bytes, from_archive: bool = False) -> "IcsSource":
+        return IcsSource(name, lambda: io.BytesIO(data), from_archive)
 
     @staticmethod
     def from_path(path: Path) -> "IcsSource":
@@ -73,7 +88,7 @@ def expand_sources(sources: list[IcsSource]) -> list[IcsSource]:
             names = sorted(n for n in archive.namelist() if n.lower().endswith(".ics") and not n.endswith("/"))
         for name in names:
             out.append(IcsSource(name.rsplit("/", 1)[-1],
-                                 lambda name=name: io.BytesIO(zipfile.ZipFile(io.BytesIO(data)).read(name))))
+                                 lambda name=name: io.BytesIO(zipfile.ZipFile(io.BytesIO(data)).read(name)), True))
     return out
 
 
@@ -106,7 +121,19 @@ class CalendarPreview:
     last: date | None = None
     duplicates: int = 0        # same UID already in the target calendar
     errors: list[str] = field(default_factory=list)  # malformed events and lines, skipped (French)
-    suggested_calendar: str | None = None  # existing calendar with the same name, else None (new one)
+    # where the events go by default (`suggested_calendar`): the default calendar, or for a calendar export the
+    # existing calendar of the same name, else None (a new one)
+    suggested_calendar: str | None = None
+    calendar_export: bool = False  # X-WR-CALNAME, more than EXPORT_MIN_EVENTS events, or from a .zip
+    items: list[ImportItem] | None = None  # each event when there are at most LISTED_MAX
+
+
+@dataclass
+class ImportItem:
+    """One event of a small import as the preview lists it (`when_text`)."""
+    title: str
+    when_text: str
+    location: str | None
 
 
 @dataclass
@@ -246,8 +273,11 @@ def build_body(comp: ics.Component) -> str:
     parts = []
     conference = comp.first("X-GOOGLE-CONFERENCE")
     url = comp.first("URL")
+    described = meeting_link(desc) if conference is None or not conference.value.strip() else None
     if conference is not None and conference.value.strip() and conference.value.strip() not in desc:
         parts.append(f"Visio : {conference.value.strip()}")
+    elif described is not None and described not in desc.split("\n", 1)[0]:
+        parts.append(f"Visio : {described}")
     elif url is not None and url.value.strip() and url.value.strip() not in desc:
         parts.append(f"Lien : {url.value.strip()}")
     if desc:
@@ -341,7 +371,7 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
     summary = comp.first("SUMMARY")
     title = ics.unescape_text(summary.value).strip() if summary else ""
     location_line = comp.first("LOCATION")
-    location = ics.unescape_text(location_line.value).strip() if location_line else ""
+    location = clean_location(ics.unescape_text(location_line.value) if location_line else None)
     uid_line = comp.first("UID")
     uid = uid_line.value.strip() if uid_line else None
     rrule_line = comp.first("RRULE")
@@ -349,7 +379,7 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
     note = Note(path="", id="", title=title or UNTITLED, body=body, created=now, updated=now)
     event = Event(
         note=note, start=start, end=end, tz=tz, end_tz=end_tz, rrule=rrule_line.value.strip() if rrule_line else None,
-        exdate=exdate, alerts=_alerts(comp, preview), location=location or None, status=status, uid=uid or None,
+        exdate=exdate, alerts=_alerts(comp, preview), location=location, status=status, uid=uid or None,
         ical_hash=fnv32(body), ical_extra=[p.raw for p in comp.lines if p.name not in CONSUMED],
     )
     if unresolved:
@@ -439,6 +469,8 @@ def parse_calendar(source: IcsSource, device_zone: str, now: int | None = None) 
                 parsed.events.append(event)
                 parsed.events.extend(_rdate_copy(event, s) for s in rdates if s != event.start)
         _summarise(parsed, preview, device_zone)
+        preview.calendar_export = bool(name_line and name_line.value.strip()) or source.from_archive \
+            or preview.events > EXPORT_MIN_EVENTS
         parsed.preview = preview
         out.append(parsed)
     return out
@@ -455,6 +487,54 @@ def _summarise(parsed: ParsedCalendar, preview: CalendarPreview, device_zone: st
     days += [stamp_date(o.event.start) for o in parsed.overrides if o.event is not None]
     if days:
         preview.first, preview.last = min(days), max(days)
+    listed = parsed.events + [o.event for o in parsed.overrides if o.event is not None and o.uid not in series_uids]
+    if not listed or len(listed) > LISTED_MAX:
+        preview.items = None
+    else:
+        listed.sort(key=lambda e: (stamp_date(e.start), format_stamp(e.start)))
+        preview.items = [ImportItem(e.title, when_text(e, device_zone), e.location) for e in listed]
+
+
+def _day(d: date) -> str:
+    return f"{frdates.WEEKDAYS_SHORT[d.weekday()]} {d.day} {frdates.MONTHS_SHORT[d.month - 1]} {d.year}"
+
+
+def _city(tz_name: str) -> str:
+    return tz_name.rsplit("/", 1)[-1].replace("_", " ")
+
+
+def when_text(event: Event, device_zone: str) -> str:
+    """"lun. 26 oct. 2026, 17:00–18:00 (Zurich)", in the event's zone, + " · soit lun. 26 oct. 2026, 12:00–13:00
+    (New York)" when the device's clock reads otherwise; a flight "… 10:00 (Paris) → 13:00 (New York)"; all-day
+    "du … au …"; " · série" for a series. Same text as Android's `IcsImport.whenText`."""
+    start, end, tz, end_tz = event.start, event.end, event.tz, event.end_tz
+    if is_all_day(start):
+        last = stamp_date(end) if end is not None else None
+        text = _day(start) if last is None or last == start else f"du {_day(start)} au {_day(last)}"
+    else:
+        def end_text(at: datetime, origin: datetime) -> str:
+            return (f"{_day(at.date())}, " if at.date() != origin.date() else "") + frdates.clock(at)
+
+        text = f"{_day(start.date())}, {frdates.clock(start)}"
+        if tz and end_tz and end is not None:
+            text += f" ({_city(tz)}) → {end_text(end, start)} ({_city(end_tz)})"
+        else:
+            if end is not None:
+                text += "–" + end_text(end, start)
+            if tz:
+                text += f" ({_city(tz)})"
+        if tz and zones.is_valid(tz) and tz != device_zone:
+            device = zones.zone(device_zone)
+            here = zones.to_wall(zones.to_instant(start, zones.zone(tz)), device)
+            if here != start:
+                text += f" · soit {_day(here.date())}, {frdates.clock(here)}"
+                if end is not None:
+                    end_zone = zones.zone(end_tz if end_tz and zones.is_valid(end_tz) else tz)
+                    text += "–" + end_text(zones.to_wall(zones.to_instant(end, end_zone), device), here)
+                text += f" ({_city(device_zone)})"
+    if event.rrule:
+        text += " · série"
+    return text
 
 
 def read_sources(sources: list[IcsSource], device_zone: str, now: int | None = None) -> list[ParsedCalendar]:
@@ -465,15 +545,26 @@ def read_sources(sources: list[IcsSource], device_zone: str, now: int | None = N
     return out
 
 
+def suggested_calendar(p: ParsedCalendar, settings: CalendarSettings) -> str | None:
+    """Where `p` goes when the user does not choose: the default calendar (a mail invitation is not a calendar);
+    for a calendar export, the existing calendar of the same name, else None (a new one named after it)."""
+    if p.preview is not None and p.preview.calendar_export:
+        match = next((c for c in settings.calendars if fmt.fold(c.name) == fmt.fold(p.name)), None)
+        return match.id if match else None
+    default = settings.default_calendar().id
+    return default if any(c.id == default for c in settings.calendars) else None
+
+
 def preview(parsed: list[ParsedCalendar], existing: list[Event], settings: CalendarSettings) -> list[CalendarPreview]:
-    """Fills `suggested_calendar` (an existing calendar of the same name) and `duplicates`."""
+    """Fills `suggested_calendar` (`suggested_calendar()`) and `duplicates` (same UID already there)."""
     out = []
     for p in parsed:
         pv = p.preview
-        match = next((c for c in settings.calendars if fmt.fold(c.name) == fmt.fold(p.name)), None)
-        pv.suggested_calendar = match.id if match else None
-        if match is not None:
-            uids = {e.uid for e in existing if e.uid and settings.calendar(e.calendar).id == match.id and not e.recurrence_of}
+        target = suggested_calendar(p, settings)
+        pv.suggested_calendar = target
+        pv.duplicates = 0
+        if target is not None:
+            uids = {e.uid for e in existing if e.uid and settings.calendar(e.calendar).id == target and not e.recurrence_of}
             pv.duplicates = sum(1 for e in p.events if e.uid in uids)
         out.append(pv)
     return out
@@ -484,14 +575,15 @@ def preview(parsed: list[ParsedCalendar], existing: list[Event], settings: Calen
 @dataclass
 class ImportTarget:
     calendar_id: str | None = None   # an existing calendar; None = a new one
-    name: str | None = None          # new calendar: its name (default: the file's calendar name)
+    name: str | None = None          # new calendar: its name (default: X-WR-CALNAME, else the file's name)
     color: str | None = None         # new calendar: its colour (default: the next free palette colour)
     skip: bool = False               # do not import this calendar
 
 
 @dataclass
 class ImportOptions:
-    targets: dict[int, ImportTarget] = field(default_factory=dict)  # by index in the parsed list
+    # by index in the parsed list; missing: suggested_calendar() (a new calendar when None)
+    targets: dict[int, ImportTarget] = field(default_factory=dict)
     since: date | None = None        # "depuis le …": events ending before are left out
     duplicates: str = "update"       # "skip" | "update" | "keep" (matched by UID in the target calendar)
 
@@ -573,12 +665,13 @@ def apply_import(store: AgendaStore, parsed: list[ParsedCalendar], options: Impo
     if options.duplicates not in DUPLICATES:
         raise ValueError(f"politique de doublons inconnue : {options.duplicates}")
     report = ImportReport(import_id)
+    original = CalendarSettings(list(settings.calendars), settings.default)
     total = sum(len(p.events) + len(p.overrides) for p in parsed)
     done = 0
     by_id = {e.id: e for e in existing}
 
     for index, p in enumerate(parsed):
-        target = options.targets.get(index) or ImportTarget(calendar_id=p.preview.suggested_calendar if p.preview else None)
+        target = options.targets.get(index) or ImportTarget(calendar_id=suggested_calendar(p, original))
         if target.skip:
             continue
         if target.calendar_id and any(c.id == target.calendar_id for c in settings.calendars):

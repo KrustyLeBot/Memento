@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 from ..core.agenda.calendars import PALETTE, CalendarSettings, next_color
 from ..core.agenda.frdates import short_date
-from ..core.agenda.ics_import import CalendarPreview, ImportOptions, ImportReport, ImportTarget, ParsedCalendar
+from ..core.agenda.ics_import import (CalendarPreview, ImportItem, ImportOptions, ImportReport, ImportTarget,
+                                      ParsedCalendar)
 from ..core.agenda.model import Event
 from . import theme
 from .agenda_editor import color_icon, date_edit, from_qdate, input_style
@@ -75,6 +76,17 @@ def preview_line(pv: CalendarPreview, today: date) -> str:
     return " · ".join(parts)
 
 
+def items_html(items: list[ImportItem]) -> str:
+    """Each event of a small import: title, when (its zone, and the device's when it differs), place."""
+    rows = []
+    for item in items:
+        row = f"<b>{_html(item.title)}</b><br>{_html(item.when_text)}"
+        if item.location:
+            row += f"<br>{_html(item.location)}"
+        rows.append(row)
+    return "<br><br>".join(rows)
+
+
 def warning_line(pv: CalendarPreview) -> str:
     parts = []
     if pv.ignored:
@@ -113,7 +125,7 @@ class ImportDialog(QDialog):
         page = QWidget()
         v = QVBoxLayout(page)
         v.setContentsMargins(0, 0, 0, 0)
-        intro = QLabel("Rien n'est encore écrit. Choisis où va chaque agenda du fichier.")
+        intro = QLabel("Rien n'est encore écrit. Choisis où vont les événements du fichier.")
         intro.setStyleSheet(f"color: {s.on_surface_variant};")
         v.addWidget(intro)
         scroll = QScrollArea()
@@ -141,6 +153,11 @@ class ImportDialog(QDialog):
                 if pv.errors:
                     w.setToolTip("\n".join(pv.errors[:30]))
                 g.addWidget(w, 2, 0, 1, 4)
+            if pv.items:
+                items = QLabel(items_html(pv.items))
+                items.setWordWrap(True)
+                items.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                g.addWidget(items, 3, 0, 1, 4)
             target = QComboBox()
             target.addItem("Nouvel agenda", NEW)
             for cal in settings.calendars:
@@ -154,11 +171,11 @@ class ImportDialog(QDialog):
             color_button = ColorButton(color)
             dup = QLabel()
             dup.setStyleSheet(f"color: {s.on_surface_variant};")
-            g.addWidget(QLabel("Dans"), 3, 0)
-            g.addWidget(target, 3, 1)
-            g.addWidget(name, 3, 2)
-            g.addWidget(color_button, 3, 3)
-            g.addWidget(dup, 4, 0, 1, 4)
+            g.addWidget(QLabel("Dans"), 4, 0)
+            g.addWidget(target, 4, 1)
+            g.addWidget(name, 4, 2)
+            g.addWidget(color_button, 4, 3)
+            g.addWidget(dup, 5, 0, 1, 4)
             g.setColumnStretch(2, 1)
             row = {"target": target, "name": name, "color": color_button, "dup": dup, "parsed": p}
             self.rows.append(row)
@@ -241,6 +258,67 @@ class ImportDialog(QDialog):
         v.addLayout(row)
         self.pages.addWidget(page)
 
+        # ---- one event of a mail invitation: "Ajouter cet événement à …" ----
+        self.compact = None
+        single = previews[0].items if len(previews) == 1 and not previews[0].calendar_export else None
+        if single and len(single) == 1:
+            page = QWidget()
+            v = QVBoxLayout(page)
+            card = QLabel(items_html(single))
+            card.setWordWrap(True)
+            card.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            card.setStyleSheet(f"background: {s.surface_container}; border-radius: 12px; padding: 12px;")
+            v.addWidget(card)
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Ajouter cet événement à"))
+            self.compact = QComboBox()
+            for cal in settings.calendars:
+                self.compact.addItem(color_icon(cal.color), cal.name, cal.id)
+            self.compact.setCurrentIndex(max(0, self.compact.findData(previews[0].suggested_calendar)))
+            row.addWidget(self.compact, 1)
+            v.addLayout(row)
+            self.compact_dup = QLabel()
+            self.compact_dup.setStyleSheet(f"color: {s.on_surface_variant};")
+            v.addWidget(self.compact_dup)
+            self.compact.currentIndexChanged.connect(self._compact_changed)
+            v.addStretch()
+            buttons = QHBoxLayout()
+            more = QPushButton("Plus d'options…")
+            more.setToolTip("Nouvel agenda, doublons, date de début")
+            more.clicked.connect(self._show_full)
+            buttons.addWidget(more)
+            buttons.addStretch()
+            cancel = QPushButton("Annuler")
+            cancel.clicked.connect(self.reject)
+            buttons.addWidget(cancel)
+            self.compact_ok = QPushButton()
+            self.compact_ok.setObjectName("primary")
+            self.compact_ok.setDefault(True)
+            self.compact_ok.clicked.connect(self.start_import)
+            buttons.addWidget(self.compact_ok)
+            v.addLayout(buttons)
+            self.pages.addWidget(page)
+            self._compact_changed()
+            self.setWindowTitle("Ajouter un événement")
+            self.setMinimumSize(480, 260)
+            self.pages.setCurrentWidget(page)
+
+    def _compact_changed(self) -> None:
+        cal = self.settings.calendar(self.compact.currentData())
+        self.compact_ok.setText(f"Ajouter à « {cal.name} »")
+        uids = {e.uid for e in self.existing if e.uid and self.settings.calendar(e.calendar).id == cal.id and not e.recurrence_of}
+        present = any(e.uid in uids for e in self.parsed[0].events)
+        self.compact_dup.setText("Déjà présent dans cet agenda : il sera mis à jour." if present else "")
+
+    def _show_full(self) -> None:
+        """The full form, its target set to the calendar chosen in the compact view."""
+        target = self.rows[0]["target"]
+        target.setCurrentIndex(max(0, target.findData(self.compact.currentData())))
+        self.compact = None
+        self.setWindowTitle("Importer un agenda (.ics)")
+        self.setMinimumSize(640, 520)
+        self.pages.setCurrentIndex(0)
+
     def _target_changed(self, row: dict) -> None:
         data = row["target"].currentData()
         row["name"].setVisible(data == NEW)
@@ -261,6 +339,8 @@ class ImportDialog(QDialog):
             self.import_button.setEnabled(any(r["target"].currentData() != SKIP for r in self.rows))
 
     def options(self) -> ImportOptions:
+        if self.compact is not None:
+            return ImportOptions({0: ImportTarget(calendar_id=self.compact.currentData())})
         targets = {}
         for i, r in enumerate(self.rows):
             data = r["target"].currentData()

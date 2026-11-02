@@ -61,6 +61,7 @@ import app.memento.agenda.Calendar
 import app.memento.agenda.CalendarSettings
 import app.memento.agenda.DuplicatePolicy
 import app.memento.agenda.IcsImportState
+import app.memento.agenda.ImportItem
 import app.memento.agenda.ImportOptions
 import app.memento.agenda.ImportTarget
 import app.memento.suite.ConfirmDialog
@@ -134,8 +135,65 @@ fun IcsImportDialog(c: AgendaController, settings: CalendarSettings) {
     }
 }
 
+/** Each event of a small import: title, when (its zone, and the device's when it differs), place. */
+@Composable
+private fun ImportItems(items: List<ImportItem>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items.forEach { item ->
+            Column {
+                Text(item.title, fontWeight = FontWeight.SemiBold)
+                Text(item.whenText, style = MaterialTheme.typography.bodySmall)
+                item.location?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        }
+    }
+}
+
+/** "Ajouter cet événement à …": one event of a mail invitation, the target switchable, the full form one tap away. */
+@Composable
+private fun AddOneEvent(c: AgendaController, s: IcsImportState.Preview, settings: CalendarSettings, item: ImportItem, more: () -> Unit) {
+    val pv = s.previews[0]
+    var calendarId by remember(s) { mutableStateOf(pv.suggestedCalendar ?: settings.defaultCalendar().id) }
+    var menu by remember { mutableStateOf(false) }
+    val target = settings.calendar(calendarId)
+    AlertDialog(
+        onDismissRequest = { c.cancelImport() },
+        title = { Text("Ajouter cet événement") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ImportItems(listOf(item))
+                Box {
+                    Row(Modifier.clickable { menu = true }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ColorDot(target.color, Modifier.size(12.dp))
+                        Text("Agenda : ${target.name}", Modifier.padding(start = 8.dp), color = MaterialTheme.colorScheme.primary)
+                    }
+                    DropdownMenu(menu, { menu = false }) {
+                        settings.calendars.forEach { k ->
+                            DropdownMenuItem({ Text(k.name) }, { calendarId = k.id; menu = false }, leadingIcon = { ColorDot(k.color) })
+                        }
+                        DropdownMenuItem({ Text("Nouvel agenda, autres options…") }, { menu = false; more() })
+                    }
+                }
+                if (calendarId == pv.suggestedCalendar && pv.duplicates > 0) {
+                    Text("Déjà présent dans cet agenda : il sera mis à jour.", style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = more) { Text("Plus d'options…") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { c.confirmImport(ImportOptions(mapOf(0 to ImportTarget(calendarId = calendarId)))) }) {
+                Text("Ajouter à « ${target.name} »")
+            }
+        },
+        dismissButton = { TextButton(onClick = { c.cancelImport() }) { Text("Annuler") } },
+    )
+}
+
 @Composable
 private fun ImportPreview(c: AgendaController, s: IcsImportState.Preview, settings: CalendarSettings) {
+    val single = s.previews.singleOrNull()?.takeIf { !it.calendarExport }?.items?.singleOrNull()
+    var full by remember(s) { mutableStateOf(single == null) }
+    if (!full && single != null) return AddOneEvent(c, s, settings, single) { full = true }
     val choices = remember(s) {
         var taken = settings
         mutableStateListOf<TargetChoice>().apply {
@@ -173,6 +231,7 @@ private fun ImportPreview(c: AgendaController, s: IcsImportState.Preview, settin
                                 pv.unresolvedZones.takeIf { it > 0 }?.let { plural(it, "fuseau inconnu", "fuseaux inconnus") },
                             )
                             Text(counts.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                            pv.items?.let { ImportItems(it) }
                             if (!ch.skip) {
                                 var menu by remember { mutableStateOf(false) }
                                 Box {

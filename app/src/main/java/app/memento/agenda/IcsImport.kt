@@ -12,10 +12,13 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.zip.ZipInputStream
 
-/** A picked file: its name gives the calendar name when the file has none. */
-class IcsSource(val name: String, val open: () -> InputStream) {
+/**
+ * A picked file: its name gives the calendar name when the file has none. [fromArchive]: one `.ics` of a `.zip`
+ * (Google's export of several calendars), which makes it a calendar export ([CalendarPreview.calendarExport]).
+ */
+class IcsSource(val name: String, val fromArchive: Boolean = false, val open: () -> InputStream) {
     companion object {
-        fun fromBytes(name: String, data: ByteArray) = IcsSource(name) { ByteArrayInputStream(data) }
+        fun fromBytes(name: String, data: ByteArray, fromArchive: Boolean = false) = IcsSource(name, fromArchive) { ByteArrayInputStream(data) }
         fun fromFile(file: java.io.File) = IcsSource(file.name) { file.inputStream() }
     }
 }
@@ -34,6 +37,9 @@ data class TimeValue(
 
 /** A RECURRENCE-ID override; [event] null when the occurrence is cancelled. */
 data class Override(val uid: String?, val recurrenceId: TimeValue, val event: Event?)
+
+/** One event of a small import as the preview lists it ([IcsImport.whenText] for [whenText]). */
+data class ImportItem(val title: String, val whenText: String, val location: String?)
 
 /** What the preview shows for one calendar (one `.ics`). */
 data class CalendarPreview(
@@ -54,8 +60,15 @@ data class CalendarPreview(
     var duplicates: Int = 0,
     /** Malformed events and lines, skipped (French). */
     val errors: MutableList<String> = ArrayList(),
-    /** Existing calendar with the same name, else null (a new one). */
+    /**
+     * Where the events go by default ([IcsImport.suggestedCalendar]): the default calendar, or for a calendar
+     * export the existing calendar of the same name, else null (a new one).
+     */
     var suggestedCalendar: String? = null,
+    /** A real calendar export (X-WR-CALNAME, more than [IcsImport.EXPORT_MIN_EVENTS] events, or from a `.zip`). */
+    var calendarExport: Boolean = false,
+    /** Each event when there are at most [IcsImport.LISTED_MAX], else null. */
+    var items: List<ImportItem>? = null,
 )
 
 class ParsedCalendar(
@@ -70,7 +83,7 @@ class ParsedCalendar(
 data class ImportTarget(
     /** An existing calendar; null = a new one. */
     val calendarId: String? = null,
-    /** New calendar: its name (default: the file's calendar name). */
+    /** New calendar: its name (default: X-WR-CALNAME, else the file's name). */
     val name: String? = null,
     /** New calendar: its colour (default: the next free palette colour). */
     val color: String? = null,
@@ -80,7 +93,7 @@ data class ImportTarget(
 enum class DuplicatePolicy { SKIP, UPDATE, KEEP }
 
 data class ImportOptions(
-    /** By index in the parsed list; missing = the suggested calendar, or a new one. */
+    /** By index in the parsed list; missing = [IcsImport.suggestedCalendar], a new calendar when null. */
     val targets: Map<Int, ImportTarget> = emptyMap(),
     /** "Depuis le …": events ending before are left out. */
     val since: LocalDate? = null,
@@ -130,7 +143,7 @@ data class UndoReport(val deleted: Int, val exdatesRemoved: Int, val calendarsRe
  * [read] parses `.ics` files and `.zip`s of them (no write) -> [preview] -> [apply] writes the files (each with
  * `import: <id>`) and the new calendars -> [undo] deletes them again.
  *
- * - SUMMARY -> title; LOCATION; UID -> uid; STATUS TENTATIVE/CONFIRMED -> status; CANCELLED: not imported (a
+ * - SUMMARY -> title; LOCATION ("null", "undefined", "None", blank: none); UID -> uid; STATUS TENTATIVE/CONFIRMED -> status; CANCELLED: not imported (a
  *   cancelled override becomes an exdate of its series).
  * - DTSTART/DTEND/DURATION: VALUE=DATE -> all-day (exclusive DTEND -> inclusive end); TZID -> wall time + IANA zone
  *   ([Zones.resolveTzid]; unresolved -> device zone, counted); `Z` -> wall time of the device zone + that zone;
@@ -139,8 +152,12 @@ data class UndoReport(val deleted: Int, val exdatesRemoved: Int, val calendarsRe
  * - RRULE verbatim; EXDATE converted to the series' form; RDATE: one extra single event per date; RECURRENCE-ID
  *   overrides -> exception files + exdate on the series.
  * - VALARM relative to the start (not EMAIL) -> alerts; others ignored (counted).
- * - DESCRIPTION -> body (HTML -> text); X-GOOGLE-CONFERENCE / URL not in the description -> first line
- *   "Visio : …" / "Lien : …"; ORGANIZER/ATTENDEE -> "Participants :" at the end.
+ * - DESCRIPTION -> body (HTML -> text); X-GOOGLE-CONFERENCE not in the description -> first line "Visio : …";
+ *   without it, a meeting link of the description ([Links.meetingLink]: Proton Meet, Meet, Teams, Zoom) not already on
+ *   its first line -> "Visio : …"; else a URL not in the description -> "Lien : …"; ORGANIZER/ATTENDEE ->
+ *   "Participants :" at the end.
+ * - Target: a mail invitation goes to the default calendar; only a calendar export ([CalendarPreview.calendarExport])
+ *   proposes a calendar named after it (X-WR-CALNAME, else the file name).
  * - Every other VEVENT property verbatim in `ical_extra` (DTSTAMP, X-ALT-DESC excepted).
  */
 object IcsImport {
@@ -149,6 +166,14 @@ object IcsImport {
         "EXDATE", "RDATE", "RECURRENCE-ID", "DTSTAMP", "X-ALT-DESC",
     )
     const val UNTITLED = "(Sans titre)"
+    /** More events than this make a file without X-WR-CALNAME a calendar export. */
+    const val EXPORT_MIN_EVENTS = 20
+    /** Up to this many events, the preview lists each one. */
+    const val LISTED_MAX = 5
+    private val NO_VALUE = setOf("null", "undefined", "none")
+
+    /** A LOCATION as written by the sender; the placeholders some generators write for "none" are no location. */
+    fun cleanLocation(raw: String?): String? = raw?.trim()?.takeUnless { it.isEmpty() || it.lowercase() in NO_VALUE }
 
     /** A `.zip` becomes one source per `.ics` inside (Google's export); other files pass through. */
     fun expandSources(sources: List<IcsSource>): List<IcsSource> {
@@ -162,7 +187,7 @@ object IcsImport {
                     if (!e.isDirectory && e.name.lowercase().endsWith(".ics")) entries.add(e.name to zip.readBytes())
                 }
             }
-            for ((name, data) in entries.sortedBy { it.first }) out.add(IcsSource.fromBytes(name.substringAfterLast('/'), data))
+            for ((name, data) in entries.sortedBy { it.first }) out.add(IcsSource.fromBytes(name.substringAfterLast('/'), data, fromArchive = true))
         }
         return out
     }
@@ -277,7 +302,9 @@ object IcsImport {
         val parts = ArrayList<String>()
         val conference = comp.first("X-GOOGLE-CONFERENCE")?.value?.trim().orEmpty()
         val url = comp.first("URL")?.value?.trim().orEmpty()
+        val described = if (conference.isEmpty()) Links.meetingLink(desc) else null
         if (conference.isNotEmpty() && conference !in desc) parts.add("Visio : $conference")
+        else if (described != null && described !in desc.lineSequence().first()) parts.add("Visio : $described")
         else if (url.isNotEmpty() && url !in desc) parts.add("Lien : $url")
         if (desc.isNotEmpty()) parts.add(desc)
         val people = people(comp)
@@ -368,13 +395,13 @@ object IcsImport {
         val statusRaw = comp.first("STATUS")?.value?.trim()?.uppercase() ?: ""
         val status = mapOf("TENTATIVE" to "tentative", "CONFIRMED" to "confirmed")[statusRaw]
         val title = comp.first("SUMMARY")?.let { Ics.unescapeText(it.value).trim() } ?: ""
-        val location = comp.first("LOCATION")?.let { Ics.unescapeText(it.value).trim() } ?: ""
+        val location = cleanLocation(comp.first("LOCATION")?.let { Ics.unescapeText(it.value) })
         val uid = comp.first("UID")?.value?.trim()?.ifEmpty { null }
         val body = buildBody(comp)
         val note = Note(path = "", id = "", title = title.ifEmpty { UNTITLED }, body = body, created = now, updated = now)
         val event = Event(
             note = note, start = start, end = end, tz = tz, endTz = endTz, rrule = comp.first("RRULE")?.value?.trim(),
-            exdate = exdate, alerts = alerts(comp, preview), location = location.ifEmpty { null }, status = status, uid = uid,
+            exdate = exdate, alerts = alerts(comp, preview), location = location, status = status, uid = uid,
             icalHash = EventFormat.fnv32(body), icalExtra = comp.lines.filter { it.name !in CONSUMED }.map { it.raw },
         )
         if (unresolved) preview.unresolvedZones++
@@ -460,13 +487,14 @@ object IcsImport {
                     }
                 }
             }
-            summarise(parsed)
+            summarise(parsed, device)
+            preview.calendarExport = nameLine?.value?.isNotBlank() == true || source.fromArchive || preview.events > EXPORT_MIN_EVENTS
             out.add(parsed)
         }
         return out
     }
 
-    private fun summarise(p: ParsedCalendar) {
+    private fun summarise(p: ParsedCalendar, device: ZoneId) {
         val pv = p.preview
         pv.events = p.events.size
         pv.series = p.events.count { it.isSeries }
@@ -478,20 +506,75 @@ object IcsImport {
         if (days.isNotEmpty()) {
             pv.first = days.minOrNull(); pv.last = days.maxOrNull()
         }
+        val listed = p.events + p.overrides.mapNotNull { o -> o.event?.takeIf { o.uid !in seriesUids } }
+        pv.items = if (listed.isEmpty() || listed.size > LISTED_MAX) null
+        else listed.sortedWith(compareBy({ it.start.date }, { it.start.toString() })).map { ImportItem(it.title, whenText(it, device), it.location) }
+    }
+
+    private fun day(d: LocalDate) = "${AgendaText.weekdayShort(d.dayOfWeek)} ${d.dayOfMonth} ${AgendaText.MONTHS_SHORT[d.monthValue - 1]} ${d.year}"
+    private fun hm(t: LocalDateTime) = AgendaText.time(t.toLocalTime(), true)
+
+    /**
+     * "lun. 26 oct. 2026, 17:00–18:00 (Zurich)", in the event's zone, + " · soit lun. 26 oct. 2026, 12:00–13:00
+     * (New York)" when the device's clock reads otherwise; a flight "… 10:00 (Paris) → 13:00 (New York)"; all-day
+     * "du … au …"; " · série" for a series. Same text as Python's `ics_import.when_text`.
+     */
+    fun whenText(e: Event, device: ZoneId): String {
+        val s = e.start
+        var text: String
+        if (s.allDay) {
+            val last = e.end?.date
+            text = if (last == null || last == s.date) day(s.date) else "du ${day(s.date)} au ${day(last)}"
+        } else {
+            val start = s.dateTime()
+            val end = e.end?.dateTime()
+            fun endText(at: LocalDateTime, from: LocalDateTime) = (if (at.toLocalDate() != from.toLocalDate()) day(at.toLocalDate()) + ", " else "") + hm(at)
+            text = "${day(start.toLocalDate())}, ${hm(start)}"
+            val tz = e.tz
+            val endTz = e.endTz
+            if (tz != null && endTz != null && end != null) {
+                text += " (${AgendaText.city(tz)}) → ${endText(end, start)} (${AgendaText.city(endTz)})"
+            } else {
+                if (end != null) text += "–" + endText(end, start)
+                if (tz != null) text += " (${AgendaText.city(tz)})"
+            }
+            if (tz != null && Zones.isValid(tz) && tz != device.id) {
+                val here = Zones.toWall(Zones.toInstant(start, Zones.zone(tz)), device)
+                if (here != start) {
+                    text += " · soit ${day(here.toLocalDate())}, ${hm(here)}"
+                    if (end != null) {
+                        val endZone = Zones.zone(endTz?.takeIf { Zones.isValid(it) } ?: tz)
+                        text += "–" + endText(Zones.toWall(Zones.toInstant(end, endZone), device), here)
+                    }
+                    text += " (${AgendaText.city(device.id)})"
+                }
+            }
+        }
+        if (e.isSeries) text += " · série"
+        return text
     }
 
     /** All calendars of the picked files (zips expanded), parsed, nothing written. */
     fun read(sources: List<IcsSource>, device: ZoneId, now: Long = System.currentTimeMillis()): List<ParsedCalendar> =
         expandSources(sources).flatMap { parseCalendar(it, device, now) }
 
-    /** Fills `suggestedCalendar` (an existing calendar of the same name) and `duplicates`. */
+    /**
+     * Where [p] goes when the user does not choose: the default calendar (a mail invitation is not a calendar);
+     * for a calendar export, the existing calendar of the same name, else null (a new one named after it).
+     */
+    fun suggestedCalendar(p: ParsedCalendar, settings: CalendarSettings): String? =
+        if (p.preview.calendarExport) CalendarSettings.byName(p.name, settings)?.id
+        else settings.defaultCalendar().id.takeIf { id -> settings.calendars.any { it.id == id } }
+
+    /** Fills `suggestedCalendar` ([suggestedCalendar]) and `duplicates` (same UID already there). */
     fun preview(parsed: List<ParsedCalendar>, existing: List<Event>, settings: CalendarSettings): List<CalendarPreview> =
         parsed.map { p ->
             val pv = p.preview
-            val match = CalendarSettings.byName(p.name, settings)
-            pv.suggestedCalendar = match?.id
-            if (match != null) {
-                val uids = existing.filter { it.uid != null && settings.calendar(it.calendar).id == match.id && !it.isException }.map { it.uid }.toSet()
+            val target = suggestedCalendar(p, settings)
+            pv.suggestedCalendar = target
+            pv.duplicates = 0
+            if (target != null) {
+                val uids = existing.filter { it.uid != null && settings.calendar(it.calendar).id == target && !it.isException }.map { it.uid }.toSet()
                 pv.duplicates = p.events.count { it.uid in uids }
             }
             pv
@@ -536,7 +619,7 @@ object IcsImport {
         val byId = LinkedHashMap<String, Event>().also { m -> existing.forEach { m[it.id] = it } }
 
         parsed.forEachIndexed { index, p ->
-            val target = options.targets[index] ?: ImportTarget(calendarId = p.preview.suggestedCalendar)
+            val target = options.targets[index] ?: ImportTarget(calendarId = suggestedCalendar(p, settings))
             if (target.skip) return@forEachIndexed
             val calId: String
             if (target.calendarId != null && cals.calendars.any { it.id == target.calendarId }) {
