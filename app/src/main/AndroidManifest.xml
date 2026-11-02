@@ -31,7 +31,7 @@
     <!-- Contacts mirrored into the phone's contacts (off until the user turns it on in the settings). -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.WRITE_CONTACTS" />
-    <!-- ContentResolver.setIsSyncable / setSyncAutomatically on the mirror's account (install-time, no prompt). -->
+    <!-- ContentResolver.get/setIsSyncable and get/setSyncAutomatically on the mirror's account (install-time, no prompt). -->
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
     <!-- ContentResolver.getIsSyncable / getSyncAutomatically: without it they throw SecurityException. -->
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />

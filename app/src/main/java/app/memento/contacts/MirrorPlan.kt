@@ -11,6 +11,12 @@ sealed class MirrorRow {
     /** `1990-05-14`, or `--05-14` without the year (what the phone's contacts app writes itself). */
     data class Birthday(val date: String) : MirrorRow()
     data class Note(val text: String) : MirrorRow()
+    /**
+     * A row of a kind the files have no field for (organisation, website, nickname, IM, relation, SIP, an event
+     * other than the birthday, an e-mail's type), as "label : value": read from the phone into the notes only,
+     * never written, never deleted by an update ([MirrorPlan.OWNED_MIMES]).
+     */
+    data class Extra(val label: String, val value: String) : MirrorRow()
 }
 
 enum class PhoneKind { MOBILE, HOME, WORK, OTHER, CUSTOM }
@@ -141,19 +147,84 @@ object MirrorPlan {
 
     /**
      * What the phone holds that a contact file has no field for (a second address, a date it wrote in a form
-     * Mémento does not read): kept as a paragraph of the notes rather than dropped.
+     * Mémento does not read, the [MirrorRow.Extra] kinds): kept as lines of the notes rather than dropped.
      */
-    private fun extras(rows: List<MirrorRow>): String {
-        val lines = rows.filterIsInstance<MirrorRow.Postal>().map { address(it.formatted) }.filter { it.isNotEmpty() }.distinct().drop(1)
+    private fun extras(rows: List<MirrorRow>): List<String> =
+        (rows.filterIsInstance<MirrorRow.Postal>().map { address(it.formatted) }.filter { it.isNotEmpty() }.distinct().drop(1)
             .map { "Adresse : $it" } +
-            rows.filterIsInstance<MirrorRow.Birthday>().filter { Birthday.parse(it.date) == null && it.date.isNotBlank() }.map { "Anniversaire : ${it.date.trim()}" }
-        return if (lines.isEmpty()) "" else "$EXTRAS_TITLE :\n" + lines.joinToString("\n") { "- $it" }
+            rows.filterIsInstance<MirrorRow.Birthday>().filter { Birthday.parse(it.date) == null && it.date.isNotBlank() }.map { "Anniversaire : ${it.date.trim()}" } +
+            rows.filterIsInstance<MirrorRow.Extra>().filter { it.value.isNotBlank() }.map { "${it.label.trim()} : ${oneLine(it.value)}" })
+            .distinct()
+
+    private fun oneLine(s: String) = s.trim().split('\n').map { it.trim() }.filter { it.isNotEmpty() }.joinToString(", ")
+
+    /** The notes the phone's rows give: the note row, with the [extras] its block does not hold yet. */
+    private fun phoneNotes(rows: List<MirrorRow>): String = withExtras(note(rows), extras(rows))
+
+    /**
+     * [notes] with [lines] in its "Autres informations du téléphone" paragraph. A line already there is not added
+     * again: the block reaches the phone's note row with the next update while the rows it came from stay on the
+     * phone, so every later run reads both. New lines go at the end of the block; the result is the same however
+     * many runs read it.
+     */
+    fun withExtras(notes: String, lines: List<String>): String {
+        val header = "$EXTRAS_TITLE :"
+        val paragraphs = if (notes.isEmpty()) mutableListOf() else notes.split("\n\n").toMutableList()
+        val at = paragraphs.indexOfFirst { it.trim().lineSequence().first().trim() == header }
+        val present = if (at < 0) emptySet() else paragraphs[at].trim().lines().drop(1).map { it.trim().removePrefix("-").trim() }.toSet()
+        val added = lines.filter { it !in present }
+        if (added.isEmpty()) return notes
+        val block = added.joinToString("\n") { "- $it" }
+        if (at < 0) paragraphs.add("$header\n$block") else paragraphs[at] = paragraphs[at].trimEnd() + "\n" + block
+        return paragraphs.joinToString("\n\n")
     }
 
-    /** The notes the phone's rows give: the note row, then [extras]. */
-    private fun phoneNotes(rows: List<MirrorRow>): String = listOf(note(rows), extras(rows)).filter { it.isNotEmpty() }.joinToString("\n\n")
-
     private const val EXTRAS_TITLE = "Autres informations du téléphone"
+
+    /**
+     * The `Data.MIMETYPE`s Mémento owns: an update deletes and rewrites their rows (plus the birthday events) and
+     * nothing else, so what the phone holds beyond them (photo, organisation, website, other events...) stays.
+     */
+    val OWNED_MIMES = listOf(
+        "vnd.android.cursor.item/name", "vnd.android.cursor.item/phone_v2", "vnd.android.cursor.item/email_v2",
+        "vnd.android.cursor.item/postal-address_v2", "vnd.android.cursor.item/note",
+    )
+
+    private val IM_PROTOCOLS = mapOf(0 to "AIM", 1 to "Windows Live", 2 to "Yahoo", 3 to "Skype", 4 to "QQ", 5 to "Google Talk", 6 to "ICQ", 7 to "Jabber", 8 to "NetMeeting")
+    private val RELATIONS = mapOf(
+        1 to "assistant", 2 to "frère", 3 to "enfant", 4 to "concubin", 5 to "père", 6 to "ami", 7 to "responsable", 8 to "mère",
+        9 to "parent", 10 to "partenaire", 11 to "recommandé par", 12 to "proche", 13 to "sœur", 14 to "conjoint",
+    )
+    private val EMAIL_TYPES = mapOf(1 to "domicile", 2 to "travail", 4 to "mobile")
+    private val EVENT_TYPES = mapOf(1 to "anniversaire de mariage", 2 to "autre")
+
+    /**
+     * The [MirrorRow.Extra]s of a data row of [mime] that the files do not model; [data] holds its columns data1 to
+     * data10 (the `CommonDataKinds` column numbers and type values are public API). Empty for the other kinds.
+     */
+    fun extra(mime: String, data: List<String>): List<MirrorRow.Extra> {
+        fun d(i: Int) = data.getOrNull(i - 1).orEmpty().trim()
+        fun typed(type: Int?, names: Map<Int, String>, custom: String) = names[type] ?: custom.ifEmpty { null }
+        fun one(label: String, value: String) = if (value.isEmpty()) emptyList() else listOf(MirrorRow.Extra(label, value))
+        return when (mime) {
+            // data1 company, data4 title, data5 department
+            "vnd.android.cursor.item/organization" -> one("Société", d(1)) + one("Fonction", d(4)) + one("Service", d(5))
+            "vnd.android.cursor.item/website" -> one("Site web", d(1))
+            "vnd.android.cursor.item/nickname" -> one("Surnom", d(1))
+            "vnd.android.cursor.item/sip_address" -> one("Adresse SIP", d(1))
+            // data1 handle, data5 protocol (-1 custom, named in data6)
+            "vnd.android.cursor.item/im" -> one(typed(d(5).toIntOrNull(), IM_PROTOCOLS, d(6))?.let { "Messagerie ($it)" } ?: "Messagerie", d(1))
+            // data1 name, data2 type (0 custom, named in data3)
+            "vnd.android.cursor.item/relation" -> one(typed(d(2).toIntOrNull(), RELATIONS, d(3))?.let { "Relation ($it)" } ?: "Relation", d(1))
+            // data1 date, data2 type (3 the birthday, a row of its own; 0 custom, named in data3)
+            "vnd.android.cursor.item/contact_event" ->
+                if (d(2).toIntOrNull() == 3) emptyList() else one(typed(d(2).toIntOrNull(), EVENT_TYPES, d(3))?.let { "Date ($it)" } ?: "Date", d(1))
+            // the address itself is a Mail row; only its type (3 other, the one Mémento writes, says nothing) is extra
+            "vnd.android.cursor.item/email_v2" ->
+                typed(d(2).toIntOrNull(), EMAIL_TYPES, if (d(2) == "0") d(3) else "")?.let { one("E-mail ($it)", d(1)) }.orEmpty()
+            else -> emptyList()
+        }
+    }
 
     /** A StructuredName row: a prefix and a middle name go with the first name, a suffix with the last name. */
     fun nameRow(prefix: String, given: String, middle: String, family: String, suffix: String, display: String): MirrorRow.Name {

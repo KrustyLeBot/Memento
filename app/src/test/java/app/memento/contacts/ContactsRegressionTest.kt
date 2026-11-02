@@ -21,6 +21,45 @@ class ContactsRegressionTest {
         assertTrue(res("res/xml/syncadapter.xml").contains(type))
     }
 
+    /**
+     * AOSP ExternalAccountType / BaseAccountType rules (see the links in contacts.xml): one broken rule and the
+     * contacts app falls back to a read-only name + photo type, the editor Samsung showed.
+     */
+    @Test
+    fun accountTypeFollowsTheAospRules() {
+        assertTrue(res("AndroidManifest.xml").contains("android.permission.READ_SYNC_SETTINGS"))
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(org.xml.sax.InputSource(java.io.StringReader(res("res/xml/contacts.xml"))))
+        val root = doc.documentElement
+        assertEquals("ContactsAccountType", root.tagName)
+        val schemas = root.getElementsByTagName("EditSchema")
+        assertEquals(1, schemas.length)
+        val kinds = (0 until schemas.item(0).childNodes.length).map { schemas.item(0).childNodes.item(it) }
+            .filterIsInstance<org.w3c.dom.Element>()
+        kinds.forEach { assertEquals("DataKind", it.tagName) }
+        val byKind = kinds.associateBy { it.getAttribute("kind") }
+        assertEquals(kinds.size, byKind.size)
+        // what the owner wants in the phone's editor: the name and the numbers (the photo is mandatory)
+        assertEquals(setOf("name", "photo", "phone"), byKind.keys)
+
+        val name = byKind.getValue("name")
+        assertEquals("1", name.getAttribute("maxOccurs"))
+        listOf("supportsPrefix", "supportsMiddleName", "supportsSuffix", "supportsPhoneticFamilyName", "supportsPhoneticMiddleName", "supportsPhoneticGivenName")
+            .forEach { assertEquals(it, "true", name.getAttribute(it)) }
+        assertEquals(0, name.getElementsByTagName("Type").length)
+
+        val photo = byKind.getValue("photo")
+        assertEquals("1", photo.getAttribute("maxOccurs"))
+        assertEquals(0, photo.getElementsByTagName("Type").length)
+
+        val phoneTypes = byKind.getValue("phone").getElementsByTagName("Type").let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttribute("type") } }
+        assertTrue(phoneTypes.isNotEmpty())
+        // the names PhoneKindBuilder.buildEditTypeForTypeTag knows
+        val known = setOf("home", "mobile", "work", "fax_work", "fax_home", "pager", "other", "callback", "car", "company_main", "isdn", "main",
+            "other_fax", "radio", "telex", "tty_tdd", "work_mobile", "work_pager", "assistant", "mms", "custom")
+        assertTrue(phoneTypes.toString(), known.containsAll(phoneTypes))
+    }
+
     @Test
     fun longFoldedPhotosAreSkippedQuickly() {
         val photo = "PHOTO;ENCODING=b;TYPE=JPEG:" + "A".repeat(74) + "\r\n" + (" " + "B".repeat(74) + "\r\n").repeat(4000)
