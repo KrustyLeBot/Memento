@@ -306,3 +306,24 @@ def test_notes_saved_while_the_list_is_hidden_show_when_it_comes_back(window, tm
     window.show_module("notes")
     QApplication.processEvents()
     assert [w.note.title for kind, w in window.list_screen._items if kind == "card"] == ["Pendant"]
+
+
+def test_escape_key_leaves_the_editor_and_clears_searches(window):
+    """Real key presses: two window-wide Escape shortcuts visible at once cancel each other (ambiguous)."""
+    window.activateWindow()
+    assert QTest.qWaitForWindowActive(window)
+    note = add(window.store, "Clavier")
+    window.refresh()
+    window.open_note(note)
+    window.editor.title.setFocus()
+    QTest.keyClick(window.editor.title, Qt.Key.Key_Escape)
+    assert window.stack.currentWidget() is window.list_screen
+    window.list_screen.search.setFocus()
+    QTest.keyClicks(window.list_screen.search, "cla")
+    QTest.keyClick(window.list_screen.search, Qt.Key.Key_Escape)
+    assert window.list_screen.search.text() == ""
+    window.show_module("contacts")
+    window.contacts.search.setFocus()
+    QTest.keyClicks(window.contacts.search, "x")
+    QTest.keyClick(window.contacts.search, Qt.Key.Key_Escape)
+    assert window.contacts.search.text() == ""

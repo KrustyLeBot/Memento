@@ -197,7 +197,9 @@ class MainWindow(QMainWindow):
 
     def _escape(self) -> None:
         current = self.stack.currentWidget()
-        if current is self.settings:
+        if current is self.editor:
+            self.close_editor()
+        elif current is self.settings:
             self.show_module(self.module)
         elif current is self.activities:
             if self.activities.current is not None:

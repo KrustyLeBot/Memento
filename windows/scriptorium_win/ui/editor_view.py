@@ -331,7 +331,8 @@ class EditorScreen(QWidget):
         from PySide6.QtGui import QKeySequence, QShortcut
         QShortcut(QKeySequence("Ctrl+B"), self.body, activated=self.body.toggle_bold)
         QShortcut(QKeySequence("Ctrl+I"), self.body, activated=self.body.toggle_italic)
-        QShortcut(QKeySequence("Escape"), self, activated=self.back_requested.emit)
+        # Escape (back to the list) is the window's: a second window-wide Escape here made both ambiguous, so
+        # neither fired.
 
     def _tool(self, name: str, tip: str, action, bucket) -> QToolButton:
         button = QToolButton()
