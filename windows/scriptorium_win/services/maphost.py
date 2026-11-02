@@ -9,6 +9,7 @@ import shutil
 import sys
 import threading
 import time
+import traceback
 import uuid
 from functools import partial
 from pathlib import Path
@@ -32,7 +33,8 @@ OFFLINE_ERRORS = {QNetworkReply.NetworkError.ConnectionRefusedError, QNetworkRep
                   QNetworkReply.NetworkError.TimeoutError, QNetworkReply.NetworkError.TemporaryNetworkFailureError,
                   QNetworkReply.NetworkError.NetworkSessionFailedError, QNetworkReply.NetworkError.UnknownNetworkError,
                   QNetworkReply.NetworkError.ProxyConnectionRefusedError, QNetworkReply.NetworkError.ProxyNotFoundError,
-                  QNetworkReply.NetworkError.RemoteHostClosedError}
+                  QNetworkReply.NetworkError.RemoteHostClosedError,
+                  QNetworkReply.NetworkError.OperationCanceledError}  # what setTransferTimeout's expiry reports
 
 
 def register_scheme() -> None:
@@ -179,8 +181,11 @@ class TileStore(QObject):
         directory = self.root / "peaks"
         cached = peaks.covering(directory, box)
         if cached is not None:
-            done(peaks.select(cached, wanted))
-            return
+            try:
+                done(peaks.select(cached, wanted))
+                return
+            except (KeyError, TypeError, ValueError) as error:  # a damaged cache entry: fetched again
+                _log(f"summits: damaged cache for {box}: {error!r}")
         if self.backoff.blocked(time.monotonic()):
             done([])
             return
@@ -210,8 +215,8 @@ class TileStore(QObject):
         text = self._text(reply)
         try:
             candidates = peaks.parse_wfs(text, box) if text is not None else None
-        except (ValueError, TypeError) as error:
-            _log(f"summits: unreadable answer: {error}")
+        except Exception:  # any malformed answer: logged, and the waiting pages still get their (empty) answer
+            _log(f"summits: unreadable answer: {traceback.format_exc()}")
             candidates = None
         if not candidates:
             self._peaks_finish(box, directory, candidates)
@@ -224,8 +229,8 @@ class TileStore(QObject):
         if text is not None:
             try:
                 candidates = peaks.with_elevations(candidates, text)
-            except (ValueError, TypeError) as error:
-                _log(f"summit heights: unreadable answer: {error}")
+            except Exception:  # as above: the summits are kept without heights
+                _log(f"summit heights: unreadable answer: {traceback.format_exc()}")
         self._peaks_finish(box, directory, candidates)
 
     def _peaks_finish(self, box: tuple, directory: Path, candidates: list | None) -> None:
