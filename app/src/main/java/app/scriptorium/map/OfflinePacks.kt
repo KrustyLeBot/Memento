@@ -128,14 +128,20 @@ object OfflinePacks {
 
     fun route(id: String): Route = RouteFile.fromJson(File(dir, "$id/route.json").readText())
 
-    /** Starts downloading what [route] needs offline: the aerial photo, relief and peaks of its square. Returns the pack id. */
-    fun prepareRoute(route: Route): String {
-        val box = route.bbox ?: throw PackException("Parcours vide")
-        val square = MapSquare.of(box)
-        val plan = TilePlans.forRoute(square) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+    /** What [route] would download, for the confirmation shown before it starts. CPU work: call it off the main thread. */
+    fun planRoute(route: Route): TilePlan {
+        if (route.bbox == null) throw PackException("Parcours vide")
+        return TilePlans.forRoute(route) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+    }
+
+    /**
+     * Starts downloading what [route] needs offline: the aerial photo of its square (high definition along the track),
+     * relief and peaks. Returns the pack id.
+     */
+    fun prepareRoute(route: Route, plan: TilePlan = planRoute(route)): String {
         val pack = Pack(
-            newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), square, plan.orthoZooms.last,
-            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true,
+            newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), plan.square, plan.orthoZooms.last,
+            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
         return pack.id
@@ -180,6 +186,30 @@ object OfflinePacks {
         }
     }
 
+    /** How many packs there are and their bytes on disk (walks the folders: off the main thread). */
+    fun diskUsage(): Pair<Int, Long> {
+        if (!::dir.isInitialized) return 0 to 0L
+        val list = _packs.value
+        return list.size to list.sumOf { p -> File(dir, p.id).walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+    }
+
+    /**
+     * Deletes every pack (prepared routes and zone packs), stopping their downloads, except those a running recording
+     * uses. Returns the packs kept.
+     */
+    suspend fun clearAll(): List<Pack> {
+        if (!::dir.isInitialized) return emptyList()
+        val keep = pinned.toSet()
+        for ((id, job) in jobs) if (id !in keep) job.cancelAndJoin()
+        for (d in dir.listFiles().orEmpty()) {
+            if (d.name in keep) continue
+            d.deleteRecursively()
+            _progress.update { it - d.name }
+        }
+        refresh()
+        return _packs.value.filter { it.id in keep }
+    }
+
     private fun newId(prefix: String) = "$prefix-${System.currentTimeMillis()}-${(1000..9999).random()}"
 
     // synchronized with refresh(): until its manifest is written, the new folder looks like a leftover
@@ -204,7 +234,8 @@ object OfflinePacks {
     @Synchronized
     private fun start(pack: Pack) {
         if (isRunning(pack.id)) return
-        _progress.update { it + (pack.id to Progress(0, pack.plan().tileCount, pack.bytes)) }
+        // the total comes with the download: a corridor pack's tile list is computed off the caller's (main) thread
+        _progress.update { it + (pack.id to Progress(0, 0, pack.bytes)) }
         _running.update { it + pack.id }
         jobs[pack.id] = scope.launch {
             try {
@@ -239,25 +270,28 @@ object OfflinePacks {
     }
 
     /**
-     * Relief first (the 3D view needs it), then the aerial photo zoom by zoom. Should the real tiles outgrow the
-     * budget, the zoom being fetched is dropped and the pack stops at the one below: the 500 MB holds
-     * even when the estimate was low.
+     * Relief first (the 3D view needs it), then the aerial photo zoom by zoom, the square then the corridor. Should the
+     * real tiles outgrow the budget, the zoom being fetched is dropped and the pack stops at the one below (the
+     * corridor's top zoom goes first): the 500 MB holds even when the estimate was low.
      */
     private suspend fun download(pack: Pack): Pack {
         val pdir = File(dir, pack.id)
         pdir.walkTopDown().filter { it.isFile && it.name.endsWith(".tmp") }.forEach { it.delete() }
         val plan = pack.plan()
-        val groups = plan.demRanges.map { TileKey.KIND_DEM to it } + plan.orthoRanges.map { TileKey.KIND_ORTHO to it }
+        val groups = plan.groups()
         val total = plan.tileCount
+        _progress.update { it + (pack.id to Progress(0, total, pack.bytes)) }
         val done = AtomicLong(0)
         val bytes = AtomicLong(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
         val budget = if (pack.hasRoute) TilePlans.ROUTE_BUDGET else Long.MAX_VALUE
         var zmax = pack.zmax
+        var corridor = pack.corridor
         var missed = 0
-        for ((kind, range) in groups) {
+        for (group in groups) {
+            val kind = group.kind
             val missedHere = AtomicInteger(0)
             val queue = ConcurrentLinkedQueue<TileKey>()
-            range.forEach { x, y -> queue.add(TileKey(kind, range.z, x, y)) }
+            group.forEach { x, y -> queue.add(TileKey(kind, group.z, x, y)) }
             val over = AtomicBoolean(false)
             val failures = AtomicInteger(0)
             coroutineScope {
@@ -274,15 +308,24 @@ object OfflinePacks {
                 }
             }
             if (over.get()) {
-                if (kind != TileKey.KIND_ORTHO || range.z <= TilePlans.ORTHO_MIN_Z) throw PackException("Parcours trop étendu pour une carte hors ligne")
-                File(pdir, "${TileKey.KIND_ORTHO}/${range.z}").deleteRecursively()
-                zmax = range.z - 1
+                if (kind != TileKey.KIND_ORTHO || (!group.inCorridor && group.z <= TilePlans.ORTHO_MIN_Z)) {
+                    throw PackException("Parcours trop étendu pour une carte hors ligne")
+                }
+                // the square's zooms are all below the corridor's: this folder holds only the zoom being dropped
+                File(pdir, "${TileKey.KIND_ORTHO}/${group.z}").deleteRecursively()
+                if (group.inCorridor) {
+                    corridor = corridor?.let { c -> if (group.z - 1 > zmax) c.copy(zooms = c.zooms.first until group.z) else null }
+                } else {
+                    zmax = group.z - 1
+                    corridor = null
+                }
+                bytes.set(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
                 // said at once: a resume after a later failure must not fetch this zoom again, only to drop it again
-                writeManifest(pack.copy(zmax = zmax, bytes = bytes.get()))
+                writeManifest(pack.copy(zmax = zmax, corridor = corridor, bytes = bytes.get()))
                 break
             }
             missed += missedHere.get()
-            writeManifest(pack.copy(zmax = zmax, bytes = bytes.get()))
+            writeManifest(pack.copy(zmax = zmax, corridor = corridor, bytes = bytes.get()))
         }
         if (missed > 0) throw PackException("$missed tuiles manquantes : reprendre le téléchargement")
         bytes.set(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
@@ -297,7 +340,7 @@ object OfflinePacks {
                 kinds = kinds - Pack.KIND_PEAKS
             }
         }
-        return pack.copy(zmax = zmax, kinds = kinds, bytes = bytes.get(), complete = true)
+        return pack.copy(zmax = zmax, corridor = corridor, kinds = kinds, bytes = bytes.get(), complete = true)
     }
 
     /** False when the tile could not be fetched this time (a transient error). */

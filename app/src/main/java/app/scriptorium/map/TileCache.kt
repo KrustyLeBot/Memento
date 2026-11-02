@@ -51,6 +51,17 @@ class TileCache(private val dir: File, private val maxBytes: Long) {
 
     private fun size(): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
+    /** Bytes on disk now (walks the folder: off the main thread). */
+    fun sizeBytes(): Long = synchronized(lock) { size().also { total = it } }
+
+    /** Deletes every cached file (tiles and peaks answers). */
+    fun clear() {
+        synchronized(lock) {
+            dir.listFiles()?.forEach { it.deleteRecursively() }
+            total = size()
+        }
+    }
+
     companion object {
         /** Writes then renames, so a killed process or a full disk never leaves a truncated file under the real name. */
         fun writeAtomic(f: File, bytes: ByteArray) {

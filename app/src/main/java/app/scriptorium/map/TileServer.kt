@@ -2,6 +2,10 @@ package app.scriptorium.map
 
 import android.content.Context
 import android.content.res.AssetManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Rect
+import android.util.LruCache
 import android.net.Uri
 import android.util.Log
 import android.webkit.WebResourceRequest
@@ -79,10 +83,51 @@ object TileServer {
             val osm = key.fallback()
             cache.get(osm.path)?.let { openOrNull(it) }?.let { return image(osm.mime, it) }
         }
-        if (!NetState.online.value) return notFound()
-        val got = fetch(key, allowOsm = true) ?: return notFound()
+        if (!NetState.online.value) return overzoomed(key) ?: notFound()
+        val got = try {
+            fetch(key, allowOsm = true)
+        } catch (e: IOException) {
+            // a network that drops mid-hike is offline for all purposes: the enlarged photo beats an error
+            return overzoomed(key) ?: throw e
+        } ?: return notFound()
         cache.put(got.key.path, got.bytes)
         return image(got.key.mime, ByteArrayInputStream(got.bytes))
+    }
+
+    /** Overzoomed tiles already made, so panning back and forth does not decode again. */
+    private val overzoomCache = object : LruCache<String, ByteArray>(OVERZOOM_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: ByteArray) = value.size
+    }
+    private const val OVERZOOM_CACHE_BYTES = 12 * 1024 * 1024
+
+    /** The nearest ancestor photo tile held offline (packs, then the browsing cache), cropped and enlarged. */
+    private fun overzoomed(key: TileKey): WebResourceResponse? {
+        if (key.kind != TileKey.KIND_ORTHO) return null
+        overzoomCache.get(key.path)?.let { return image(key.mime, ByteArrayInputStream(it)) }
+        for (o in Overzoom.candidates(key)) {
+            val f = OfflinePacks.findTile(o.ancestor.path) ?: cache.get(o.ancestor.path) ?: continue
+            val bytes = try { crop(f, o) } catch (e: IOException) { Log.w(TAG, "overzoom ${key.path}: $e"); null } ?: continue
+            overzoomCache.put(key.path, bytes)
+            return image(key.mime, ByteArrayInputStream(bytes))
+        }
+        return null
+    }
+
+    private fun crop(f: File, o: Overzoom): ByteArray? {
+        val src = BitmapFactory.decodeFile(f.path) ?: return null
+        val out = Bitmap.createBitmap(Overzoom.TILE_PX, Overzoom.TILE_PX, Bitmap.Config.ARGB_8888)
+        try {
+            // a tile smaller than 256 px (never seen from IGN) is scaled as if it were 256
+            val k = src.width.toDouble() / Overzoom.TILE_PX
+            val r = Rect((o.left * k).toInt(), (o.top * k).toInt(), ((o.left + o.size) * k).toInt(), ((o.top + o.size) * k).toInt())
+            android.graphics.Canvas(out).drawBitmap(src, r, Rect(0, 0, Overzoom.TILE_PX, Overzoom.TILE_PX), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+            val buf = java.io.ByteArrayOutputStream(16 * 1024)
+            out.compress(Bitmap.CompressFormat.JPEG, 85, buf)
+            return buf.toByteArray()
+        } finally {
+            src.recycle()
+            out.recycle()
+        }
     }
 
     /**

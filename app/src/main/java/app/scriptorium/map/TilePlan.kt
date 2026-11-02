@@ -12,12 +12,47 @@ data class TileRange(val z: Int, val x0: Int, val x1: Int, val y0: Int, val y1: 
     }
 }
 
-/** What an offline pack downloads: aerial-photo zooms, terrain (DEM) zooms, and the estimate the budget is checked on. */
-data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: IntRange?) {
+/** One batch of a download: the tiles of one kind and zoom, over the square or along the corridor only. */
+class TileGroup(val kind: String, val z: Int, val inCorridor: Boolean, val count: Long, val forEach: ((x: Int, y: Int) -> Unit) -> Unit)
+
+/**
+ * What an offline pack downloads: aerial-photo zooms over the whole square, the higher ones along the route only
+ * ([corridor]), terrain (DEM) zooms over the square, and the estimate the budget is checked on.
+ */
+data class TilePlan(val square: Bbox, val orthoZooms: IntRange, val demZooms: IntRange?, val corridor: Corridor? = null) {
     val orthoRanges: List<TileRange> get() = orthoZooms.map { TilePlans.range(square, it) }
     val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(square, it) }.orEmpty()
-    val tileCount: Long get() = orthoRanges.sumOf { it.count } + demRanges.sumOf { it.count }
-    val estimatedBytes: Long get() = orthoRanges.sumOf { it.count } * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES
+    val corridorCount: Long get() = corridor?.tileCount ?: 0L
+    val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count }
+    val estimatedBytes: Long
+        get() = (orthoRanges.sumOf { it.count } + corridorCount) * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES
+
+    /** The highest aerial-photo zoom anywhere in the pack. */
+    val topZoom: Int get() = corridor?.zooms?.takeIf { !it.isEmpty() }?.last ?: orthoZooms.last
+
+    /** Relief first (the 3D view needs it), then the photo over the square, then the corridor, zoom by zoom. */
+    fun groups(): List<TileGroup> {
+        val out = ArrayList<TileGroup>()
+        for (r in demRanges) out.add(TileGroup(TileKey.KIND_DEM, r.z, false, r.count) { f -> r.forEach(f) })
+        for (r in orthoRanges) out.add(TileGroup(TileKey.KIND_ORTHO, r.z, false, r.count) { f -> r.forEach(f) })
+        corridor?.let { c ->
+            for (z in c.zooms) {
+                val t = c.tiles(z)
+                out.add(TileGroup(TileKey.KIND_ORTHO, z, true, t.size.toLong()) { f -> for (v in t) f(Corridors.x(v), Corridors.y(v)) })
+            }
+        }
+        return out
+    }
+
+    /** What the pack holds, said to the user before downloading. */
+    fun detailLabel(): String {
+        val c = corridor
+        return if (c == null || c.zooms.isEmpty()) {
+            if (orthoZooms.last >= TilePlans.ORTHO_MAX_Z) "Haute définition sur toute la zone" else "Définition moyenne sur toute la zone"
+        } else {
+            "Haute définition le long du tracé (±${TilePlans.distanceLabel(c.bufferM)}), moyenne ailleurs"
+        }
+    }
 }
 
 object TilePlans {
@@ -32,6 +67,15 @@ object TilePlans {
     const val ORTHO_MIN_Z = 8
     const val ORTHO_MAX_Z = 17
     val DEM_ZOOMS = 6..13
+    /** Route packs: the whole square up to this zoom, higher zooms only along the route. */
+    const val MID_Z = 14
+    const val CORRIDOR_M = 1500.0
+
+    /**
+     * What gives way when the corridor does not fit the budget, in order: z17 first, then the buffer narrows. Past the
+     * last step the square's zoom goes down.
+     */
+    val CORRIDOR_STEPS = listOf(1500.0 to 17, 1500.0 to 16, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
 
     /** The zone pack recorded around the start without a route: 2D only, 20 km square, z8–15. */
     const val ZONE_HALF_M = 10_000.0
@@ -50,18 +94,44 @@ object TilePlans {
     }
 
     /**
-     * The route pack for [square]: the aerial photo from z8 up to the highest zoom ≤ 17 whose estimate, DEM z6–13
-     * included, fits [budget]. Null when even z8 does not fit (a route the size of a country).
+     * The route pack for [route]: the aerial photo of its square from z8 to [MID_Z] and, within [CORRIDOR_M] of the
+     * track, up to z17; relief z6–13 over the square. When that outgrows [budget], [CORRIDOR_STEPS] are tried, then a
+     * lower square zoom, then the square alone. A route small enough to get its whole square at z17 gets that. Null
+     * when even the square at z8 does not fit (a route the size of a country).
      */
-    fun forRoute(square: Bbox, budget: Long = ROUTE_BUDGET): TilePlan? {
+    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET): TilePlan? {
+        val box = route.bbox ?: return null
+        val square = MapSquare.of(box)
+        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS).let { if (it.estimatedBytes <= budget) return it }
+        val line = Corridors.of(route, 0.0, IntRange.EMPTY)
+        val counts = HashMap<Pair<Double, Int>, Long>()
+        fun count(buf: Double, z: Int) = counts.getOrPut(buf to z) { Corridors.select(line.lons, line.lats, buf, z).size.toLong() }
+        for (mid in MID_Z downTo ORTHO_MIN_Z) {
+            val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS)
+            if (base.estimatedBytes > budget) continue
+            for ((buf, top) in CORRIDOR_STEPS) {
+                if (top <= mid) continue
+                val extra = (mid + 1..top).sumOf { count(buf, it) } * ORTHO_TILE_BYTES
+                if (base.estimatedBytes + extra <= budget) return base.copy(corridor = line.copy(bufferM = buf, zooms = mid + 1..top))
+            }
+        }
+        return squareOnly(square, budget)
+    }
+
+    /** The square alone, from z8 up to the highest zoom ≤ [MID_Z] that fits. */
+    fun squareOnly(square: Bbox, budget: Long = ROUTE_BUDGET): TilePlan? {
         var best: TilePlan? = null
-        for (zmax in ORTHO_MIN_Z..ORTHO_MAX_Z) {
+        for (zmax in ORTHO_MIN_Z..MID_Z) {
             val p = TilePlan(square, ORTHO_MIN_Z..zmax, DEM_ZOOMS)
             if (p.estimatedBytes > budget) break
             best = p
         }
         return best
     }
+
+    /** "1,5 km", "500 m". */
+    fun distanceLabel(m: Double): String =
+        if (m >= 1000) Json.num(m / 1000, 1).replace('.', ',') + " km" else "${m.toInt()} m"
 
     fun forZone(lon: Double, lat: Double): TilePlan =
         TilePlan(MapSquare.centered(lon, lat, ZONE_HALF_M), ZONE_ZOOMS, null)
