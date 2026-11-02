@@ -195,11 +195,22 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                     }
                 }
                 if (idx.size >= 2 && analysis.stats.maxSpeed > 0) {
-                    ProfileChart(
-                        if (detail.sport == Sport.WALK) "Allure" else "Vitesse",
-                        DoubleArray(idx.size) { analysis.samples[idx[it]].dist }, DoubleArray(idx.size) { analysis.samples[idx[it]].speed * 3.6 },
-                        "0 km/h", Fmt.speed(analysis.stats.maxSpeed), MaterialTheme.colorScheme.primary,
-                    )
+                    val xs = DoubleArray(idx.size) { analysis.samples[idx[it]].dist }
+                    if (detail.sport == Sport.WALK) {
+                        // Pace drawn upside down (minus seconds per km): faster stays higher, like a speed curve.
+                        val pace = DoubleArray(idx.size) { -Fmt.chartPace(analysis.samples[idx[it]].speed) }
+                        val slowest = -(pace.minOrNull() ?: 0.0)
+                        val fastest = -(pace.maxOrNull() ?: 0.0)
+                        ProfileChart(
+                            "Allure", xs, pace, Fmt.pace(1000 / slowest), Fmt.pace(1000 / fastest), MaterialTheme.colorScheme.primary,
+                            lowPrefix = "plus lente", highPrefix = "plus rapide",
+                        )
+                    } else {
+                        ProfileChart(
+                            "Vitesse", xs, DoubleArray(idx.size) { analysis.samples[idx[it]].speed * 3.6 },
+                            "0 km/h", Fmt.speed(analysis.stats.maxSpeed), MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
                 if (analysis.quality.hasHr) {
                     val hrIdx = idx.filter { analysis.samples[it].hr != null }

@@ -124,7 +124,7 @@ class Chart(QWidget):
     hovered = Signal(object)
 
     def __init__(self, title: str, xs: list[float], ys: list[float], low: str, high: str, color: str,
-                 coords: list[tuple[float, float]] | None = None):
+                 coords: list[tuple[float, float]] | None = None, prefixes: tuple[str, str] = ("min", "max")):
         super().__init__()
         self.xs, self.ys, self.color, self.coords = xs, ys, QColor(color), coords
         s = theme.scheme()
@@ -133,7 +133,7 @@ class Chart(QWidget):
         head = QHBoxLayout()
         name = QLabel(title)
         name.setStyleSheet(f"color: {s.primary}; font-weight: 600;")
-        extremes = QLabel(f"min {low}   max {high}")
+        extremes = QLabel(f"{prefixes[0]} {low}   {prefixes[1]} {high}")
         extremes.setStyleSheet(f"color: {s.on_surface_variant}; font-size: 8.5pt;")
         head.addWidget(name)
         head.addStretch()
@@ -729,8 +729,16 @@ class ActivitiesScreen(QWidget):
                 col.addWidget(frame)
             if len(idx) >= 2 and analysis.stats.max_speed > 0:
                 frame, lay = card()
-                lay.addWidget(linked(Chart("Allure" if info.sport == Sport.WALK else "Vitesse", [samples[i].dist for i in idx],
-                                           [samples[i].speed * 3.6 for i in idx], "0 km/h", act.fmt_speed(analysis.stats.max_speed), "#2E7DF6", at(idx))))
+                xs = [samples[i].dist for i in idx]
+                if info.sport == Sport.WALK:
+                    # pace drawn upside down (minus seconds per km): faster stays higher, like a speed curve
+                    pace = [-act.chart_pace(samples[i].speed) for i in idx]
+                    lay.addWidget(linked(Chart("Allure", xs, pace, act.fmt_pace(1000 / -min(pace)),
+                                               act.fmt_pace(1000 / -max(pace)), "#2E7DF6", at(idx),
+                                               prefixes=("plus lente", "plus rapide"))))
+                else:
+                    lay.addWidget(linked(Chart("Vitesse", xs, [samples[i].speed * 3.6 for i in idx], "0 km/h",
+                                               act.fmt_speed(analysis.stats.max_speed), "#2E7DF6", at(idx))))
                 col.addWidget(frame)
             hr_idx = [i for i in idx if samples[i].hr is not None]
             if analysis.quality.has_hr and len(hr_idx) >= 2:

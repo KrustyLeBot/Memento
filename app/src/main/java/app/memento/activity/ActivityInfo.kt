@@ -126,6 +126,12 @@ object Fmt {
 
     fun meters(m: Double): String = "${Math.round(m)} m"
 
+    /** Slowest pace drawn on a pace chart: stops would otherwise flatten the curve. */
+    const val CHART_SLOWEST_PACE_S = 20 * 60.0
+
+    /** Pace in seconds per km for a chart, capped at [CHART_SLOWEST_PACE_S]. */
+    fun chartPace(ms: Double): Double = if (ms <= 1000 / CHART_SLOWEST_PACE_S) CHART_SLOWEST_PACE_S else 1000 / ms
+
     /** The main speed figure of a sport: pace for walking, km/h otherwise. */
     fun speedFor(sport: Sport, ms: Double): String = if (sport == Sport.WALK) pace(ms) else speed(ms)
 }

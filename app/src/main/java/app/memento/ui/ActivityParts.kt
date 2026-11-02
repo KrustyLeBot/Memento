@@ -90,12 +90,15 @@ fun Section(title: String, content: @Composable () -> Unit) {
 
 /** A filled line chart of [ys] against [xs] (both already thinned), with its extremes written above. */
 @Composable
-fun ProfileChart(title: String, xs: DoubleArray, ys: DoubleArray, low: String, high: String, color: Color) {
+fun ProfileChart(
+    title: String, xs: DoubleArray, ys: DoubleArray, low: String, high: String, color: Color,
+    lowPrefix: String = "min", highPrefix: String = "max",
+) {
     if (xs.size < 2) return
     Section(title) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("min $low", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("max $high", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("$lowPrefix $low", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("$highPrefix $high", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Canvas(Modifier.fillMaxWidth().height(110.dp)) {
             val minY = ys.min()

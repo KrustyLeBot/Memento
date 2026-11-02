@@ -114,5 +114,13 @@ def fmt_pace(ms: float) -> str:
     return f"{sec // 60}:{sec % 60:02d} /km"
 
 
+CHART_SLOWEST_PACE_S = 20 * 60.0  # stops would otherwise flatten a pace chart
+
+
+def chart_pace(ms: float) -> float:
+    """Pace in seconds per km for a chart, capped at CHART_SLOWEST_PACE_S."""
+    return CHART_SLOWEST_PACE_S if ms <= 1000 / CHART_SLOWEST_PACE_S else 1000 / ms
+
+
 def fmt_speed_for(sport: Sport, ms: float) -> str:
     return fmt_pace(ms) if sport == Sport.WALK else fmt_speed(ms)
