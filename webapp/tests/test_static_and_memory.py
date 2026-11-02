@@ -34,15 +34,15 @@ def test_unknown_paths_get_the_app_and_unknown_api_paths_a_json_404(make_client,
     assert client.get("/assets/absent-zzz.js").status_code in (200, 404)
 
 
-def test_idle_trim_drops_caches_once_per_idle_period(client):
+def test_idle_trim_runs_once_per_idle_period_and_keeps_the_indexes(client):
     data = client.app.state.data
     client.get("/api/notes")
-    before = data.store
+    before = data.store.cached()
     calls = []
     data.idle_hooks.append(lambda: calls.append(1))
     assert not data.trim_if_idle(now=data.last_request + 10)
     assert data.trim_if_idle(now=data.last_request + 121)
-    assert data.store is not before and calls == [1]
+    assert data.store.cached() == before and len(before) == 2 and calls == [1]
     assert not data.trim_if_idle(now=data.last_request + 500)  # once per idle period
     client.get("/api/notes")
     assert not data.trimmed

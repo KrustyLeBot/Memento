@@ -21,6 +21,7 @@ from starlette.routing import Route
 from ..core import fmt, now_ms
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import read_versioned, require_version
+from ..memo import Answers, json_response
 from .agenda_index import AgendaIndex, core, entry_json, parse_day, zone_of
 from .notes import check_note_path
 
@@ -174,7 +175,9 @@ class Agenda:
     def __init__(self, data):
         self.data = data
         self.index = AgendaIndex(data)
-        data.idle_hooks.append(self.index.drop)
+        self.answers = Answers(8)  # the windows' JSON
+        data.idle_hooks.append(self.index.trim)
+        data.idle_hooks.append(self.answers.clear)
 
     def routes(self) -> list[Route]:
         return [
@@ -261,10 +264,18 @@ class Agenda:
 
         def run():
             self.index.load()
-            result = self.index.entries(first, last, zone)
-            return {"entries": [entry_json(e) for e in result.entries],
-                    "problems": self.index.problems + result.problems}
-        return JSONResponse(await self.data.read(run))
+
+            def answer():
+                result = self.index.entries(first, last, zone)
+                return {"entries": [entry_json(e) for e in result.entries],
+                        "problems": self.index.problems + result.problems}
+            # the sources and the problems are replaced (not changed in place) by a load that finds a change
+            body = self.answers.body((first, last, zone), [self.index.sources, self.index.problems], answer)
+            self.index.zone = zone
+            if self.index.wants_wide() and self.data.warmer is not None:
+                self.data.warmer.want_wide()  # the next windows are cut from it
+            return body
+        return json_response(await self.data.read(run))
 
     async def search(self, request: Request) -> JSONResponse:
         query = request.query_params.get("q", "").strip()

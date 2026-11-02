@@ -6,11 +6,17 @@
 // - A file the user edits is versioned: GET returns `version`, the write sends it back (`version` option →
 //   If-Match), and a 409 carries `current` = the file as it is now ({...,version}) or null if it was deleted.
 // - A 401 anywhere means the session ended: `session` is cleared and the login screen shows.
+// - The modules' root lists go through `lists` (lib/cache.js): shown at once from memory, refreshed in the background
+//   on a server change; any write from this tab empties it.
 import { writable } from 'svelte/store';
+import { createCache } from './cache.js';
 
 /** @typedef {{ user: string, expires: number }} Session */
 /** @type {import('svelte/store').Writable<Session | null | undefined>} undefined = not checked yet */
 export const session = writable(undefined);
+
+// Requests that change nothing although they are not GETs.
+const READ_ONLY = ['/api/agenda/rule'];
 
 export class ApiError extends Error {
   /** @param {number} status @param {string} message @param {any} body */
@@ -51,6 +57,7 @@ export async function request(method, path, options = {}) {
   } catch {
     data = null;
   }
+  if (method !== 'GET' && !READ_ONLY.some((p) => path.startsWith(p))) lists.forget();
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/login') session.set(null);
     const message = (data && data.error) || `Erreur ${response.status}${text && !data ? ` : ${text.slice(0, 200)}` : ''}`;
@@ -58,6 +65,12 @@ export async function request(method, path, options = {}) {
   }
   return data;
 }
+
+/** The root lists' cache: `lists.get(path, area, { signal, onFresh })`, `lists.prefetch(path, area)`. */
+export const lists = createCache((path) => request('GET', path));
+session.subscribe((s) => {
+  if (!s) lists.forget();
+});
 
 const enc = (/** @type {string} */ path) => path.split('/').map(encodeURIComponent).join('/');
 
@@ -85,9 +98,18 @@ export const auth = {
  */
 
 export const notes = {
-  /** @returns {Promise<{ notes: NoteSummary[], labels: string[], conflicts: number }>} */
-  list: (q = '', label = '', /** @type {AbortSignal | undefined} */ signal = undefined) =>
-    request('GET', `/api/notes?${new URLSearchParams({ q, label })}`, { signal }),
+  /** Without a search, from the cache (`onFresh`: the newer answer when the cached one was stale).
+   * @returns {Promise<{ notes: NoteSummary[], labels: string[], conflicts: number }>} */
+  list: (q = '', label = '', /** @type {AbortSignal | undefined} */ signal = undefined,
+    /** @type {((data: any) => void) | undefined} */ onFresh = undefined) => {
+    const path = `/api/notes?${new URLSearchParams({ q, label })}`;
+    return q ? request('GET', path, { signal }) : lists.get(path, 'notes', { signal, onFresh });
+  },
+  prefetch: () => {
+    const q = sessionStorage.getItem('memento.notes.q') || '';
+    const label = sessionStorage.getItem('memento.notes.label') || '';
+    return q.trim() ? Promise.resolve() : lists.prefetch(`/api/notes?${new URLSearchParams({ q: '', label })}`, 'notes');
+  },
   /** @returns {Promise<VersionedNote>} */
   get: (/** @type {string} */ path) => request('GET', `/api/notes/${enc(path)}`),
   /** @returns {Promise<VersionedNote>} */

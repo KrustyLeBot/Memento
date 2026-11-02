@@ -4,7 +4,7 @@
 // reopened with a growing delay (1 s … 30 s); once back, every subscriber gets all areas (it may have missed
 // something meanwhile).
 import { writable } from 'svelte/store';
-import { auth } from './api.js';
+import { auth, lists } from './api.js';
 
 export const AREAS = ['notes', 'activities', 'agenda', 'contacts'];
 /** false while the live stream is down (shown discreetly in the shell). */
@@ -28,6 +28,7 @@ export function onChange(fn) {
 
 /** @param {string[]} areas */
 function emit(areas) {
+  lists.stale(areas);
   for (const fn of listeners) {
     try {
       fn(areas);

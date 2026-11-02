@@ -45,6 +45,18 @@
   $: if ($session) connect();
   else if ($session === null) disconnect();
 
+  // Once signed in and idle, the other modules' pages are fetched, so that opening one only waits for its data
+  // (itself fetched when the pointer approaches its rail entry: Rail.svelte).
+  let preloaded = false;
+  $: if ($session && !preloaded) {
+    preloaded = true;
+    const idle = /** @type {any} */ (window).requestIdleCallback || ((/** @type {() => void} */ fn) => setTimeout(fn, 1500));
+    idle(() => {
+      for (const m of MODULES) m.load().catch(() => {});
+      loadSettings().catch(() => {});
+    });
+  }
+
   $: shown = MODULES.filter((m) => !m.hideable || !$prefs.hidden.includes(m.key));
   $: current = $route.module === 'settings' ? null : shown.find((m) => m.key === $route.module);
   $: if ($session && $route.module !== 'settings' && !current) go(['notes'], undefined, true);

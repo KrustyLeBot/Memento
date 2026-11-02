@@ -54,6 +54,27 @@ export const weekStartOf = (iso, weekStart) => addDays(iso, -((weekday(iso) - we
 /** First cell of the 6-week month grid. @param {string} iso @param {number} weekStart */
 export const gridStart = (iso, weekStart) => weekStartOf(`${iso.slice(0, 8)}01`, weekStart);
 
+/** Days the list view loads at a time. */
+export const CHUNK = 60;
+
+/**
+ * The days a view shows, [first, last]: the month's 6-week grid, the week, the day, or `span` days from the anchor.
+ * @param {string} view @param {string} anchor @param {number} span @param {number} weekStart
+ * @returns {[string, string]}
+ */
+export function windowOf(view, anchor, span, weekStart) {
+  if (view === 'month') {
+    const first = gridStart(anchor, weekStart);
+    return [first, addDays(first, 41)];
+  }
+  if (view === 'week') {
+    const first = weekStartOf(anchor, weekStart);
+    return [first, addDays(first, 6)];
+  }
+  if (view === 'day') return [anchor, anchor];
+  return [anchor, addDays(anchor, span - 1)];
+}
+
 /** @param {string} iso */
 export const dayNumber = (iso) => (parts(iso)[2] === 1 ? '1er' : String(parts(iso)[2]));
 /** "lundi 2 novembre 2026". @param {string} iso */

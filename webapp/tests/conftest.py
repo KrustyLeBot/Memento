@@ -48,7 +48,7 @@ def folders(tmp_path):
 
 def make_env(data: Path, config: Path, **extra) -> dict:
     return {"MEMENTO_USER": USER, "MEMENTO_PASSWORD": PASSWORD, "MEMENTO_DATA": str(data),
-            "MEMENTO_CONFIG": str(config), "MEMENTO_POLL_SECONDS": "0.5", **extra}
+            "MEMENTO_CONFIG": str(config), "MEMENTO_POLL_SECONDS": "0.5", "MEMENTO_WARM": "false", **extra}
 
 
 class FakeNet:

@@ -16,8 +16,8 @@ from .events import Watcher
 from .files import resolve
 from .undo import Undo
 
-# After this long without a request the caches go and the freed memory is handed back to the system: the NAS
-# running this has little RAM, and an open tab only holds the event stream.
+# After this long without a request the transient caches go and the freed memory is handed back to the system: the
+# NAS running this has little RAM, and an open tab only holds the event stream.
 IDLE_TRIM_SECONDS = 120
 
 
@@ -42,6 +42,7 @@ class Data:
         self.last_request = time.monotonic()
         self.trimmed = False
         self.idle_hooks: list = []  # callables run on an idle trim, under the lock
+        self.warmer = None  # warm.Warmer, set by the app: refreshes the indexes on changes
 
     def path(self, relative: str) -> Path:
         return resolve(self.root, relative)
@@ -51,13 +52,13 @@ class Data:
         self.trimmed = False
 
     def trim_if_idle(self, now: float | None = None) -> bool:
-        """Drops the parsed-notes cache (rebuilt on the next request) and trims the heap once per idle period.
-        Modules keeping caches of their own register them in `idle_hooks`."""
+        """Once per idle period, drops the transient caches (modules register them in `idle_hooks`: analyses beyond
+        the recent ones, the agenda's windows) and trims the heap. The indexes (parsed notes, activities, contacts,
+        events) stay: rebuilding them is what made the first visit after an idle period slow."""
         now = time.monotonic() if now is None else now
         if self.trimmed or now - self.last_request < IDLE_TRIM_SECONDS:
             return False
         with self.lock:
-            self.store = Store(self.root)
             for hook in self.idle_hooks:
                 hook()
         gc.collect()

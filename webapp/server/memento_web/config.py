@@ -28,6 +28,7 @@ class Config:
     trust_proxy: bool = False
     trusted_proxies: tuple = ()  # networks allowed to set CF-Connecting-IP / X-Forwarded-Proto; empty = any peer
     poll_seconds: float = 3.0
+    warm: bool = True  # build the indexes in the background at startup (warm.py); the tests turn it off
     static_dir: Path | None = None  # the built UI (webapp/ui/dist)
     map_dir: Path | None = None  # web/map of the repository
     tiles_fetch: object = field(default=None, compare=False)  # tests replace the network
@@ -127,6 +128,7 @@ def from_env(env: dict | None = None) -> Config:
     except ValueError as error:
         raise ConfigError(f"MEMENTO_TRUSTED_PROXIES : {error}") from None
     trust = _bool("MEMENTO_TRUST_PROXY", env.get("MEMENTO_TRUST_PROXY", "false"))
+    warm = _bool("MEMENTO_WARM", env.get("MEMENTO_WARM", "true"))
     if trust and not proxies:
         print("memento-web: MEMENTO_TRUST_PROXY without MEMENTO_TRUSTED_PROXIES: any peer that reaches the port "
               "(the LAN too) may set CF-Connecting-IP and X-Forwarded-Proto. Set the tunnel's network.", flush=True)
@@ -135,6 +137,6 @@ def from_env(env: dict | None = None) -> Config:
     return Config(
         user=user.strip(), password=password, data=data, config_dir=config_dir,
         session_secret=_session_secret(env, config_dir), session_days=days, cookie_secure=secure,
-        trust_proxy=trust, trusted_proxies=proxies,
+        trust_proxy=trust, trusted_proxies=proxies, warm=warm,
         poll_seconds=max(poll, 0.5), static_dir=Path(static) if static else None, map_dir=Path(map_dir) if map_dir else None,
     )

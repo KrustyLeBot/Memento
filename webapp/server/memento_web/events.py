@@ -6,6 +6,7 @@ Stream format (GET /api/events):
     data: {"areas": ["notes", "agenda"]}       areas: notes | activities | agenda | contacts
 A comment line (`: ping`) goes out every HEARTBEAT seconds: Cloudflare closes a request silent for 100 s.
 A write made through the API calls `poke()`, so the other tabs hear of it without waiting for the next poll.
+Before a change goes out, the warmer (warm.py) re-reads the changed files, so the pages' reloads find them ready.
 """
 from __future__ import annotations
 
@@ -62,6 +63,9 @@ class Watcher:
             self._wake.clear()
             await self.check()
             await run_in_threadpool(self.data.trim_if_idle)
+            warmer = getattr(self.data, "warmer", None)
+            if warmer is not None:
+                warmer.tick()
 
     async def check(self) -> list[str]:
         snapshot = await run_in_threadpool(self.data.store.snapshot)
@@ -70,6 +74,9 @@ class Watcher:
         areas = changed_areas(self.snapshot, snapshot)
         self.snapshot = snapshot
         if areas:
+            warmer = getattr(self.data, "warmer", None)
+            if warmer is not None:  # the changed files are parsed before the pages come asking for them
+                await run_in_threadpool(warmer.refresh, areas)
             self.publish("change", {"areas": areas})
         return areas
 

@@ -28,6 +28,7 @@ from .modules.contacts import Contacts
 from .modules.maphost import MapHost
 from .modules.notes import Notes
 from .security import Guard
+from .warm import Warmer
 
 
 def default_static_dir() -> Path:
@@ -84,6 +85,7 @@ def create_app(config: Config, fetch=None) -> Starlette:
         return await data.watcher.stream(request)
 
     agenda = Agenda(data)
+    data.warmer = warmer = Warmer(data, agenda.index, activities, enabled=config.warm)
     routes = [
         Route("/healthz", healthz),
         Route("/api/login", auth.login, methods=["POST"]),
@@ -115,9 +117,11 @@ def create_app(config: Config, fetch=None) -> Starlette:
     @contextlib.asynccontextmanager
     async def lifespan(app):
         await data.watcher.start()
+        warmer.start()  # in its own thread: the server answers at once, from whatever is ready
         try:
             yield
         finally:
+            warmer.stop()
             await data.watcher.stop()
 
     async def api_error(request: Request, error: ApiError) -> Response:
@@ -142,5 +146,6 @@ def create_app(config: Config, fetch=None) -> Starlette:
     app.state.auth = auth
     app.state.maphost = maphost
     app.state.activities = activities
+    app.state.warmer = warmer
     app.add_middleware(Guard, auth=auth, on_request=data.touch)
     return app

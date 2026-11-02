@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -306,16 +307,40 @@ def test_export_one_calendar_and_all_as_zip(client):
     assert sorted(archive.namelist()) == ["notes.ics", "perso.ics"]
 
 
-def test_agenda_core_is_loaded_on_first_use_and_dropped_when_idle(client):
+def test_agenda_core_is_not_imported_with_the_app_and_its_index_survives_idle(client):
     code = ("import sys; sys.path.insert(0, %r); from memento_web.app import create_app; "
             "print('dateutil' in sys.modules, 'memento_win.core.agenda.recurrence' in sys.modules)"
             % str(Path(__file__).resolve().parents[1] / "server"))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.split()
-    assert out == ["False", "False"]
+    assert out == ["False", "False"]  # imported by the warm-up thread, after the server is up
     create(client, title="x", start="2026-11-12")
-    data = client.app.state.data
-    agenda_index = next(h.__self__ for h in data.idle_hooks if getattr(h, "__name__", "") == "drop")
-    assert agenda_index.sources is not None
-    assert data.trim_if_idle(now=data.last_request + 1000)
-    assert agenda_index.sources is None
     assert entries(client, "2026-11-12", "2026-11-12")[0]["all_day"]
+    data = client.app.state.data
+    index = client.app.state.warmer.index
+    sources = index.sources
+    assert sources is not None and index._entries
+    assert data.trim_if_idle(now=data.last_request + 1000)
+    assert index.sources is sources and not index._entries  # the index stays, the windows go
+    assert entries(client, "2026-11-12", "2026-11-12")[0]["all_day"]
+
+
+def test_windows_cut_from_the_wide_one_are_what_a_direct_build_returns(client):
+    create(client, title="Hebdo", start="2026-11-02T09:00", end="2026-11-02T10:00", tz="Europe/Paris",
+           rrule="FREQ=WEEKLY")
+    create(client, title="Jour", start="2026-11-12")
+    create(client, title="Instant", start="2026-11-20T12:00", tz="Europe/Paris")
+    create(client, title="Nuit", start="2026-11-29T23:30", end="2026-11-30T00:30", tz="America/New_York")
+    data = client.app.state.data
+    index = client.app.state.warmer.index
+    zone = "Europe/Paris"
+    with data.lock:
+        index.load()
+        index.zone = zone
+        index.prepare_wide(today=date(2026, 11, 15))
+        assert not index.wants_wide() and index._wide is not None
+        for first, last in [(date(2026, 10, 26), date(2026, 12, 6)), (date(2026, 11, 30), date(2026, 11, 30)),
+                            (date(2026, 11, 20), date(2026, 11, 20)), (date(2026, 11, 9), date(2026, 11, 15))]:
+            cut = index.entries(first, last, zone)
+            direct = index._build(first, last, zone)
+            assert [e.key for e in cut.entries] == [e.key for e in direct.entries] and cut.entries
+            assert cut.problems == direct.problems

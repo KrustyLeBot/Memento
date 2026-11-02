@@ -43,7 +43,8 @@
     const controller = new AbortController();
     pending = controller;
     try {
-      ({ sections, count, results } = await api.list(query.trim(), firstNameFirst, controller.signal));
+      const apply = (/** @type {any} */ data) => ({ sections, count, results } = data);
+      apply(await api.list(query.trim(), firstNameFirst, controller.signal, apply));
       loaded = true;
     } catch (error) {
       showError(error, 'Liste des contacts');

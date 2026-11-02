@@ -472,10 +472,19 @@ webapp/Dockerfile           built from the repository root: docker build -f weba
 
 Activités on the web: the list reads only the notes' `activity:` summaries; a track is parsed and analysed (core
 `analysis.py`) only when it is opened, and what the page draws (figures, charts, map data thinned to 5000 points)
-is cached as JSON, a few in memory (dropped when idle) and the rest in `/config/cache/activities`. FIT / GPX
+is cached as JSON, up to 40 in memory and the rest in `/config/cache/activities`. FIT / GPX
 imports and the optional altitude completion (opentopodata.org, asked for explicitly) run in the background with
 their progress shown. The map is the shared page in an `<iframe>` of the same site, driven through `postMessage`
 (`{target: 'smap', call, args}` in, `{source: 'smap', …event}` out, same origin only), one frame kept for every activity.
+
+Speed: at startup a low-priority thread (`warm.py`) reads the whole folder into memory (parsed notes, activities,
+contacts, events), builds the agenda's ±3–4 months around today and prepares the 10 most recent activities'
+analyses; the server answers from the first second meanwhile. These indexes stay in memory (the idle trim drops only
+the other analyses and the agenda's windows) and are saved in `/config/cache/index-*.bin` (signed with the session
+secret, each entry checked against its file's time and size), so a restart re-reads only what changed. A change seen
+by the folder poll is parsed before it is pushed to the pages. In the browser, the modules' lists are kept in memory
+and refreshed in the background on a change, and pointing at a rail entry fetches its page and list ahead of the
+click. About 50–60 MB of memory for a folder of a few thousand files (`MEMENTO_WARM=false` turns the warm-up off).
 
 Deployment: `webapp/docker-compose.example.yml` and `webapp/.env.example`. The CI tests both halves and publishes
 `ghcr.io/krustylebot/memento-web:latest` (and `:<build>`) from `main`. Development: `python -m memento_web` in

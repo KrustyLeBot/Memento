@@ -1,7 +1,7 @@
 // @ts-check
 // The agenda's calls to the server (memento_web/modules/agenda.py, agenda_ics.py). Every call carries the browser's
 // IANA zone: it plays the part of the device zone of the apps (floating events, all-day days, entry dates).
-import { request } from '../../lib/api.js';
+import { lists, request } from '../../lib/api.js';
 
 export const ZONE = (() => {
   try {
@@ -40,8 +40,12 @@ const qs = (params = {}) => {
 
 export const agenda = {
   /** @returns {Promise<{ entries: Entry[], problems: string[] }>} */
-  entries: (/** @type {string} */ from, /** @type {string} */ to, /** @type {AbortSignal | undefined} */ signal = undefined) =>
-    request('GET', `/api/agenda/entries${qs({ from, to })}`, { signal }),
+  /** From the cache (`onFresh`: the newer answer when the cached one was stale). */
+  entries: (/** @type {string} */ from, /** @type {string} */ to, /** @type {AbortSignal | undefined} */ signal = undefined,
+    /** @type {((data: any) => void) | undefined} */ onFresh = undefined) =>
+    lists.get(`/api/agenda/entries${qs({ from, to })}`, 'agenda', { signal, onFresh }),
+  prefetchEntries: (/** @type {string} */ from, /** @type {string} */ to) =>
+    lists.prefetch(`/api/agenda/entries${qs({ from, to })}`, 'agenda'),
   /** @returns {Promise<{ entries: Entry[] }>} */
   search: (/** @type {string} */ q, /** @type {AbortSignal | undefined} */ signal = undefined) =>
     request('GET', `/api/agenda/search${qs({ q })}`, { signal }),
@@ -65,7 +69,9 @@ export const agenda = {
   restore: (/** @type {string} */ path, /** @type {string} */ version) =>
     request('POST', `/api/agenda/restore/${enc(path)}${qs()}`, { version }),
   /** @returns {Promise<Calendars>} */
-  calendars: () => request('GET', '/api/agenda/calendars'),
+  calendars: (/** @type {((data: any) => void) | undefined} */ onFresh = undefined) =>
+    lists.get('/api/agenda/calendars', 'agenda', { onFresh }),
+  prefetchCalendars: () => lists.prefetch('/api/agenda/calendars', 'agenda'),
   /** @returns {Promise<Calendars>} */
   changeCalendars: (/** @type {string | null} */ version, /** @type {Record<string, any>} */ change) =>
     request('PUT', '/api/agenda/calendars', { version, json: change }),

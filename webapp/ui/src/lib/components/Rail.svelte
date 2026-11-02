@@ -1,15 +1,24 @@
 <script>
-  // The module switcher: a left rail on a wide screen (like the Windows app), a bottom bar on a phone.
+  // The module switcher: a left rail on a wide screen (like the Windows app), a bottom bar on a phone. Pointing at
+  // an entry (hover, focus, the start of a touch) fetches its page and its list ahead of the click.
   import Icon from './Icon.svelte';
   import { href } from '../router.js';
-  /** @type {{ key: string, label: string, icon: any }[]} */
+  /** @type {{ key: string, label: string, icon: any, load?: () => Promise<any>, prefetch?: () => Promise<any> }[]} */
   export let modules;
   export let current = '';
+
+  /** @param {(typeof modules)[number]} m */
+  function approach(m) {
+    if (m.key === current) return;
+    m.load?.().catch(() => {}); // a failed chunk is reported when the module is actually opened
+    m.prefetch?.();
+  }
 </script>
 
 <nav class="rail" aria-label="Modules">
   {#each modules as m (m.key)}
-    <a class="item" class:on={current === m.key} href={href([m.key])} aria-current={current === m.key ? 'page' : undefined}>
+    <a class="item" class:on={current === m.key} href={href([m.key])} aria-current={current === m.key ? 'page' : undefined}
+      on:pointerenter={() => approach(m)} on:focus={() => approach(m)} on:touchstart|passive={() => approach(m)}>
       <span class="pill"><Icon name={m.icon} /></span>
       <span class="label">{m.label}</span>
     </a>

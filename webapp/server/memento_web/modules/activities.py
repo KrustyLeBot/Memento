@@ -7,8 +7,9 @@ An activity is addressed by its note id (the agenda links `#/activities/<id>`), 
 (`sortie-a1b2c3.md`) for a sync conflict copy, which shares its original's id.
 
 Memory: an analysis holds every sample of the track (tens of MB for a long day), so it is never kept. What is kept
-is the JSON the UI gets (charts and map thinned, a few hundred KB), in a small in-memory LRU dropped when the
-server goes idle, and on disk under /config/cache/activities so a reopened activity costs one file read.
+is the JSON the UI gets (charts and map thinned, a few hundred KB), in an in-memory LRU (MEMORY_ITEMS / MEMORY_BYTES)
+and on disk under /config/cache/activities so a reopened activity costs one file read. The RECENT most recent
+activities' analyses are computed at warm-up (warm.py) and stay in memory when the server goes idle; the others go.
 
 Imports and altitude completions run in a background thread (`/api/activities/jobs/<id>` reports progress): the
 terrain service allows one request per second, so a batch can take minutes, longer than a proxied request may last.
@@ -34,10 +35,11 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.concurrency import run_in_threadpool
 
-from ..core import ACTIVITIES_DIR, MAX_ATTACHMENT, Sport, atomic, fmt, now_ms
+from ..core import ACTIVITIES_DIR, MAX_ATTACHMENT, SETTINGS_PATH, ActivitySettings, Sport, atomic, fmt, now_ms
 from ..data import _malloc_trim
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import owned, read_versioned, require_version, unlink_quiet, write_stream
+from ..memo import Answers, json_response
 
 from memento_win.core import activity as act  # noqa: E402  (..core put memento_win on the path)
 from memento_win.core import elevation, mapdata  # noqa: E402
@@ -55,6 +57,9 @@ SUBPROCESS_BYTES = 1_000_000
 ANALYSIS_TIMEOUT = 50  # s: under the 60 s a proxied request may last
 PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 JOB_TTL = 600
+MEMORY_ITEMS = 40
+MEMORY_BYTES = 24_000_000
+RECENT = 10  # analyses prepared at warm-up and kept through idle periods
 IMAGES = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
 
 
@@ -155,12 +160,13 @@ class AnalysisCache:
     """The analyses' JSON (bytes), by key: a small LRU in memory (capped by count and by size), backed by files in
     `directory` (capped too, least recently used removed first). Concurrent requests for one key compute it once."""
 
-    def __init__(self, directory: Path, max_items: int = 6, max_bytes: int = 4_000_000,
+    def __init__(self, directory: Path, max_items: int = MEMORY_ITEMS, max_bytes: int = MEMORY_BYTES,
                  disk_items: int = 400, disk_bytes: int = 64_000_000):
         self.directory = directory
         self.max_items, self.max_bytes = max_items, max_bytes
         self.disk_items, self.disk_bytes = disk_items, disk_bytes
         self.memory: OrderedDict[str, bytes] = OrderedDict()
+        self.pinned: set[str] = set()  # kept by drop_memory (the recent activities')
         self._guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
         self.computed = 0  # for the tests
@@ -170,8 +176,14 @@ class AnalysisCache:
         return sum(len(v) for v in self.memory.values())
 
     def drop_memory(self) -> None:
+        """Idle hook: everything but the pinned analyses leaves memory (the disk copies stay)."""
         with self._guard:
-            self.memory.clear()
+            for key in [k for k in self.memory if k not in self.pinned]:
+                del self.memory[key]
+
+    def pin(self, keys) -> None:
+        with self._guard:
+            self.pinned = set(keys)
 
     def _remember(self, key: str, value: bytes) -> None:
         with self._guard:
@@ -268,6 +280,8 @@ class Activities:
         self.elevation_get = elevation_get or elevation.http_get
         self.elevation_pause = elevation_pause or (lambda: time.sleep(1.1))
         data.idle_hooks.append(self.cache.drop_memory)
+        self.recent = RECENT
+        self.answers = Answers(2)
 
     def routes(self) -> list[Route]:
         return [
@@ -357,13 +371,18 @@ class Activities:
 
     async def list(self, request: Request) -> JSONResponse:
         def run():
-            notes = [n for n in self.data.store.scan_activities() if n.activity]
-            notes.sort(key=lambda n: -n.activity.start)
-            settings = self.data.store.activity_settings()
-            return {"activities": [summary(n) for n in notes],
-                    "totals": [s.key for s in Sport if s in settings.totals],
-                    "sports": [{"key": s.key, "label": s.label, "has_gps": s.has_gps} for s in Sport]}
-        return JSONResponse(await self.data.read(run))
+            scanned = self.data.store.scan_activities()
+            text = self.data.store.read_raw(SETTINGS_PATH)
+
+            def answer():
+                notes = [n for n in scanned if n.activity]
+                notes.sort(key=lambda n: -n.activity.start)
+                settings = ActivitySettings.parse(text) if text else ActivitySettings()
+                return {"activities": [summary(n) for n in notes],
+                        "totals": [s.key for s in Sport if s in settings.totals],
+                        "sports": [{"key": s.key, "label": s.label, "has_gps": s.has_gps} for s in Sport]}
+            return self.answers.body(text, scanned, answer)
+        return json_response(await self.data.read(run))
 
     async def get(self, request: Request) -> JSONResponse:
         return JSONResponse(await self.data.read(self._detail, request.path_params["key"]))
@@ -377,24 +396,43 @@ class Activities:
                 raise not_found("Cette activité n'a pas de tracé")
             return note, self._analysis_key(note)
         note, cache_key = await self.data.read(locate)
-        info = note.activity
-
-        def compute() -> bytes:
-            try:
-                size = self.data.path(info.file).stat().st_size
-            except OSError:
-                raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
-            if size > self.subprocess_bytes:
-                return self._analyse_apart(info)
-            try:
-                track = self._locked(self.data.store.read_track, info)
-            except OSError:
-                raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
-            except Exception as error:  # noqa: BLE001 — an unreadable file is the user's to know about
-                raise ApiError(422, f"Tracé illisible : {error}") from None
-            return analysis_body(track, info)
-        body = await run_in_threadpool(self.cache.get, cache_key, compute)
+        body = await run_in_threadpool(self.cache.get, cache_key, lambda: self._compute(note.activity))
         return Response(body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+    def _compute(self, info: act.ActivityInfo) -> bytes:
+        try:
+            size = self.data.path(info.file).stat().st_size
+        except OSError:
+            raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
+        if size > self.subprocess_bytes:
+            return self._analyse_apart(info)
+        try:
+            track = self._locked(self.data.store.read_track, info)
+        except OSError:
+            raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
+        except Exception as error:  # noqa: BLE001 — an unreadable file is the user's to know about
+            raise ApiError(422, f"Tracé illisible : {error}") from None
+        return analysis_body(track, info)
+
+    def prepare_recent(self, stop=lambda: False) -> int:
+        """Computes (or reads back from the disk cache) the analyses of the most recent activities with a track, and
+        pins them in memory. Runs in the background (warm.py): a request for one of them meanwhile waits for it."""
+        def recent():
+            notes = [n for n in self.data.store.scan_activities() if n.activity and n.activity.file and not n.conflict]
+            notes.sort(key=lambda n: -n.activity.start)
+            return [(n.activity, self._analysis_key(n)) for n in notes[:self.recent]]
+        wanted = self._locked(recent)
+        self.cache.pin(key for _info, key in wanted)
+        done = 0
+        for info, key in wanted:
+            if stop():
+                break
+            try:
+                self.cache.get(key, lambda: self._compute(info))
+                done += 1
+            except ApiError:  # a missing or unreadable track: the page says so when it is opened
+                pass
+        return done
 
     def _analyse_apart(self, info: act.ActivityInfo) -> bytes:
         """A long track is analysed in a child process (memento_web/analyse.py), which gives all its memory back."""

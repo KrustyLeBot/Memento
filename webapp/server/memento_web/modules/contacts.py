@@ -22,6 +22,7 @@ from ..core import fmt
 from memento_win.core import contacts as ct  # noqa: E402 (on the path once ..core is imported)
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import read_versioned, require_version, unlink_quiet, write_stream
+from ..memo import Answers, json_response
 
 MAX_VCF = 20_000_000  # as the Windows import
 STEP_SECONDS = 4.0  # work done per import request; the page asks for the next step at once
@@ -132,6 +133,7 @@ class Contacts:
     def __init__(self, data):
         self.data = data
         self.imports: dict[str, Running] = {}
+        self.answers = Answers()
         data.idle_hooks.append(self.imports.clear)
 
     @property
@@ -211,15 +213,18 @@ class Contacts:
 
         def run():
             people = self._all()
-            live = sum(1 for c in people if not c.conflict)
-            if query:
-                found = ct.search(people, query, first)
-                return {"sections": [{"title": "", "contacts": [summary(c) for c in found]}] if found else [],
-                        "count": live, "results": len(found)}
-            return {"sections": [{"title": t, "contacts": [summary(c) for c in members]}
-                                 for t, members in ct.sections(people, first)],
-                    "count": live, "results": None}
-        return JSONResponse(await self.data.read(run))
+
+            def answer():
+                live = sum(1 for c in people if not c.conflict)
+                if query:
+                    found = ct.search(people, query, first)
+                    return {"sections": [{"title": "", "contacts": [summary(c) for c in found]}] if found else [],
+                            "count": live, "results": len(found)}
+                return {"sections": [{"title": t, "contacts": [summary(c) for c in members]}
+                                     for t, members in ct.sections(people, first)],
+                        "count": live, "results": None}
+            return self.answers.body((query, first), people, answer)
+        return json_response(await self.data.read(run))
 
     async def get(self, request: Request) -> JSONResponse:
         c, version = await self.data.read(self._load, request.path_params["ref"])
