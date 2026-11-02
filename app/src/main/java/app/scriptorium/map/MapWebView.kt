@@ -203,6 +203,9 @@ object MapHost {
         web = w
         ready = false
         paused = false
+        // pauseTimers() is process-wide and outlives the WebView it was called on: after a renderer lost
+        // while paused, the new page would otherwise never run a timer and never say "ready"
+        w.resumeTimers()
         val url = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") + "&theme=" + (if (dark) "dark" else "light") + "&interactive=1"
         w.loadUrl(url)
         return w

@@ -91,8 +91,18 @@ private fun load(vm: MainViewModel, scope: CoroutineScope, read: () -> Route, on
 }
 
 private fun readUri(context: Context, uri: Uri): Route {
-    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw java.io.IOException("Fichier illisible")
-    if (bytes.size > 50_000_000) throw java.io.IOException("Fichier trop gros")
+    // the size is checked while reading: a huge file picked by mistake must not be loaded whole first
+    val bytes = context.contentResolver.openInputStream(uri)?.use { s ->
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val n = s.read(buf)
+            if (n < 0) break
+            out.write(buf, 0, n)
+            if (out.size() > 50_000_000) throw java.io.IOException("Fichier trop gros")
+        }
+        out.toByteArray()
+    } ?: throw java.io.IOException("Fichier illisible")
     val name = uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.')?.ifBlank { null } ?: "Parcours"
     return RouteFile.read(bytes, name)
 }
@@ -140,6 +150,9 @@ fun prepareRoute(vm: MainViewModel, scope: CoroutineScope, route: Route, onStart
             onStarted(id)
         } catch (e: OfflinePacks.PackException) {
             vm.snack = Snack(e.message ?: "Préparation impossible")
+        } catch (e: java.io.IOException) {
+            // writing the pack's first files (storage full): uncaught, it would crash the app mid-recording start
+            vm.snack = Snack("Préparation impossible : ${e.message}")
         }
     }
 }

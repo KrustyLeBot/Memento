@@ -34,8 +34,10 @@ object TileSources {
     /**
      * IGN has no tile there (outside France, sea): a 4xx, an empty body or a non-image answer (its
      * "No data found" exception report). Server errors are not that: the map shows nothing instead of
-     * quietly switching style, and the next request tries IGN again.
+     * quietly switching style, and the next request tries IGN again. Nor are a rate limit (429) or a
+     * request timeout (408): read as "no tile", a pack download would mark itself complete with holes.
      */
     fun ignHasNoTile(code: Int, contentType: String?, size: Int): Boolean =
-        code in 400..499 || code == 204 || (code == 200 && (size == 0 || contentType?.startsWith("image/") == false))
+        (code in 400..499 && code != 408 && code != 429) || code == 204 ||
+            (code == 200 && (size == 0 || contentType?.startsWith("image/") == false))
 }

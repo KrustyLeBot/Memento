@@ -90,7 +90,8 @@ object Json {
                             'f' -> b.append('\u000c')
                             'u' -> {
                                 if (i + 4 > s.length) throw JsonException("JSON : échappement invalide")
-                                b.append(s.substring(i, i + 4).toInt(16).toChar())
+                                val code = s.substring(i, i + 4).toIntOrNull(16) ?: throw JsonException("JSON : échappement invalide")
+                                b.append(code.toChar())
                                 i += 4
                             }
                             else -> b.append(e)

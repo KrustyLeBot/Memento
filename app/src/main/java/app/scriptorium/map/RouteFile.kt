@@ -31,15 +31,20 @@ object RouteFile {
         val rte = ArrayList<Triple<Double, Double, Double?>>()
         for (m in PT.findAll(text)) {
             val attrs = m.groupValues[2]
-            val lat = ATTR_LAT.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
-            val lon = ATTR_LON.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
+            // "NaN" parses as a number: one such point would make the route's box, and its pack, NaN
+            val lat = ATTR_LAT.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: continue
+            val lon = ATTR_LON.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: continue
             val ele = ELE.find(m.groupValues[4])?.groupValues?.get(1)?.toDoubleOrNull()
             (if (m.groupValues[1] == "trkpt") trk else rte).add(Triple(lat, lon, ele))
         }
-        val name = NAME.find(text)?.groupValues?.get(1)?.trim()?.ifEmpty { null } ?: fallbackName
+        val name = NAME.find(text)?.groupValues?.get(1)?.let { unescape(it) }?.trim()?.ifEmpty { null } ?: fallbackName
         // a file with both usually carries the detailed track and a few route waypoints
         return Route.of(name, if (trk.size >= rte.size) trk else rte)
     }
+
+    /** The XML entities a name can carry ("Tour &amp; crêtes"); `&amp;` last, so "&amp;lt;" stays "&lt;". */
+    private fun unescape(s: String) =
+        s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 
     fun fromTrack(track: Track, fallbackName: String): Route =
         Route.of(track.name ?: fallbackName, track.points.map { Triple(it.lat, it.lon, it.alt) })

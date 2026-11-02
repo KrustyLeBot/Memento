@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -46,22 +47,41 @@ object OfflinePacks {
     private val _progress = MutableStateFlow<Map<String, Progress>>(emptyMap())
     val progress: StateFlow<Map<String, Progress>> = _progress
 
+    private const val PURGE_EVERY_MS = 10L * 60 * 1000
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
+    /** Packs a recording is using: kept past their 24 h until it ends, not pulled from under the hiker. */
+    private val pinned = ConcurrentHashMap.newKeySet<String>()
     private lateinit var dir: File
 
     @Synchronized
     fun init(context: Context) {
         if (::dir.isInitialized) return
         dir = File(context.applicationContext.filesDir, "packs")
-        scope.launch { refresh() }
+        // the process can live for days (a recording keeps it up): expiry is not only checked at startup
+        scope.launch {
+            while (true) {
+                refresh()
+                delay(PURGE_EVERY_MS)
+            }
+        }
     }
+
+    /** Uses [packs] folder directly, without a Context (JVM tests). */
+    @Synchronized
+    internal fun initDir(packs: File) {
+        dir = packs
+    }
+
+    fun pin(id: String) { pinned.add(id) }
+
+    fun unpin(id: String) { pinned.remove(id) }
 
     /** Reloads the manifests and deletes expired packs and leftovers of a pack that never got a manifest. */
     @Synchronized
-    fun refresh() {
+    fun refresh(now: Long = System.currentTimeMillis()) {
         if (!::dir.isInitialized) return
-        val now = System.currentTimeMillis()
         val out = ArrayList<Pack>()
         for (d in dir.listFiles().orEmpty()) {
             if (!d.isDirectory) continue
@@ -69,7 +89,7 @@ object OfflinePacks {
             val pack = if (m.isFile) {
                 try { Pack.parse(m.readText()) } catch (e: Exception) { Log.w(TAG, "${d.name}: $e"); null }
             } else null
-            if (pack == null || pack.expired(now)) {
+            if (pack == null || (pack.expired(now) && pack.id !in pinned)) {
                 if (jobs[d.name]?.isActive != true || pack != null) {
                     jobs.remove(d.name)?.cancel()
                     d.deleteRecursively()
@@ -151,6 +171,8 @@ object OfflinePacks {
 
     private fun newId(prefix: String) = "$prefix-${System.currentTimeMillis()}-${(1000..9999).random()}"
 
+    // synchronized with refresh(): until its manifest is written, the new folder looks like a leftover
+    @Synchronized
     private fun create(pack: Pack, estimate: Long, extra: (File) -> Unit) {
         if (!::dir.isInitialized) throw PackException("Cartes hors ligne indisponibles")
         if (!NetState.online.value) throw PackException("Pas de connexion : impossible de télécharger la carte")
@@ -209,8 +231,9 @@ object OfflinePacks {
         val bytes = AtomicLong(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
         val budget = if (pack.hasRoute) TilePlans.ROUTE_BUDGET else Long.MAX_VALUE
         var zmax = pack.zmax
-        val missed = AtomicInteger(0)
+        var missed = 0
         for ((kind, range) in groups) {
+            val missedHere = AtomicInteger(0)
             val queue = ConcurrentLinkedQueue<TileKey>()
             range.forEach { x, y -> queue.add(TileKey(kind, range.z, x, y)) }
             val over = AtomicBoolean(false)
@@ -220,7 +243,7 @@ object OfflinePacks {
                     launch {
                         while (!over.get()) {
                             val key = queue.poll() ?: break
-                            if (!fetchOne(pdir, key, bytes, failures)) missed.incrementAndGet()
+                            if (!fetchOne(pdir, key, bytes, failures)) missedHere.incrementAndGet()
                             if (bytes.get() > budget) over.set(true)
                             val n = done.incrementAndGet()
                             if (n % 25 == 0L) _progress.update { it + (pack.id to Progress(n, total, bytes.get())) }
@@ -232,11 +255,14 @@ object OfflinePacks {
                 if (kind != "plan" || range.z <= TilePlans.PLAN_MIN_Z) throw PackException("Parcours trop étendu pour une carte hors ligne")
                 File(pdir, "plan/${range.z}").deleteRecursively()
                 zmax = range.z - 1
+                // said at once: a resume after a later failure must not fetch this zoom again, only to drop it again
+                writeManifest(pack.copy(zmax = zmax, bytes = bytes.get()))
                 break
             }
-            writeManifest(pack.copy(bytes = bytes.get()))
+            missed += missedHere.get()
+            writeManifest(pack.copy(zmax = zmax, bytes = bytes.get()))
         }
-        if (missed.get() > 0) throw PackException("${missed.get()} tuiles manquantes : reprendre le téléchargement")
+        if (missed > 0) throw PackException("$missed tuiles manquantes : reprendre le téléchargement")
         bytes.set(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
         var kinds = pack.kinds
         if (Pack.KIND_PEAKS in kinds) {

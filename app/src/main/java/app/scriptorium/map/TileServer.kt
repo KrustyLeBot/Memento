@@ -67,8 +67,9 @@ object TileServer {
     }
 
     private fun tile(key: TileKey): WebResourceResponse {
-        val local = OfflinePacks.findTile(key.path) ?: cache.get(key.path)
-        if (local != null) return png(FileInputStream(local))
+        // the file can vanish between the lookup and the open: a cache trim, an expired pack deleted
+        val local = (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }
+        if (local != null) return png(local)
         if (!NetState.online.value) return notFound()
         val bytes = fetch(key, allowOsm = true) ?: return notFound()
         cache.put(key.path, bytes)
@@ -144,6 +145,12 @@ object TileServer {
     }
 
     // ---- plumbing ----
+
+    private fun openOrNull(f: File): FileInputStream? = try {
+        FileInputStream(f)
+    } catch (_: java.io.FileNotFoundException) {
+        null
+    }
 
     fun get(url: String): HttpResult {
         val c = URL(url).openConnection() as HttpURLConnection

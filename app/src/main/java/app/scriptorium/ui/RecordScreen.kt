@@ -76,7 +76,7 @@ fun RecordScreen(vm: MainViewModel) {
             showMap = true
             val pack = f.packId?.let { id -> OfflinePacks.packs.value.firstOrNull { it.id == id } }
             when {
-                pack == null -> prepareRoute(vm, scope, f.route) { Recorder.routePack = it }
+                pack == null -> prepareRoute(vm, scope, f.route) { if (Recorder.active) Recorder.routePack = it }
                 !pack.complete && !OfflinePacks.isRunning(pack.id) -> try {
                     OfflinePacks.resume(pack.id)
                 } catch (e: OfflinePacks.PackException) {

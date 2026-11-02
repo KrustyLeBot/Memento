@@ -6,6 +6,7 @@ import app.scriptorium.activity.Geo
 import app.scriptorium.activity.RecordingLog
 import app.scriptorium.activity.Sport
 import app.scriptorium.activity.TrackPoint
+import app.scriptorium.map.OfflinePacks
 import app.scriptorium.map.Route
 import app.scriptorium.map.RouteProgress
 import app.scriptorium.map.RouteStatus
@@ -97,9 +98,14 @@ object Recorder {
     @Synchronized
     fun route(): Route? = follow?.route
 
-    /** The offline pack prepared for the followed route, to show its download progress. */
+    /** The offline pack prepared for the followed route, to show its download progress. Pinned while it is set. */
     @Volatile
     var routePack: String? = null
+        set(v) {
+            field?.let { OfflinePacks.unpin(it) }
+            field = v
+            v?.let { OfflinePacks.pin(it) }
+        }
 
     fun logFile(dir: File) = File(dir, "recording/current.log")
 
