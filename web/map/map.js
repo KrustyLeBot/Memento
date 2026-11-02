@@ -22,7 +22,7 @@
 
   let SQ = null;            // current square [w,s,e,n]; the DEM protocol reads it, so it is set before a rebuild
   let built3d = undefined;  // the square the 3D sources were built for (undefined: not built)
-  let relief = null;        // {sq, min, max, centre, floor} in metres for SQ, once measured (3D only)
+  let relief = null;        // {sq, min, max, centre} in metres for SQ, once measured (3D only; for the camera)
   let fitPending = null;    // a 3D fit waiting for the relief (its duration)
   let shown = false;        // nothing is fetched until there is something to show (the page is preloaded empty)
   let track = null, lines = [], route = null, dots = [];
@@ -106,7 +106,7 @@
   }
   function sameBox(a, b) {
     if (!a || !b) return a === b;
-    return a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+    return a.every((v, i) => Math.abs(v - b[i]) < 1e-6);  // ~0.1 m: the hosts round the square they send
   }
   function grow(b, metres) {
     const kx = 111320 * Math.cos((b[1] + b[3]) / 2 * Math.PI / 180);
@@ -120,34 +120,25 @@
 
   // ---------------------------------------------------------------- DEM cut to the square
 
-  // Each DEM tile is decoded and forced down to the floor outside the square (+3 px), so the terrain mesh itself
-  // has walls, hidden correctly by the depth buffer. Tiles wholly inside are passed through untouched. The floor
-  // sits a little under the lowest point of the square (not at a fixed -500 m): walls stay in proportion with the
-  // relief instead of towering under a high mountain block.
-  let floorTiles = {};
+  // Each DEM tile is decoded and forced down to a fixed floor of -500 m outside the square (+3 px), so the terrain
+  // mesh itself has walls, hidden correctly by the depth buffer. Tiles wholly inside are passed through untouched.
+  // A cut tile goes back to MapLibre as an ImageBitmap: no PNG encode, and MapLibre does not decode it again.
+  const FLOOR = -500;
+  const FR = (FLOOR + 32768) >> 8, FG = (FLOOR + 32768) & 255;  // Terrarium 126, 12, 0
   function canvasOf(w, h) {
     if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
     const c = document.createElement('canvas'); c.width = w; c.height = h; return c;
   }
-  async function encode(canvas) {
-    const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' })
-      : await new Promise((ok) => canvas.toBlob(ok, 'image/png'));
-    return blob.arrayBuffer();
+  const floorImages = {};
+  function floorTile(size) {
+    if (!floorImages[size]) {
+      const img = new ImageData(size, size), d = img.data;
+      for (let i = 0; i < d.length; i += 4) { d[i] = FR; d[i + 1] = FG; d[i + 2] = 0; d[i + 3] = 255; }
+      floorImages[size] = img;
+    }
+    return createImageBitmap(floorImages[size]);  // a new bitmap each time: MapLibre transfers it to its worker
   }
   const terrarium = (d, i) => d[i] * 256 + d[i + 1] + d[i + 2] / 256 - 32768;
-  function floorRGB(floor) {
-    const v = Math.max(0, Math.round(floor) + 32768);
-    return [v >> 8, v & 255];
-  }
-  function floorTile(size, floor) {
-    const key = `${size}:${Math.round(floor)}`;
-    if (!floorTiles[key]) {
-      const [r, g] = floorRGB(floor), c = canvasOf(size, size), ctx = c.getContext('2d');
-      ctx.fillStyle = `rgb(${r},${g},0)`; ctx.fillRect(0, 0, size, size);
-      floorTiles[key] = encode(c);
-    }
-    return floorTiles[key];
-  }
   async function demPixels(z, x, y, signal) {
     const res = await fetch(`${BASE}t/dem/${z}/${x}/${y}`, { signal });
     if (!res.ok) throw new Error(`dem ${res.status}`);
@@ -157,10 +148,10 @@
     const bmp = await createImageBitmap(new Blob([raw], { type: 'image/png' }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     const c = canvasOf(bmp.width, bmp.height), ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0); bmp.close();
-    return { c, ctx, img: ctx.getImageData(0, 0, c.width, c.height) };
+    return ctx.getImageData(0, 0, c.width, c.height);
   }
   /** Lowest, highest and centre elevation of a square, from the few coarse DEM tiles that cover it (the ones
-   *  MapLibre asks for first anyway). Decides the floor before any tile of the block is cut. */
+   *  MapLibre asks for first anyway). Only the camera needs it, to frame the whole block. */
   async function measure(sq) {
     let z = 12;
     const span = (zz) => (Math.floor(mercX(sq[2]) * 2 ** zz) - Math.floor(mercX(sq[0]) * 2 ** zz) + 1)
@@ -173,7 +164,7 @@
     let min = Infinity, max = -Infinity, centre = null;
     const cx = mercX((sq[0] + sq[2]) / 2) * n, cy = mercY((sq[1] + sq[3]) / 2) * n;
     await Promise.all(jobs.map(async ([x, y]) => {
-      const { img } = await decode(await demPixels(z, x, y));
+      const img = await decode(await demPixels(z, x, y));
       const W = img.width, H = img.height, d = img.data;
       const c0 = Math.max(0, Math.floor((mercX(sq[0]) * n - x) * W)), c1 = Math.min(W - 1, Math.floor((mercX(sq[2]) * n - x) * W));
       const r0 = Math.max(0, Math.floor((mercY(sq[3]) * n - y) * H)), r1 = Math.min(H - 1, Math.floor((mercY(sq[1]) * n - y) * H));
@@ -186,22 +177,20 @@
       }
     }));
     if (min > max) throw new Error('relief: no DEM pixel inside the square');
-    return { sq, min, max, centre: centre == null ? (min + max) / 2 : centre, floor: min - Math.max(150, 0.15 * (max - min)) };
+    return { sq, min, max, centre: centre == null ? (min + max) / 2 : centre };
   }
   maplibregl.addProtocol('dem', async (req, abort) => {
     const m = /^dem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
     const z = +m[1], x = +m[2], y = +m[3];
-    const raw = await demPixels(z, x, y, abort.signal);
-    const sq = built3d, floor = relief && relief.sq === sq ? relief.floor : -500;
-    if (!sq) return { data: raw };
-    const W = 256, H = 256, scale = 2 ** z;  // Terrarium tiles are 256 px (checked again after decoding)
+    const sq = built3d, W = 256, H = 256, scale = 2 ** z;  // Terrarium tiles are 256 px (checked after decoding)
+    if (!sq) return { data: await demPixels(z, x, y, abort.signal) };
     const x0 = (mercX(sq[0]) * scale - x) * W - 3, x1 = (mercX(sq[2]) * scale - x) * W + 3;
     const y0 = (mercY(sq[3]) * scale - y) * H - 3, y1 = (mercY(sq[1]) * scale - y) * H + 3;
+    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) return { data: await floorTile(W) };  // nothing to fetch
+    const raw = await demPixels(z, x, y, abort.signal);
     if (x0 <= 0 && y0 <= 0 && x1 >= W && y1 >= H) return { data: raw };
-    if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) return { data: await floorTile(W, floor) };
-    const { c, ctx, img } = await decode(raw), d = img.data;
+    const img = await decode(raw), d = img.data;
     if (img.width !== W || img.height !== H) throw new Error(`dem tile of ${img.width}x${img.height} px`);
-    const [FR, FG] = floorRGB(floor);
     const cx0 = Math.max(0, Math.ceil(x0 - 0.5)), cx1 = Math.min(W, Math.floor(x1 - 0.5) + 1);
     const cy0 = Math.max(0, Math.ceil(y0 - 0.5)), cy1 = Math.min(H, Math.floor(y1 - 0.5) + 1);
     for (let r = 0; r < H; r++) {
@@ -213,8 +202,7 @@
         }
       }
     }
-    ctx.putImageData(img, 0, 0);
-    return { data: await encode(c) };
+    return { data: await createImageBitmap(img) };
   });
 
   // ---------------------------------------------------------------- map and style
@@ -243,8 +231,8 @@
         { id: 'lines', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': ['get', 'color'], 'line-width': 5 } },
         { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 8 } },
         { id: 'track', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-width': 5, 'line-gradient': solid('#d7191c') } },
-        { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 8 } },
-        { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 5 } },
+        { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': t.casing, 'line-width': 9.5 } },
+        { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
         { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.14, 'fill-outline-color': '#1a73ff' } },
         { id: 'dots', type: 'circle', source: 'dots', paint: { 'circle-radius': 7, 'circle-color': ['get', 'color'], 'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff' } },
         { id: 'cursor', type: 'circle', source: 'cursor', paint: { 'circle-radius': 6, 'circle-color': '#111418', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff' } },
@@ -257,7 +245,7 @@
   try {
     map = new maplibregl.Map({
       container: 'map', style: style(), center: [2.5, 46.5], zoom: 5, pitch: 0,
-      maxPitch: 80, fadeDuration: 0, maxTileCacheSize: 400, antialias: false, refreshExpiredTiles: false,
+      maxPitch: 80, fadeDuration: 0, maxTileCacheSize: 120, antialias: false, refreshExpiredTiles: false,
       pixelRatio: Math.min(2, window.devicePixelRatio || 1), renderWorldCopies: false, validateStyle: false,
       interactive, attributionControl: { compact: true, customAttribution: ATTRIBUTION },
     });
@@ -307,27 +295,24 @@
     map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
   }
   let measuring = null;
-  function measureThenBuild(sq) {
+  function measureForCamera(sq) {
     if (measuring === sq) return;
     measuring = sq;
     measure(sq).catch((e) => {
-      console.warn('smap: relief unknown, default floor', e);  // offline: the block has no DEM tiles anyway
-      return { min: 0, max: 0, centre: 0, floor: -500 };
+      console.warn('smap: relief unknown, the camera frames a flat block', e);  // offline: no DEM tiles anyway
+      return { min: 0, max: 0, centre: 0 };
     }).then((r) => {
       if (measuring !== sq) return;
       measuring = null;
       if (SQ !== sq) return;
       relief = Object.assign(r, { sq });
-      applyMode();
       if (fitPending != null) { const d = fitPending; fitPending = null; fit(d); }
     });
   }
   function applyMode() {
     const is3d = mode === '3d';
-    if (is3d && shown && (SQ || pos) && !sameBox(built3d, SQ)) {  // nothing to show: no unbounded terrain
-      if (SQ && !(relief && relief.sq === SQ)) measureThenBuild(SQ);  // the floor must be known before any tile is cut
-      else rebuild3d();
-    }
+    if (is3d && shown && (SQ || pos) && !sameBox(built3d, SQ)) rebuild3d();  // nothing to show: no unbounded terrain
+    if (is3d && shown && SQ && !(relief && relief.sq === SQ)) measureForCamera(SQ);
     vis('plan', shown && (!is3d || !SQ));
     vis('plansq', shown && is3d && !!SQ);
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
@@ -384,10 +369,26 @@
     if (!lists.length && live.coords.length) lists.push(live.coords);
     return bboxOf(lists);
   }
-  // easeTo with no duration leaves the terrain elevation frozen at 0 (the camera ends up inside the
-  // mountains): an instant move is a jumpTo.
+  // With terrain on, MapLibre 4.7's easeTo freezes the camera's elevation at the value it had when the move began
+  // (0 while the DEM is still loading) and never unfreezes it: the camera then looks at sea level, under the block.
+  // So with terrain every move is a jumpTo, and the follow mode glides by jumping each frame.
+  let glideFrame = 0, movingUntil = 0;
   function move(camera, duration) {
-    if (duration) map.easeTo(Object.assign({ duration }, camera)); else map.jumpTo(camera);
+    cancelAnimationFrame(glideFrame);
+    const animate = duration && !map.getTerrain();
+    movingUntil = animate ? performance.now() + duration : 0;
+    if (animate) map.easeTo(Object.assign({ duration }, camera)); else map.jumpTo(camera);
+  }
+  function glide(to, duration) {
+    cancelAnimationFrame(glideFrame);
+    if (!map.getTerrain()) { map.easeTo({ center: to, duration }); return; }
+    const from = map.getCenter(), t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / duration), e = k * (2 - k);
+      map.jumpTo({ center: [from.lng + (to[0] - from.lng) * e, from.lat + (to[1] - from.lat) * e] });
+      if (k < 1) glideFrame = requestAnimationFrame(step);
+    };
+    glideFrame = requestAnimationFrame(step);
   }
   const FOV = 0.6435011087932844;  // MapLibre's vertical field of view
   /** Camera that shows the whole block, walls included, centred on screen. The 8 corners of the block (top at
@@ -398,7 +399,7 @@
     const lx = (sq[2] - sq[0]) * 111320 * cos, ly = (sq[3] - sq[1]) * 110540;
     const focal = 0.5 * box.height / Math.tan(FOV / 2), sp = Math.sin(phi), cp = Math.cos(phi);
     const corners = [];
-    for (const x of [-lx / 2, lx / 2]) for (const y of [-ly / 2, ly / 2]) for (const h of [r.floor, r.max]) corners.push([x, y, (h - r.centre) * exag]);
+    for (const x of [-lx / 2, lx / 2]) for (const y of [-ly / 2, ly / 2]) for (const h of [FLOOR, r.max]) corners.push([x, y, (h - r.centre) * exag]);
     const extent = (D) => {
       const e = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
       for (const [x, y, h] of corners) {
@@ -409,10 +410,11 @@
       }
       return e;
     };
-    const fits = (D) => { const e = extent(D); return e && e.x1 - e.x0 <= box.width - 2 * pad && e.y1 - e.y0 <= box.height - 2 * pad; };
+    const labels = Math.min(40, box.height * 0.08);  // room above the block for the peaks' labels
+    const fits = (D) => { const e = extent(D); return e && e.x1 - e.x0 <= box.width - 2 * pad && e.y1 - e.y0 <= box.height - 2 * pad - labels; };
     let lo = 10, hi = 4e7;
     for (let i = 0; i < 60; i++) { const mid = Math.sqrt(lo * hi); if (fits(mid)) hi = mid; else lo = mid; }
-    const e = extent(hi), shift = (e.y0 + e.y1) / 2;  // block middle above the screen middle by this, in px
+    const e = extent(hi), shift = (e.y0 + e.y1) / 2 + labels / 2;  // block middle above the screen middle by this, in px
     const zoom = Math.min(17, Math.log2(78271.517 * cos / (hi / focal)));
     // padding moves the drawn centre (and MapLibre's perspective centre with it) down by `shift`
     const padding = { top: Math.max(0, 2 * shift), bottom: Math.max(0, -2 * shift), left: 0, right: 0 };
@@ -445,7 +447,9 @@
     move({ center: cam.center, zoom: cam.zoom, pitch: is3d ? PITCH : 0, bearing: 0, padding: NO_PADDING }, duration);
   }
   ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach((ev) => map.on(ev, (e) => {
-    if (e.originalEvent && follow) { follow = false; hostPost({ type: 'follow', value: false }); }
+    if (!e.originalEvent) return;
+    cancelAnimationFrame(glideFrame);
+    if (follow) { follow = false; hostPost({ type: 'follow', value: false }); }
   }));
 
   // ---------------------------------------------------------------- speed colours
@@ -610,6 +614,24 @@
     });
   }
 
+  // MapLibre changes the camera's elevation while rendering (DEM tiles arriving) and the ground under a marker
+  // when its DEM tile loads, both without a move event: the DOM markers would stay where they were drawn, off the
+  // block or off screen. They are re-placed after such a frame.
+  let markerFrame = 0, lastElevation = null;
+  function replaceMarkers() {
+    if (markerFrame) return;
+    markerFrame = requestAnimationFrame(() => {
+      markerFrame = 0;
+      if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
+      peakMarkers.forEach((m) => m.setLngLat(m.getLngLat()));
+    });
+  }
+  map.on('render', () => {
+    const e = map.transform.elevation;
+    if (e !== lastElevation) { lastElevation = e; replaceMarkers(); }
+  });
+  map.on('sourcedata', (e) => { if (e.sourceId === 'dem' && e.tile) replaceMarkers(); });
+
   // ---------------------------------------------------------------- API
 
   const api = {
@@ -660,7 +682,7 @@
       refreshSquare();
       updatePos();
       if (follow && !followFitted) fit();
-      else if (follow) map.easeTo({ center: [lon, lat], duration: 600 });
+      else if (follow && performance.now() >= movingUntil) glide([lon, lat], 600);  // never cut a fit's zoom short
     },
     locFail() {
       pos = null; updatePos();
