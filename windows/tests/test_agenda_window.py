@@ -484,7 +484,7 @@ def test_invitation_opens_the_compact_dialog_into_the_default_calendar(window):
     def drive(dialog):
         seen["page"] = dialog.pages.currentIndex()
         seen["button"] = dialog.compact_ok.text()
-        seen["card"] = [w.text() for w in dialog.findChildren(QLabel) if "Interview with Proton" in w.text()]
+        seen["card"] = [w.text() for w in dialog.findChildren(QLabel) if "Interview with Example Corp" in w.text()]
         dialog.start_import()
         seen["title"] = dialog.report_title.text()
 

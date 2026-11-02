@@ -34,20 +34,20 @@ class AgendaInviteTest {
         assertEquals("perso", pv.suggestedCalendar)
         assertEquals(1, pv.events)
         val e = parsed[0].events[0]
-        assertEquals("Interview with Proton", e.title)
+        assertEquals("Interview with Example Corp", e.title)
         assertEquals("Europe/Zurich", e.tz)
         assertEquals(Stamp.of(LocalDateTime.of(2026, 10, 26, 17, 0)), e.start)
         assertEquals(Stamp.of(LocalDateTime.of(2026, 10, 26, 18, 0)), e.end)
         assertNull(e.location)
         assertTrue(e.body, e.body.startsWith("Visio : $meet\n\nHi Camille,"))
         assertEquals(2, e.body.split(meet).size - 1)
-        assertEquals(listOf(ImportItem("Interview with Proton", "lun. 26 oct. 2026, 17:00–18:00 (Zurich)", null)), pv.items)
+        assertEquals(listOf(ImportItem("Interview with Example Corp", "lun. 26 oct. 2026, 17:00–18:00 (Zurich)", null)), pv.items)
 
         val (report, after) = IcsImport.apply(store, parsed, ImportOptions(), emptyList(), settings, Vectors.DEVICE, "inv", Vectors.NOW)
         assertEquals(emptyList<String>(), report.newCalendars)
         assertEquals(listOf("travail", "perso"), after.calendars.map { it.id })
         val events = store.scan().events
-        assertEquals(listOf("Interview with Proton" to "perso"), events.map { it.title to after.calendar(it.calendar).id })
+        assertEquals(listOf("Interview with Example Corp" to "perso"), events.map { it.title to after.calendar(it.calendar).id })
         val (undo, _) = IcsImport.undo(store, "inv", events, after)
         assertEquals(1, undo.deleted); assertEquals(emptyList<String>(), undo.calendarsRemoved)
         assertTrue(store.scan().events.isEmpty())

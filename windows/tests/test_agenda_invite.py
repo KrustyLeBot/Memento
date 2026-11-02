@@ -33,18 +33,18 @@ def test_invitation_goes_to_the_default_calendar():
     pv = preview(parsed, [], settings)[0]
     assert not pv.calendar_export and pv.suggested_calendar == "perso" and pv.events == 1
     e = parsed[0].events[0]
-    assert e.title == "Interview with Proton"
+    assert e.title == "Interview with Example Corp"
     assert (e.tz, e.start, e.end) == ("Europe/Zurich", datetime(2026, 10, 26, 17), datetime(2026, 10, 26, 18))
     assert e.location is None
     assert e.body.startswith(f"Visio : {MEET}\n\nHi Camille,")
     assert e.body.count(MEET) == 2
     assert [(i.title, i.when_text, i.location) for i in pv.items] == [
-        ("Interview with Proton", "lun. 26 oct. 2026, 17:00–18:00 (Zurich)", None)]
+        ("Interview with Example Corp", "lun. 26 oct. 2026, 17:00–18:00 (Zurich)", None)]
 
     report = apply_import(store, parsed, ImportOptions(), [], settings, DEVICE_ZONE, "inv", NOW)
     assert report.new_calendars == [] and [c.id for c in settings.calendars] == ["travail", "perso"]
     events = store.scan().events
-    assert [(ev.title, settings.calendar(ev.calendar).id) for ev in events] == [("Interview with Proton", "perso")]
+    assert [(ev.title, settings.calendar(ev.calendar).id) for ev in events] == [("Interview with Example Corp", "perso")]
     undo = undo_import(store, "inv", events, settings)
     assert undo.deleted == 1 and undo.calendars_removed == [] and store.scan().events == []
 
