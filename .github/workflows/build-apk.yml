@@ -89,7 +89,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests -q
-      - name: Build the exe (one file, Qt filtered down to what the app loads: see the spec)
+      - name: Build the exe (one file, Qt filtered by the spec)
         run: pyinstaller --noconfirm scriptorium.spec
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
