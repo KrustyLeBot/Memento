@@ -194,3 +194,15 @@ def test_activity_settings_default_to_everything_and_round_trip_through_the_fold
     assert again.refine_altitude is True and Sport.SKI not in again.totals and Sport.WALK in again.totals
     # the settings file is not an activity
     assert store.scan_activities() == []
+
+
+def test_scanning_the_notes_keeps_the_activities_cache(tmp_path):
+    """scan() used to evict every activities/ entry, so each refresh re-read and re-listed every activity."""
+    from pathlib import Path
+    from scriptorium_win.core.store import Store
+    store = Store(tmp_path)
+    store.import_activity(Path(__file__).parent / "data" / "synthetic.fit", None, None)
+    first = store.scan_activities()
+    store.scan()
+    again = store.scan_activities()
+    assert len(again) == 1 and again[0] is first[0]

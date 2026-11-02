@@ -260,7 +260,9 @@ class MainWindow(QMainWindow):
         self.notes = self.store.scan()
         self.list_screen.set_notes(self.notes)
         acts = self.store.scan_activities()
-        self.activities.included = set(self.store.activity_settings().totals)
+        included = set(self.store.activity_settings().totals)
+        if included != self.activities.included:  # changed by the phone (settings.json synced)
+            self.activities.set_included(included)
         self.activities.set_activities(acts)
         latest = max((n for n in acts if n.activity), key=lambda n: n.activity.start, default=None)
         self.list_screen.set_activity_summary(

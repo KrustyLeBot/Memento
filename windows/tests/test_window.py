@@ -287,3 +287,22 @@ def test_rail_switches_modules_and_hides_them(window):
     window.show_module("agenda")  # a hidden module falls back to the notes
     assert window.stack.currentWidget() is window.list_screen
     window.set_module_visible("agenda", True)
+
+
+def test_an_unchanged_refresh_does_not_rebuild_the_lists(window, tmp_path):
+    """Every editor save and sync tick refreshes: rebuilding hundreds of cards each time froze the window."""
+    add(window.store, "Une")
+    window.refresh()
+    cards = [w for kind, w in window.list_screen._items if kind == "card"]
+    assert len(cards) == 1
+    window.refresh()
+    assert [w for kind, w in window.list_screen._items if kind == "card"] == cards
+
+
+def test_notes_saved_while_the_list_is_hidden_show_when_it_comes_back(window, tmp_path):
+    window.show_module("contacts")
+    add(window.store, "Pendant")
+    window.refresh()
+    window.show_module("notes")
+    QApplication.processEvents()
+    assert [w.note.title for kind, w in window.list_screen._items if kind == "card"] == ["Pendant"]

@@ -434,7 +434,10 @@ class ActivitiesScreen(QWidget):
         self.rebuild()
 
     def set_activities(self, notes: list[Note]) -> None:
-        self.activities = sorted((n for n in notes if n.activity), key=lambda n: -n.activity.start)
+        activities = sorted((n for n in notes if n.activity), key=lambda n: -n.activity.start)
+        if len(activities) == len(self.activities) and all(a is b for a, b in zip(activities, self.activities)):
+            return  # unchanged (the store hands back the same objects): rebuilding hundreds of rows freezes the window
+        self.activities = activities
         self.rebuild()
 
     def _select_mode(self, on: bool) -> None:
