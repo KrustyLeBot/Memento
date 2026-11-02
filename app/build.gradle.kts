@@ -8,11 +8,11 @@ plugins {
 val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
 
 android {
-    namespace = "app.scriptorium"
+    namespace = "app.memento"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "app.scriptorium"
+        applicationId = "app.memento"
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber

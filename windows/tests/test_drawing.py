@@ -1,7 +1,7 @@
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from scriptorium_win.core import drawing as dr
+from memento_win.core import drawing as dr
 
 
 def stroke(rgb, w, *pts):
@@ -44,7 +44,7 @@ def test_the_kotlin_svg_parses_here():
 
 def test_the_canvas_draws_erases_and_undoes(qtbot=None):
     from PySide6.QtCore import QPointF
-    from scriptorium_win.ui.drawing_view import Canvas, render_pixmap
+    from memento_win.ui.drawing_view import Canvas, render_pixmap
     QApplication.instance() or QApplication([])
     c = Canvas([])
     c.resize(400, 300)
@@ -68,8 +68,8 @@ def test_the_canvas_draws_erases_and_undoes(qtbot=None):
 
 
 def test_a_drawing_attached_to_a_note_shows_a_thumbnail_and_deletes_with_it(tmp_path):
-    from scriptorium_win.core import atomic, note as fmt
-    from scriptorium_win.core.store import Store, now_ms
+    from memento_win.core import atomic, note as fmt
+    from memento_win.core.store import Store, now_ms
     store = Store(tmp_path)
     path = dr.new_path(fmt.generate_id)
     atomic.write_text(tmp_path / path, dr.to_svg([stroke(0x1A1A1A, 3.0, 0, 0, 50, 50)]))

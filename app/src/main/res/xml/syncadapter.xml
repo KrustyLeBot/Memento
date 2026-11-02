@@ -2,6 +2,6 @@
 <!-- Makes the account a contacts account, read-only for the phone's apps (the app's files are the truth). -->
 <sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
     android:contentAuthority="com.android.contacts"
-    android:accountType="app.scriptorium.contacts"
+    android:accountType="app.memento.contacts"
     android:supportsUploading="false"
     android:userVisible="true" />

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from scriptorium_win import __main__ as entry
+from memento_win import __main__ as entry
 
 
 def test_every_delayed_call_on_a_widget_names_it_as_context():
@@ -31,7 +31,7 @@ def test_the_notes_folder_is_asked_again_when_missing_empty_or_unreadable(tmp_pa
 @pytest.fixture
 def config(tmp_path):
     from PySide6.QtCore import QSettings
-    from scriptorium_win.config import Config
+    from memento_win.config import Config
     c = Config()
     c._settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)  # never the user's
     return c

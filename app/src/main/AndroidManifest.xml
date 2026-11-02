@@ -10,7 +10,7 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
-    <!-- Sideloaded app: needed to use the shared Documents/Scriptorium folder on Android 11+. -->
+    <!-- Sideloaded app: needed to use the shared Documents/Memento folder on Android 11+. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- Recording an activity: GPS, a foreground service with a notification, the barometer needs nothing. -->
@@ -45,7 +45,7 @@
         android:label="@string/app_name"
         android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Scriptorium">
+        android:theme="@style/Theme.Memento">
 
         <activity
             android:name=".MainActivity"
@@ -98,7 +98,7 @@
         <activity
             android:name=".widget.WidgetConfigActivity"
             android:exported="true"
-            android:theme="@style/Theme.Scriptorium">
+            android:theme="@style/Theme.Memento">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>

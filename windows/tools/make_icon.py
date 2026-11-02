@@ -15,7 +15,7 @@ from PySide6.QtSvg import QSvgRenderer
 MASTER = Path(__file__).resolve().parents[2] / "branding" / "memento.svg"
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 
-out = Path(__file__).resolve().parent.parent / "scriptorium_win" / "assets"
+out = Path(__file__).resolve().parent.parent / "memento_win" / "assets"
 out.mkdir(parents=True, exist_ok=True)
 app = QGuiApplication(sys.argv)
 renderer = QSvgRenderer(str(MASTER))

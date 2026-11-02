@@ -5,7 +5,7 @@
     re-darkening a window whose theme says light on top of the app's own dark palette (it darkened the light
     accent fills under their dark labels: black on black). values-night has the dark parent.
     -->
-    <style name="Theme.Scriptorium" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.Memento" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_bg</item>
         <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
     </style>

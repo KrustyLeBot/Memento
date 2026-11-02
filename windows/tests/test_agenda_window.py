@@ -10,17 +10,17 @@ from PySide6.QtCore import QDate, QEvent, Qt, QTime
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from agenda_ui_data import ZONE, at, populate
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core.agenda import rules
-from scriptorium_win.core.agenda.calendars import CalendarSettings
-from scriptorium_win.core.agenda.entries import AgendaSources, EntryKind, build_entries
-from scriptorium_win.core.agenda.model import event_from_note, new_event
-from scriptorium_win.core.note import Note
-from scriptorium_win.core.store import Store
-from scriptorium_win.services import updater
-from scriptorium_win.ui import agenda_data, agenda_editor, theme
-from scriptorium_win.ui.agenda_editor import EventDetailDialog, EventDialog, RecurrenceDialog
-from scriptorium_win.ui.main_window import MainWindow
+from memento_win.core import note as fmt
+from memento_win.core.agenda import rules
+from memento_win.core.agenda.calendars import CalendarSettings
+from memento_win.core.agenda.entries import AgendaSources, EntryKind, build_entries
+from memento_win.core.agenda.model import event_from_note, new_event
+from memento_win.core.note import Note
+from memento_win.core.store import Store
+from memento_win.services import updater
+from memento_win.ui import agenda_data, agenda_editor, theme
+from memento_win.ui.agenda_editor import EventDetailDialog, EventDialog, RecurrenceDialog
+from memento_win.ui.main_window import MainWindow
 
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "agenda"
 
@@ -504,7 +504,7 @@ def test_import_refuses_a_broken_zip(window, tmp_path, monkeypatch):
     bad.write_bytes(b"pas une archive")
     shown = []
     monkeypatch.setattr(agenda_editor.QMessageBox, "warning", lambda *a: shown.append(a[2]))
-    from scriptorium_win.ui import agenda_view
+    from memento_win.ui import agenda_view
     monkeypatch.setattr(agenda_view.QMessageBox, "warning", lambda *a: shown.append(a[2]))
     window.agenda.import_ics([bad])
     assert shown and "Import impossible" in shown[0]

@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("PyInstaller")
 
-SPEC = Path(__file__).resolve().parent.parent / "scriptorium.spec"
+SPEC = Path(__file__).resolve().parent.parent / "memento.spec"
 
 
 @pytest.fixture(scope="module")

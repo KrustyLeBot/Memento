@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The account of the contacts mirrored into the phone (no credentials; see contacts/MirrorServices.kt). -->
 <account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accountType="app.scriptorium.contacts"
+    android:accountType="app.memento.contacts"
     android:icon="@mipmap/ic_launcher"
     android:smallIcon="@mipmap/ic_launcher"
     android:label="@string/app_name" />

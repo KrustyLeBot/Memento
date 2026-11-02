@@ -3,8 +3,8 @@ from datetime import date, datetime
 
 import pytest
 
-from scriptorium_win.core.agenda import rules
-from scriptorium_win.core.agenda.frdates import alert_label, day_span, duration, long_date, week_title
+from memento_win.core.agenda import rules
+from memento_win.core.agenda.frdates import alert_label, day_span, duration, long_date, week_title
 
 ZONE = "Europe/Paris"
 STARTS = [datetime(2026, 11, 12, 14, 30), datetime(2026, 11, 30, 9, 0), datetime(2027, 1, 1, 8, 0),

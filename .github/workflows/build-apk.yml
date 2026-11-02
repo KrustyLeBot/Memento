@@ -59,12 +59,12 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Stage the APK
-        run: cp app/build/outputs/apk/release/app-release.apk scriptorium.apk
+        run: cp app/build/outputs/apk/release/app-release.apk memento.apk
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: scriptorium-android
-          path: scriptorium.apk
+          name: memento-android
+          path: memento.apk
           retention-days: 7
 
   # Windows client: tests, then a single-file exe (every event, nothing published here).
@@ -84,26 +84,26 @@ jobs:
         run: pip install -r requirements.txt pyinstaller pytest
       - name: Stamp the build number (same as the Android version code)
         shell: bash
-        run: echo "BUILD = ${{ github.run_number }}" > scriptorium_win/_version.py
+        run: echo "BUILD = ${{ github.run_number }}" > memento_win/_version.py
       - name: Tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests -q
       - name: Build the exe (one file, Qt filtered by the spec)
-        run: pyinstaller --noconfirm scriptorium.spec
+        run: pyinstaller --noconfirm memento.spec
       # The built exe checks it carries what it loads at run time (tzdata, the map page, Qt WebEngine, plugins).
       # It is a windowed exe: Start-Process waits for it, the report goes to a file.
       - name: Self-test of the built exe
         timeout-minutes: 5
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\Scriptorium.exe -ArgumentList '--selftest', 'selftest.txt' -Wait -PassThru
+          $p = Start-Process -FilePath dist\Memento.exe -ArgumentList '--selftest', 'selftest.txt' -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: scriptorium-windows
-          path: windows/dist/Scriptorium.exe
+          name: memento-windows
+          path: windows/dist/Memento.exe
           retention-days: 7
 
   # One "latest" release carrying both apps, published only when both builds succeeded.
@@ -124,8 +124,8 @@ jobs:
         shell: bash
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest dist/scriptorium-android/scriptorium.apk dist/scriptorium-windows/Scriptorium.exe \
-            --title "Scriptorium build ${{ github.run_number }}" \
+          gh release create latest dist/memento-android/memento.apk dist/memento-windows/Memento.exe \
+            --title "Memento build ${{ github.run_number }}" \
             --notes "Build ${{ github.run_number }} of commit ${{ github.sha }}." \
             --target "${{ github.sha }}" \
             --latest

@@ -7,22 +7,22 @@ from pathlib import Path
 
 import pytest
 
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core.activity import ActivityInfo
-from scriptorium_win.core.agenda import ics, zones
-from scriptorium_win.core.agenda.calendars import PALETTE, Calendar, CalendarSettings, Layer
-from scriptorium_win.core.agenda.entries import (AgendaSources, Birthday, EntryKind, activity_subtitle, alarms,
+from memento_win.core import note as fmt
+from memento_win.core.activity import ActivityInfo
+from memento_win.core.agenda import ics, zones
+from memento_win.core.agenda.calendars import PALETTE, Calendar, CalendarSettings, Layer
+from memento_win.core.agenda.entries import (AgendaSources, Birthday, EntryKind, activity_subtitle, alarms,
                                                  build_entries, parse_birthday)
-from scriptorium_win.core.agenda.frdates import departure_arrival
-from scriptorium_win.core.agenda.ics_export import export_all, export_calendar
-from scriptorium_win.core.agenda.ics_import import (IcsSource, ImportOptions, ImportTarget, apply_import, preview,
+from memento_win.core.agenda.frdates import departure_arrival
+from memento_win.core.agenda.ics_export import export_all, export_calendar
+from memento_win.core.agenda.ics_import import (IcsSource, ImportOptions, ImportTarget, apply_import, preview,
                                                     read_sources, undo_import)
-from scriptorium_win.core.agenda.model import (AgendaFormatError, event_from_note, event_to_note, format_alert,
+from memento_win.core.agenda.model import (AgendaFormatError, event_from_note, event_to_note, format_alert,
                                                new_event, parse_alert, parse_stamp)
-from scriptorium_win.core.agenda.recurrence import MAX_OCCURRENCES, expand
-from scriptorium_win.core.agenda.store import AgendaStore, DirFs, MemoryFs
-from scriptorium_win.core.note import Note
-from scriptorium_win.core.track import Sport
+from memento_win.core.agenda.recurrence import MAX_OCCURRENCES, expand
+from memento_win.core.agenda.store import AgendaStore, DirFs, MemoryFs
+from memento_win.core.note import Note
+from memento_win.core.track import Sport
 
 from agenda_vectors import DEVICE_ZONE, IMPORT_ID, NOW, VECTORS, WINDOW, compute, files_of, import_vector, occurrences
 
@@ -408,7 +408,7 @@ def test_store_paths_exceptions_and_restore(tmp_path: Path):
     store = AgendaStore(DirFs(tmp_path))
     series = store.save(new_event("Cours", datetime(2027, 1, 4, 18), datetime(2027, 1, 4, 19), tz=PARIS,
                                   rrule="FREQ=WEEKLY", now=NOW))
-    assert series.path.startswith("agenda/2027/cours-") and series.uid == f"{series.id}@scriptorium"
+    assert series.path.startswith("agenda/2027/cours-") and series.uid == f"{series.id}@memento"
     exc = store.make_exception(series, datetime(2027, 1, 11, 18), datetime(2027, 1, 11, 19))
     exc = exc.copy(start=datetime(2027, 1, 12, 18), end=datetime(2027, 1, 12, 19))
     series, exc = store.save_exception(series, exc)

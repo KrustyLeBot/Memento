@@ -1,4 +1,4 @@
-from scriptorium_win.core import note as fmt
+from memento_win.core import note as fmt
 
 
 def test_body_splits_and_rebuilds_checklist():

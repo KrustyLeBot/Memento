@@ -3,12 +3,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core.store import Store, now_ms
-from scriptorium_win.services import updater
-from scriptorium_win.ui import theme
-from scriptorium_win.ui.main_window import MainWindow
-from scriptorium_win.ui.update_toast import UpdateToast
+from memento_win.core import note as fmt
+from memento_win.core.store import Store, now_ms
+from memento_win.services import updater
+from memento_win.ui import theme
+from memento_win.ui.main_window import MainWindow
+from memento_win.ui.update_toast import UpdateToast
 
 
 class FakeConfig:
@@ -359,7 +359,7 @@ def test_escape_key_leaves_the_editor_and_clears_searches(window):
 
 
 def test_a_long_list_shows_its_first_cards_at_once_and_the_rest_after(window):
-    from scriptorium_win.ui import list_view
+    from memento_win.ui import list_view
     total = list_view.FIRST_BATCH + list_view.BATCH + 5
     for i in range(total):
         add(window.store, f"Note {i:03d}", pinned=(i == 0))

@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 
-from scriptorium_win.core import contacts as ct
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core.activity import ActivityInfo
-from scriptorium_win.core.agenda.calendars import Calendar, CalendarSettings
-from scriptorium_win.core.agenda.model import Event, event_to_note, new_event
-from scriptorium_win.core.note import Note
-from scriptorium_win.core.track import Sport
+from memento_win.core import contacts as ct
+from memento_win.core import note as fmt
+from memento_win.core.activity import ActivityInfo
+from memento_win.core.agenda.calendars import Calendar, CalendarSettings
+from memento_win.core.agenda.model import Event, event_to_note, new_event
+from memento_win.core.note import Note
+from memento_win.core.track import Sport
 
 ZONE = "Europe/Paris"
 NOW_MS = 1_793_000_000_000

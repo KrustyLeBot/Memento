@@ -8,7 +8,7 @@ import zlib
 
 import pytest
 
-from scriptorium_win.core import mapcache, mapdata, peaks
+from memento_win.core import mapcache, mapdata, peaks
 
 
 def png(width: int, height: int, pixel: bytes) -> bytes:
@@ -122,7 +122,7 @@ def test_purge_goes_on_past_a_tile_windows_refuses_to_delete(tmp_path, monkeypat
 def test_a_malformed_summit_answer_still_answers_every_waiting_request(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication([])
-    from scriptorium_win.services import maphost
+    from memento_win.services import maphost
     store = maphost.TileStore(tmp_path)
     box = (6.8, 45.9, 6.9, 46.0)
     answers = []
@@ -241,8 +241,8 @@ def wait_for(app, predicate, timeout=20.0):
 def test_handler_serves_the_page_and_the_tiles(monkeypatch):
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
-    from scriptorium_win.services import maphost
-    from scriptorium_win.ui.mapview import MapView
+    from memento_win.services import maphost
+    from memento_win.ui.mapview import MapView
     tile = png(4, 4, b"\x10\x20\x30")
     monkeypatch.setattr(maphost.TileStore, "get", lambda self, t, done: done(("image/jpeg", tile) if t.kind == "ortho" else None))
     events = []
@@ -282,11 +282,11 @@ def test_every_function_the_windows_host_calls_is_in_the_page_api():
     from pathlib import Path
     page = _page()
     api = {name.strip().strip("'") for name in re.search(r"const API = \[([^\]]+)]", page).group(1).split(",")}
-    ui = Path(__file__).resolve().parents[1] / "scriptorium_win" / "ui"
+    ui = Path(__file__).resolve().parents[1] / "memento_win" / "ui"
     called = set()
     for file in ("mapview.py", "activities_view.py"):
         called |= set(re.findall(r"\.call\(\"(\w+)\"", (ui / file).read_text(encoding="utf-8")))
-    from scriptorium_win.ui import mapview
+    from memento_win.ui import mapview
     called |= set(mapview.STATE_ORDER)
     assert len(called) >= 8
     assert called - api == set()

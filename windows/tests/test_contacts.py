@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from scriptorium_win.core import contacts as ct
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core import vcard
-from scriptorium_win.core.store import Store
+from memento_win.core import contacts as ct
+from memento_win.core import note as fmt
+from memento_win.core import vcard
+from memento_win.core.store import Store
 
 NOW = 1_793_000_000_000  # 2026-10: Windows cannot format dates near 1970
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "contacts"

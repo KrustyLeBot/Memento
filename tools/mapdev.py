@@ -1,10 +1,10 @@
 """Development server for the map page (kept out of web/: everything there ships in the APK): serves web/map and answers the host endpoints (tiles, peaks) the way the
-apps do, with the Windows host's own logic (windows/scriptorium_win/core). Open
+apps do, with the Windows host's own logic (windows/memento_win/core). Open
 http://127.0.0.1:8765/map/index.html?mode=3d and drive window.SMap from the console.
 
     python tools/mapdev.py [port]
 
-Tiles are cached under $TMPDIR/scriptorium-map-dev. Standard library only."""
+Tiles are cached under $TMPDIR/memento-map-dev. Standard library only."""
 from __future__ import annotations
 
 import json
@@ -19,10 +19,10 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "windows"))
-from scriptorium_win.core import mapcache, peaks  # noqa: E402
+from memento_win.core import mapcache, peaks  # noqa: E402
 
 WEB = ROOT / "web"
-CACHE = Path(tempfile.gettempdir()) / "scriptorium-map-dev"
+CACHE = Path(tempfile.gettempdir()) / "memento-map-dev"
 
 
 def get(url: str) -> tuple[int, str, bytes]:

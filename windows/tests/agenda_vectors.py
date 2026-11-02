@@ -11,11 +11,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scriptorium_win.core import note as fmt
-from scriptorium_win.core.agenda.calendars import CalendarSettings
-from scriptorium_win.core.agenda.entries import AgendaSources, build_entries
-from scriptorium_win.core.agenda.ics_import import IcsSource, ImportOptions, apply_import, preview, read_sources
-from scriptorium_win.core.agenda.store import AgendaStore, MemoryFs
+from memento_win.core import note as fmt
+from memento_win.core.agenda.calendars import CalendarSettings
+from memento_win.core.agenda.entries import AgendaSources, build_entries
+from memento_win.core.agenda.ics_import import IcsSource, ImportOptions, apply_import, preview, read_sources
+from memento_win.core.agenda.store import AgendaStore, MemoryFs
 
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "agenda"
 DEVICE_ZONE = "Europe/Paris"

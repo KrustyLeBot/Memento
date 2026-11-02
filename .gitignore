@@ -13,6 +13,6 @@ __pycache__/
 windows/build/
 windows/dist/
 *.spec
-!windows/scriptorium.spec
+!windows/memento.spec
 .pytest_cache/
 .claude/

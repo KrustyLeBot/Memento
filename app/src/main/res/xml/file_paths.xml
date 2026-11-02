@@ -3,6 +3,6 @@
     <cache-path name="updates" path="updates/" />
     <!-- A contact shared as a .vcf. -->
     <cache-path name="share" path="share/" />
-    <!-- Scanned PDFs of the default notes folder (Documents/Scriptorium/attachments), opened in a PDF viewer. -->
+    <!-- Scanned PDFs of the default notes folder (Documents/Memento/attachments), opened in a PDF viewer. -->
     <external-path name="storage" path="." />
 </paths>

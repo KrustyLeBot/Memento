@@ -4,13 +4,13 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from scriptorium_win.core import contacts as ct
-from scriptorium_win.core import vcard
-from scriptorium_win.core.store import Store
-from scriptorium_win.services import updater
-from scriptorium_win.ui import theme
-from scriptorium_win.ui.contacts_view import DuplicatesDialog, EditDialog
-from scriptorium_win.ui.main_window import MainWindow
+from memento_win.core import contacts as ct
+from memento_win.core import vcard
+from memento_win.core.store import Store
+from memento_win.services import updater
+from memento_win.ui import theme
+from memento_win.ui.contacts_view import DuplicatesDialog, EditDialog
+from memento_win.ui.main_window import MainWindow
 
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "contacts"
 

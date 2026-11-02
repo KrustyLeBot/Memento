@@ -1,9 +1,10 @@
-# Scriptorium
+# Mémento
 
 Notes, agenda, contacts and sport activities, on Android and Windows. Everything is a plain Markdown file in
-one folder (`Documents/Scriptorium/` by default), so it can be read and edited on a PC (Obsidian, any editor)
-and synced by a separate app (Synchrotron). The user never sees Markdown on the phone. Formerly Griffonote: on
-first launch the Android app offers to copy `Documents/Griffonote` into the new folder.
+one folder (`Documents/Memento/` by default), so it can be read and edited on a PC (Obsidian, any editor)
+and synced by a separate app (Synchrotron). The user never sees Markdown on the phone. Formerly Scriptorium, and
+Griffonote before that: on first launch the Android app offers to copy `Documents/Scriptorium` (or
+`Documents/Griffonote`) into the new folder.
 
 Four modules, reached from the bottom bar on Android (Settings is its last entry) and the left rail on Windows:
 **Notes**, **Agenda**, **Activités** (with a 3D/2D map), **Contacts**. Agenda, Activités and Contacts can be
@@ -12,7 +13,7 @@ hidden in the settings.
 ## Storage format
 
 ```
-Scriptorium/
+Mémento/
 ├── courses-k3f9a2.md      # one file per note: YAML frontmatter + Markdown body
 ├── attachments/           # scanned PDFs (`pdf:`), attached files (`attachments:`) and activity tracks
 ├── activities/            # the "Activités" folder: one note per activity, kept out of the regular list
@@ -39,8 +40,8 @@ Scriptorium/
 A note can hold sketches (editor toolbar, brush button): a page to draw on with a finger (phone) or the mouse
 (PC), with a pen in six colours and three widths, an eraser that removes whole strokes, undo/redo, and zoom and
 pan (two fingers on the phone; wheel and right/middle drag on the PC). A drawing is a plain SVG, `drawings/dessin-<id6>.svg`,
-listed in the note's `attachments:` like any file: any viewer opens it, and Scriptorium reads back its own paths
-(`<path d="M… L…" stroke="#rrggbb" stroke-width="…">`, page marked `data-scriptorium="1"`, older drawings `data-griffonote="1"`) to edit it again. Tap
+listed in the note's `attachments:` like any file: any viewer opens it, and Mémento reads back its own paths
+(`<path d="M… L…" stroke="#rrggbb" stroke-width="…">`, page marked `data-memento="1"`, older drawings `data-griffonote="1"`) to edit it again. Tap
 the thumbnail in the note to edit; erasing everything removes the drawing. Deleting the note deletes its drawings.
 
 ## Activities
@@ -120,7 +121,7 @@ exdate: [2026-11-19T14:30]     # skipped occurrences, same form as start (a date
 alerts: [-15m, -1d]            # offsets from the start: m, h, d, w
 location: 12 rue de la Paix
 status: confirmed              # confirmed | tentative | cancelled (hidden)
-uid: 0a1b2c@google.com         # ICS UID (re-import key); <id>@scriptorium for events made here
+uid: 0a1b2c@google.com         # ICS UID (re-import key); <id>@memento for events made here
 recurrence_of: k3f9a2          # an edited occurrence of a series (its own file)…
 recurrence_at: 2026-11-19T14:30  # …and the original start of that occurrence (also in the series' exdate)
 import: 20261101T092000-x1y2z3 # set on every file an ICS import created ("Annuler l'import" deletes them)
@@ -312,8 +313,8 @@ Free text shown as "Notes".
 ### Contacts in the phone (Android)
 
 Off by default. "Afficher mes contacts dans le téléphone (appels, SMS…)" in the settings asks for the contacts
-permissions and copies the contacts into the phone's own contacts, under an account "Scriptorium" (type
-`app.scriptorium.contacts`, visible in the phone's Settings → Accounts), so the dialer, the messaging apps and the car
+permissions and copies the contacts into the phone's own contacts, under an account "Mémento" (type
+`app.memento.contacts`, visible in the phone's Settings → Accounts), so the dialer, the messaging apps and the car
 show the names. It is one way: the files stay the truth, edits made in the phone's contacts app are overwritten at the
 next update, and the app is where a contact is edited. One raw contact per file (`SOURCE_ID` = the contact id,
 `SYNC1` = a hash of what is copied), updated at app start, after a change of the files, after an import and when the
@@ -375,7 +376,7 @@ python -m pytest tests -q
 python run.py
 ```
 
-The CI builds `Scriptorium.exe` with `pyinstaller --noconfirm scriptorium.spec` (one file; the spec keeps only the
+The CI builds `Memento.exe` with `pyinstaller --noconfirm memento.spec` (one file; the spec keeps only the
 Qt parts the app loads, Qt WebEngine for the map included) and publishes it next to the APK in the
 `latest` release. The exe is not signed, so SmartScreen may warn the first time.
 
@@ -394,7 +395,7 @@ rolling `latest` release that the in-app updater reads.
 ```bash
 keytool -genkeypair -keystore griffonote.jks -alias griffonote \
   -keyalg RSA -keysize 4096 -validity 36500 \
-  -dname "CN=Scriptorium, O=Scriptorium, C=FR"
+  -dname "CN=Mémento, O=Mémento, C=FR"
 base64 -w0 griffonote.jks > griffonote.jks.b64
 ```
 
