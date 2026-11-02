@@ -1,5 +1,7 @@
 # Implementation brief: Contacts, Agenda and the "everything in Markdown" app (Griffonote)
 
+> **Status (2026-11-02): implemented.** The app has since been renamed **Scriptorium** (applicationId `app.scriptorium`, folder `Documents/Scriptorium`, burgundy accent, `Scriptorium.exe`). The text below is the original brief and keeps the old name.
+
 Snapshot of 2026-11-01. **Self-contained**: it carries the context of the project, the decisions already taken and the
 full specifications. A fresh conversation can implement from this file alone (plus the repository).
 

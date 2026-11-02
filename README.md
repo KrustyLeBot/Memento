@@ -1,8 +1,13 @@
 # Scriptorium
 
-A simple Google Keep replacement for Android. Every note is a plain Markdown file in a
-folder (`Documents/Scriptorium/` by default), so notes can be read and edited on a PC
-(Obsidian, any editor) and synced by a separate app. The user never sees Markdown on the phone.
+Notes, agenda, contacts and sport activities, on Android and Windows. Everything is a plain Markdown file in
+one folder (`Documents/Scriptorium/` by default), so it can be read and edited on a PC (Obsidian, any editor)
+and synced by a separate app (Synchrotron). The user never sees Markdown on the phone. Formerly Griffonote: on
+first launch the Android app offers to copy `Documents/Griffonote` into the new folder.
+
+Four modules, reached from the bottom bar on Android (Settings is its last entry) and the left rail on Windows:
+**Notes**, **Agenda**, **Activités** (with a 3D/2D map), **Contacts**. Agenda, Activités and Contacts can be
+hidden in the settings.
 
 ## Storage format
 
@@ -11,6 +16,7 @@ Scriptorium/
 ├── courses-k3f9a2.md      # one file per note: YAML frontmatter + Markdown body
 ├── attachments/           # scanned PDFs (`pdf:`), attached files (`attachments:`) and activity tracks
 ├── activities/            # the "Activités" folder: one note per activity, kept out of the regular list
+├── agenda/                # events, one note each, in a folder per year; agenda/calendars.json
 ├── contacts/              # the "Contacts" module: one note per contact, kept out of the regular list
 └── drawings/
 ```
@@ -334,10 +340,10 @@ to a `.vcf` file *(verify, the path differs by manufacturer)*; the same import a
 
 ## Status
 
-Milestones 1–2 and 6 (partly) are implemented: text notes, checklists (drag to reorder,
-checked items folded), colours, pin, labels, full-text search,
-grid/list view, share in/out (text), conflict-file badge, external-change handling,
-settings, self-update, the agenda with its reminders and widgets (Android).
+Implemented on both platforms: notes (checklists, colours, pin, labels, search, scans, drawings, attachments),
+activities (FIT/GPX import, analysis, 3D/2D map), agenda (views, recurrence, time zones, ICS import/export),
+contacts (vCard import/export, duplicates). Android only: activity recording with route following and offline
+maps, agenda reminders and widgets, the contacts mirror into the phone. Self-update on both.
 
 ## Windows client
 
