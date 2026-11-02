@@ -27,6 +27,7 @@ object TileServer {
     private const val TAG = "TileServer"
     private const val TIMEOUT_MS = 8000
     private const val BROWSING_MAX = 300L * 1024 * 1024
+    private const val PEAKS = "peaks"
 
     private lateinit var assets: AssetManager
     lateinit var cache: TileCache
@@ -38,8 +39,10 @@ object TileServer {
         if (::cache.isInitialized) return
         val app = context.applicationContext
         assets = app.assets
-        cache = TileCache(File(app.cacheDir, "maptiles"), BROWSING_MAX)
-        peaksDir = File(app.cacheDir, "peaks")
+        val root = File(app.cacheDir, "maptiles")
+        cache = TileCache(root, BROWSING_MAX)
+        // inside the browsing cache: the answers count in its 300 MB and go least recently used first
+        peaksDir = File(root, PEAKS)
     }
 
     fun handle(request: WebResourceRequest): WebResourceResponse? {
@@ -110,8 +113,8 @@ object TileServer {
 
     /** Exact cached answer, else (offline) a covering one, else computed online and cached. */
     fun peaksFor(req: Bbox): List<Peak> {
-        val file = File(peaksDir, Peaks.key(req) + ".json")
-        if (file.isFile) Peaks.parseCache(file.readText())?.let { return it.second }
+        val rel = "$PEAKS/" + Peaks.key(req) + ".json"
+        cache.get(rel)?.let { f -> Peaks.parseCache(f.readText())?.let { return it.second } }
         packPeaks().firstOrNull { Peaks.key(it.first) == Peaks.key(req) }?.let { return it.second }
         if (!NetState.online.value) return Peaks.fromCovering(cachedPeaks(), req).orEmpty()
         val list = try {
@@ -119,7 +122,7 @@ object TileServer {
         } catch (e: IOException) {
             return Peaks.fromCovering(cachedPeaks(), req) ?: throw e
         }
-        TileCache.writeAtomic(file, Peaks.cacheJson(req, list).toByteArray())
+        cache.put(rel, Peaks.cacheJson(req, list).toByteArray())
         return list
     }
 

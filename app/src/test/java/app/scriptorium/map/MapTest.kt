@@ -222,6 +222,7 @@ class RouteProgressTest {
         val (la, lo) = at(0.0, 0.0)
         rp.update(la, lo)
         val (a, b) = at(300.0, 80.0)
+        assertFalse(rp.update(a, b).offRoute) // one fix out may be GPS noise
         val off = rp.update(a, b)
         assertTrue(off.offRoute)
         assertEquals(80.0, off.distanceToRoute, 2.0)
@@ -249,6 +250,7 @@ class RouteProgressTest {
     fun firstPositionFarAwayIsOffRouteUntilReached() {
         val rp = RouteProgress(routeOf((0..10).map { Triple(it * 10.0, 0.0, null as Double?) }))
         val (la, lo) = at(0.0, 500.0)
+        rp.update(la, lo)
         val s = rp.update(la, lo)
         assertFalse(s.matched)
         assertTrue(s.offRoute)

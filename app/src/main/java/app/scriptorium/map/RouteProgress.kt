@@ -87,6 +87,8 @@ data class RouteStatus(
 class RouteProgress(val route: Route) {
     private var lastSeg = -1
     private var lastAlong = 0.0
+    /** Fixes in a row beyond [OFF_ROUTE_M]: one alone is often GPS noise, "Hors trace" waits for a second. */
+    private var offFixes = 0
     var status: RouteStatus = RouteStatus(false, false, Double.NaN, 0.0, route.length, route.cumUp?.last(), route.cumDown?.last())
         private set
 
@@ -96,9 +98,12 @@ class RouteProgress(val route: Route) {
         if (route.size < 2) return status
         val hit = if (lastSeg < 0) firstMatch(lat, lon) else windowMatch(lat, lon) ?: rejoin(lat, lon)
         if (hit == null || hit.dist > OFF_ROUTE_M) {
-            status = status.copy(offRoute = true, distanceToRoute = hit?.dist ?: nearestDistance(lat, lon))
+            offFixes++
+            val off = status.offRoute || offFixes >= OFF_ROUTE_FIXES
+            status = status.copy(offRoute = off, distanceToRoute = hit?.dist ?: nearestDistance(lat, lon))
             return status
         }
+        offFixes = 0
         lastSeg = hit.seg
         lastAlong = hit.along
         status = statusAt(hit)
@@ -174,6 +179,7 @@ class RouteProgress(val route: Route) {
 
     companion object {
         const val OFF_ROUTE_M = 50.0
+        const val OFF_ROUTE_FIXES = 2
         const val BACK_WINDOW_M = 200.0
         const val FORWARD_WINDOW_M = 2000.0
         const val AMBIGUITY_M = 20.0

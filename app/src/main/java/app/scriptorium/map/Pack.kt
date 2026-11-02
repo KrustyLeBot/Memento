@@ -65,8 +65,11 @@ data class Pack(
         /** Packs to delete at [now]: expired ones, whatever their state. */
         fun toPurge(packs: List<Pack>, now: Long): List<Pack> = packs.filter { it.expired(now) }
 
-        /** A complete pack with terrain covering the point: the 3D view works offline there. */
-        fun covers3d(packs: List<Pack>, lon: Double, lat: Double, now: Long): Boolean =
-            packs.any { it.complete && it.has3d && !it.expired(now) && it.square.contains(lon, lat) }
+        /**
+         * A complete pack with terrain covering the point: the 3D view works offline there. A [pinned] pack
+         * (followed by the running recording) still counts past its 24 h: it is kept until the recording ends.
+         */
+        fun covers3d(packs: List<Pack>, lon: Double, lat: Double, now: Long, pinned: Set<String> = emptySet()): Boolean =
+            packs.any { it.complete && it.has3d && (!it.expired(now) || it.id in pinned) && it.square.contains(lon, lat) }
     }
 }

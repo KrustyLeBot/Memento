@@ -18,10 +18,13 @@ object MapRuntime {
         val app = context.applicationContext
         NetState.init(app)
         TileServer.init(app)
+        OfflinePacks.onDownloadStarted = { PackDownloadService.start(app) }
         OfflinePacks.init(app)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             // the hand-drawn OSM map's cache, replaced by the browsing cache
             File(app.cacheDir, "tiles").deleteRecursively()
+            // the peaks answers' former folder, now inside the browsing cache
+            File(app.cacheDir, "peaks").deleteRecursively()
             TileServer.cache.trim()
         }
     }

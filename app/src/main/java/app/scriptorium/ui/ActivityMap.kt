@@ -80,7 +80,7 @@ fun ActivityMapView(settings: Settings, detail: ActivityDetail, full: Boolean, o
     val online by NetState.online.collectAsState()
     val packs by OfflinePacks.packs.collectAsState()
     val start = detail.analysis?.samples?.firstOrNull()
-    val forced2d = !online && (start == null || !Pack.covers3d(packs, start.lon, start.lat, System.currentTimeMillis()))
+    val forced2d = !online && (start == null || !Pack.covers3d(packs, start.lon, start.lat, System.currentTimeMillis(), OfflinePacks.pinnedIds()))
     val is3d = pref3d && !forced2d
     LaunchedEffect(is3d) { MapHost.call("setMode", Json.quote(if (is3d) "3d" else "2d")) }
     LaunchedEffect(full) { MapHost.call("fit") }

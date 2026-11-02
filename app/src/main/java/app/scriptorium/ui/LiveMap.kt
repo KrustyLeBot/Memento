@@ -48,7 +48,7 @@ fun LiveMap(settings: Settings, l: Live, modifier: Modifier = Modifier) {
     var pref3d by remember { mutableStateOf(settings.map3d) }
     val online by NetState.online.collectAsState()
     val packs by OfflinePacks.packs.collectAsState()
-    val covered = l.lat != null && l.lon != null && Pack.covers3d(packs, l.lon, l.lat, System.currentTimeMillis())
+    val covered = l.lat != null && l.lon != null && Pack.covers3d(packs, l.lon, l.lat, System.currentTimeMillis(), OfflinePacks.pinnedIds())
     val forced2d = !online && !covered
     val is3d = pref3d && !forced2d
     var following by remember { mutableStateOf(true) }

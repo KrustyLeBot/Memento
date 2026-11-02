@@ -46,6 +46,13 @@ object OfflinePacks {
     val packs: StateFlow<List<Pack>> = _packs
     private val _progress = MutableStateFlow<Map<String, Progress>>(emptyMap())
     val progress: StateFlow<Map<String, Progress>> = _progress
+    private val _running = MutableStateFlow<Set<String>>(emptySet())
+    /** Ids of the packs downloading now; the download service runs while this is not empty. */
+    val running: StateFlow<Set<String>> = _running
+
+    /** Called after a download starts, to bring up the foreground service that keeps the process alive. */
+    @Volatile
+    var onDownloadStarted: (() -> Unit)? = null
 
     private const val PURGE_EVERY_MS = 10L * 60 * 1000
 
@@ -77,6 +84,8 @@ object OfflinePacks {
     fun pin(id: String) { pinned.add(id) }
 
     fun unpin(id: String) { pinned.remove(id) }
+
+    fun pinnedIds(): Set<String> = pinned.toSet()
 
     /** Reloads the manifests and deletes expired packs and leftovers of a pack that never got a manifest. */
     @Synchronized
@@ -194,6 +203,7 @@ object OfflinePacks {
     private fun start(pack: Pack) {
         if (isRunning(pack.id)) return
         _progress.update { it + (pack.id to Progress(0, pack.plan().tileCount, pack.bytes)) }
+        _running.update { it + pack.id }
         jobs[pack.id] = scope.launch {
             try {
                 val done = download(pack)
@@ -211,8 +221,18 @@ object OfflinePacks {
                 _progress.update { m -> m + (pack.id to (m[pack.id] ?: Progress(0, 0, 0)).copy(error = msg)) }
             } finally {
                 jobs.remove(pack.id)
+                _running.update { it - pack.id }
                 refresh()
             }
+        }
+        onDownloadStarted?.invoke()
+    }
+
+    /** Stops every download (the notification's "Annuler"); the packs stay incomplete and can be resumed. */
+    fun cancelAll() {
+        for ((id, job) in jobs) {
+            job.cancel()
+            _progress.update { m -> m + (id to (m[id] ?: Progress(0, 0, 0)).copy(error = "Téléchargement annulé")) }
         }
     }
 
