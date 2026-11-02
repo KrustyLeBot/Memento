@@ -2,7 +2,7 @@
 Android's `IcsExport.kt` (CRLF, lines folded at 75 octets).
 
 - all-day: `DTSTART;VALUE=DATE`, DTEND = the day after the last day (exclusive); timed with a known zone:
-  `TZID=<IANA>` plus one VTIMEZONE per zone used; floating (or an unknown zone name): no TZID.
+  `TZID=<IANA>` plus one VTIMEZONE per zone used (`end_tz`: DTEND in that zone, its VTIMEZONE too); floating (or an unknown zone name): no TZID.
 - RRULE verbatim, EXDATE one line per value in DTSTART's form (a date on a timed series: that day at the
   series' start time), except the occurrences an exported exception file overrides; an exception file is written
   as an override (UID of its series, RECURRENCE-ID in the series' form).
@@ -72,6 +72,16 @@ class _Writer:
             self.warnings.append(f"{ev.title} : fuseau inconnu « {ev.tz} », exporté sans fuseau")
         return None
 
+    def end_zone_of(self, ev: Event, tz: str | None) -> str | None:
+        """DTEND's zone: `end_tz` when known on an event exported with its zone, else the start's."""
+        if not ev.end_tz or tz is None or ev.all_day:
+            return tz
+        if not zones.is_valid(ev.end_tz):
+            self.warnings.append(f"{ev.title} : fuseau de fin inconnu « {ev.end_tz} », exporté dans celui du début")
+            return tz
+        self.zones.add(ev.end_tz)
+        return ev.end_tz
+
     def alarms(self, title: str, alerts: list[int]) -> None:
         for minutes in alerts:
             self.lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{ics.escape_text(title)}",
@@ -89,7 +99,7 @@ class _Writer:
         if ev.all_day:
             self.add(_time_line("DTEND", (ev.end or ev.start) + timedelta(days=1), None))
         elif ev.end is not None:
-            self.add(_time_line("DTEND", ev.end, tz))
+            self.add(_time_line("DTEND", ev.end, self.end_zone_of(ev, tz)))
         if ev.rrule:
             self.add(f"RRULE:{ev.rrule}")
         # an overridden occurrence is replaced by its override, never excluded too (Google drops such overrides)

@@ -49,7 +49,8 @@ data class Expansion(
  *   UNTIL are applied here: UNTIL as a date (compared to the date), a local date-time (wall time) or UTC `Z`;
  * - EXDATE and the `recurrence_at` of exception files remove occurrences (an exact stamp; a date removes the day of
  *   an all-day series, and the occurrence at the series' start time that day of a timed one);
- * - timed occurrences last the exact duration DTEND - DTSTART; all-day ones are dates of the device zone;
+ * - timed occurrences last the exact duration DTEND - DTSTART (DTEND in `end_tz` when set, the occurrence's end
+ *   wall time then given in that zone); all-day ones are dates of the device zone;
  * - in the window when overlapping it; a zero-length one when from <= start < to;
  * - at most [MAX_OCCURRENCES] per window and [MAX_ITERATIONS] rule steps, then `truncated`.
  */
@@ -191,13 +192,16 @@ object RecurrenceExpander {
                 Occurrence(event, s, Stamp(endDay), Zones.dayStart(s.date, device), Zones.dayStart(endDay.plusDays(1), device))
             }
         } else {
+            // with `end_tz` the end is a wall time of another zone: the duration is the instant difference of the
+            // first occurrence, applied to every occurrence's start (RFC 5545, DTEND with its own TZID)
+            val endZone = Zones.endZoneOr(event, device)
             val firstStart = Zones.toInstant(event.start.dateTime(), zone)
-            val duration = event.end?.let { Duration.between(firstStart, Zones.toInstant(it.dateTime(), zone)) } ?: Duration.ZERO
+            val duration = event.end?.let { Duration.between(firstStart, Zones.toInstant(it.dateTime(), endZone)) } ?: Duration.ZERO
             span = duration
             make = { s ->
                 val st = Zones.toInstant(s.dateTime(), zone)
                 val en = st.plus(duration)
-                Occurrence(event, s, if (event.end != null) Stamp.of(Zones.toWall(en, zone)) else null, st, en)
+                Occurrence(event, s, if (event.end != null) Stamp.of(Zones.toWall(en, endZone)) else null, st, en)
             }
         }
         fun inside(o: Occurrence): Boolean =

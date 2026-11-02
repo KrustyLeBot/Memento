@@ -159,6 +159,13 @@ def zone_or(name: str | None, fallback: str) -> ZoneInfo:
     return zone(name) if is_valid(name) else zone(fallback)
 
 
+def end_zone_or(event, fallback: str) -> ZoneInfo:
+    """The zone of the event's end: its `end_tz` when known (timed events with `tz` only), else the start's."""
+    if not event.all_day and event.tz and is_valid(event.end_tz):
+        return zone(event.end_tz)
+    return zone_or(event.tz, fallback)
+
+
 def to_instant(wall: datetime, tz: ZoneInfo) -> datetime:
     """Wall time of `tz` -> aware UTC instant (gap: moved forward by the gap; fold: the first instant)."""
     return wall.replace(tzinfo=tz, fold=0).astimezone(UTC)

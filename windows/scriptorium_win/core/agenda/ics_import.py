@@ -12,7 +12,8 @@ Mapping (RFC 5545 -> file), identical on Android (`IcsImport.kt`):
   (an overridden occurrence that is cancelled becomes an exdate of its series).
 - DTSTART/DTEND/DURATION: VALUE=DATE -> all-day (exclusive DTEND -> inclusive end); TZID -> wall time + IANA
   zone (zones.resolve_tzid; unresolved -> device zone, counted); `...Z` -> wall time of the device zone + that
-  zone; neither -> floating (no tz). DTEND in another zone is converted to the start's zone.
+  zone; neither -> floating (no tz). A DTEND with another TZID than DTSTART's is kept as `end_tz` (its wall time
+  there, no conversion); any other DTEND (UTC, or a zone on a start without one) is converted to the start's zone.
 - RRULE verbatim; EXDATE (every line, comma lists) converted to the series' form; RDATE: one extra single event
   per date; RECURRENCE-ID overrides -> exception files (recurrence_of / recurrence_at) + exdate on the series.
 - VALARM with a TRIGGER relative to the start (ACTION other than EMAIL) -> alerts; others ignored (counted).
@@ -302,6 +303,7 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
     dz = ctx.device_zone
 
     end = None
+    end_tz = None
     dtend = comp.first("DTEND")
     duration = comp.first("DURATION")
     if dtend is not None:
@@ -311,6 +313,10 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
             last = to_event_stamp(end_tv, True, None, dz)
             last = last - timedelta(days=1) if end_tv.kind == "date" else last
             end = last if last > start else None
+        elif start_tv.kind == "zoned" and end_tv.kind == "zoned" and end_tv.tz != tz:
+            # a flight: DTEND in the arrival zone stays a wall time of that zone
+            if _instant(end_tv, dz) > _instant(start_tv, dz):
+                end, end_tz = end_tv.value, end_tv.tz
         elif end_tv.kind != "date":
             e = to_event_stamp(end_tv, False, tz, dz)
             end = e if e > start else None
@@ -342,7 +348,7 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
     body = build_body(comp)
     note = Note(path="", id="", title=title or UNTITLED, body=body, created=now, updated=now)
     event = Event(
-        note=note, start=start, end=end, tz=tz, rrule=rrule_line.value.strip() if rrule_line else None,
+        note=note, start=start, end=end, tz=tz, end_tz=end_tz, rrule=rrule_line.value.strip() if rrule_line else None,
         exdate=exdate, alerts=_alerts(comp, preview), location=location or None, status=status, uid=uid or None,
         ical_hash=fnv32(body), ical_extra=[p.raw for p in comp.lines if p.name not in CONSUMED],
     )
@@ -368,7 +374,14 @@ def _map_event(comp: ics.Component, ctx: _Context, preview: CalendarPreview, now
 
 
 def _rdate_copy(event: Event, stamp: date) -> Event:
-    end = stamp + (event.end - event.start) if event.end is not None else None
+    if event.end is None:
+        end = None
+    elif event.end_tz and event.tz and isinstance(stamp, datetime):
+        tz, end_tz = zones.zone(event.tz), zones.zone(event.end_tz)
+        span = zones.to_instant(event.end, end_tz) - zones.to_instant(event.start, tz)
+        end = zones.to_wall(zones.to_instant(stamp, tz) + span, end_tz)
+    else:
+        end = stamp + (event.end - event.start)
     uid = f"{event.uid}#{format_stamp(stamp)}" if event.uid else None
     return event.copy(start=stamp, end=end, rrule=None, exdate=[], uid=uid)
 

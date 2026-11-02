@@ -12,6 +12,7 @@ import app.scriptorium.NoteFormat
  * start: 2026-11-12T14:30        # a date alone means all-day
  * end: 2026-11-12T15:15          # all-day: last day INCLUDED
  * tz: Europe/Paris               # absent = floating (the device zone)
+ * end_tz: America/New_York      # the end's own zone (a flight); absent = tz. Timed events with tz only
  * calendar: perso
  * rrule: FREQ=WEEKLY;BYDAY=TH
  * exdate: [2026-11-19T14:30]     # same form as start
@@ -34,6 +35,8 @@ data class Event(
     val start: Stamp,
     val end: Stamp? = null,
     val tz: String? = null,
+    /** The end's own zone (`end_tz`): [end] is a wall time there. Only on timed events with [tz]; null = [tz]. */
+    val endTz: String? = null,
     val calendar: String? = null,
     val rrule: String? = null,
     val exdate: List<Stamp> = emptyList(),
@@ -68,7 +71,7 @@ class AgendaFormatException(message: String) : Exception(message)
 object EventFormat {
     const val AGENDA_DIR = "agenda"
     val AGENDA_KEYS = listOf(
-        "start", "end", "tz", "calendar", "rrule", "exdate", "alerts", "location", "status", "uid",
+        "start", "end", "tz", "end_tz", "calendar", "rrule", "exdate", "alerts", "location", "status", "uid",
         "recurrence_of", "recurrence_at", "import", "ical_hash", "ical_extra",
     )
     private val KEY = Regex("""^([A-Za-z_][\w-]*):[ \t]*(.*)$""")
@@ -133,8 +136,16 @@ object EventFormat {
             return value
         }
 
+        fun text(key: String): String? = found[key]?.let { scalar(it) }?.ifEmpty { null }
+        val tz = text("tz")
+        var endTz = text("end_tz")
+        if (endTz != null) when {
+            start.allDay -> { warnings.add("end_tz ignoré : '$endTz' (événement sur la journée)"); endTz = null }
+            tz == null -> { warnings.add("end_tz ignoré : '$endTz' (pas de fuseau tz pour le début)"); endTz = null }
+            !Zones.isValid(endTz) -> warnings.add("fuseau de fin inconnu : '$endTz' (celui du début est utilisé)")
+        }
         var end = stamp("end")
-        if (end != null && end < start) {
+        if (end != null && endsBeforeStart(start, end, tz, endTz)) {
             warnings.add("fin avant le début ignorée : $end"); end = null
         }
         val exdate = ArrayList<Stamp>()
@@ -145,18 +156,25 @@ object EventFormat {
         found["alerts"]?.let { b ->
             for (raw in list(b)) try { alerts.add(Alerts.parse(raw)) } catch (_: IllegalArgumentException) { warnings.add("rappel illisible : '$raw'") }
         }
-        fun text(key: String): String? = found[key]?.let { scalar(it) }?.ifEmpty { null }
-        text("tz")?.let { if (!Zones.isValid(it)) warnings.add("fuseau inconnu : '$it' (celui de l'appareil est utilisé)") }
+        tz?.let { if (!Zones.isValid(it)) warnings.add("fuseau inconnu : '$it' (celui de l'appareil est utilisé)") }
         val rrule = text("rrule")?.let { if (it.uppercase().startsWith("RRULE:")) it.substring(6) else it }?.ifEmpty { null }
         return Event(
             note = note.copy(extra = rest),
-            start = start, end = end, tz = text("tz"), calendar = text("calendar"), rrule = rrule,
+            start = start, end = end, tz = tz, endTz = endTz, calendar = text("calendar"), rrule = rrule,
             exdate = exdate, alerts = alerts, location = text("location"), status = text("status")?.lowercase(),
             uid = text("uid"), recurrenceOf = text("recurrence_of"), recurrenceAt = stamp("recurrence_at", sameForm = false),
             importId = text("import"), icalHash = text("ical_hash"),
             icalExtra = found["ical_extra"]?.let { list(it) }.orEmpty(),
             warnings = warnings,
         )
+    }
+
+    /** With two known zones the instants are compared (Paris 14:00 -> New York 12:00 is fine), else the walls. */
+    fun endsBeforeStart(start: Stamp, end: Stamp, tz: String?, endTz: String?): Boolean {
+        if (!start.allDay && Zones.isValid(tz) && Zones.isValid(endTz)) {
+            return Zones.toInstant(end.dateTime(), Zones.zone(endTz!!)) < Zones.toInstant(start.dateTime(), Zones.zone(tz!!))
+        }
+        return end < start
     }
 
     private fun icalLine(line: String): String =
@@ -168,6 +186,7 @@ object EventFormat {
         val out = arrayListOf("start: ${e.start}")
         e.end?.let { out.add("end: $it") }
         e.tz?.let { out.add("tz: ${q(it, false)}") }
+        e.endTz?.let { out.add("end_tz: ${q(it, false)}") }
         e.calendar?.let { out.add("calendar: ${q(it, false)}") }
         e.rrule?.let { out.add("rrule: ${q(it, false)}") }
         if (e.exdate.isNotEmpty()) out.add("exdate: [" + e.exdate.joinToString(", ") + "]")

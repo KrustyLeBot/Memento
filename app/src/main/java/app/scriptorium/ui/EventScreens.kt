@@ -187,7 +187,12 @@ fun EventDetailScreen(vm: MainViewModel) {
                 line2?.let { Text(it) }
                 val tz = event.tz
                 val o = e.occurrence
-                if (!event.allDay && tz != null && Zones.isValid(tz) && Zones.zone(tz).rules != zone.rules && o != null) {
+                val flight = o?.let { AgendaText.departureArrival(it, h24) }
+                if (flight != null) {
+                    Text(flight, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    if (c.eventZoneTimes) Text("Heure de l'appareil : ${AgendaText.timeLine(e, zone, h24)}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                } else if (!event.allDay && tz != null && Zones.isValid(tz) && Zones.zone(tz).rules != zone.rules && o != null) {
                     val wall = AgendaText.time(o.start.time!!, h24) + (o.end?.time?.let { " – " + AgendaText.time(it, h24) } ?: "")
                     Text(if (c.eventZoneTimes) "Heure de l'appareil : ${AgendaText.timeLine(e, zone, h24)}" else "$wall à ${AgendaText.city(tz)}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -268,6 +273,7 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
     var pickTime by remember { mutableStateOf<Boolean?>(null) }
     var showZone by remember { mutableStateOf(!d.allDay && d.tz != null && d.tz != zone.id) }
     var zoneDialog by remember { mutableStateOf(false) }
+    var endZoneDialog by remember { mutableStateOf(false) }
     var calMenu by remember { mutableStateOf(false) }
     var repeatDialog by remember { mutableStateOf(false) }
     var customDialog by remember { mutableStateOf(false) }
@@ -322,13 +328,28 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
             }
             d.problem()?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 40.dp)) }
             if (!d.allDay) {
-                if (showZone) FieldRow(Icons.Default.Public, Modifier.clickable { zoneDialog = true }) {
+                val endTz = d.endTz
+                if (showZone || endTz != null) FieldRow(Icons.Default.Public, Modifier.clickable { zoneDialog = true }) {
                     Column {
                         Text(d.tz?.let { zoneLabel(it) } ?: "Celui de l'appareil (heure flottante)")
-                        Text("Fuseau horaire", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (endTz != null) "Fuseau de départ" else "Fuseau horaire", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else Text("Fuseau horaire…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(start = 40.dp, bottom = 4.dp).clickable { showZone = true; zoneDialog = true })
+                // a flight: the end is a wall time of its own zone (end_tz), which needs a start zone too
+                Row(Modifier.padding(start = 28.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(endTz != null, { on ->
+                        ed.draft = if (on) d.copy(tz = d.tz ?: zone.id, endTz = d.tz ?: zone.id) else d.copy(endTz = null)
+                        if (on) endZoneDialog = true
+                    })
+                    Text("Fuseau d'arrivée différent", style = MaterialTheme.typography.bodyMedium)
+                }
+                if (endTz != null) FieldRow(Icons.Default.Public, Modifier.clickable { endZoneDialog = true }) {
+                    Column {
+                        Text(zoneLabel(endTz))
+                        Text("Fuseau d'arrivée (heure de fin)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             val cal = sources.settings.calendar(d.calendar)
@@ -402,7 +423,8 @@ fun EventEditorScreen(vm: MainViewModel, ed: EventEditor) {
             ed.draft = if (isStart) d.withStart(d.startDate, v) else d.copy(endTime = v, noEnd = false)
         }
     }
-    if (zoneDialog) ZoneDialog(d.tz, { zoneDialog = false }) { ed.draft = d.copy(tz = it) }
+    if (zoneDialog) ZoneDialog(d.tz, { zoneDialog = false }, floating = d.endTz == null) { ed.draft = d.copy(tz = it) }
+    if (endZoneDialog) ZoneDialog(d.endTz, { endZoneDialog = false }, title = "Fuseau d'arrivée", floating = false) { ed.draft = d.copy(endTz = it) }
     if (repeatDialog) RepeatDialog(d.startDate, RuleEditor.detect(d.rrule, d.start, d.tz, zone), { repeatDialog = false }) { preset ->
         when (preset) {
             RepeatPreset.CUSTOM -> customDialog = true
@@ -428,7 +450,9 @@ private fun zoneLabel(id: String): String {
 }
 
 @Composable
-private fun ZoneDialog(current: String?, onDismiss: () -> Unit, onPick: (String?) -> Unit) {
+private fun ZoneDialog(
+    current: String?, onDismiss: () -> Unit, title: String = "Fuseau horaire", floating: Boolean = true, onPick: (String?) -> Unit,
+) {
     var q by remember { mutableStateOf("") }
     val device = ZoneId.systemDefault().id
     val all = remember { java.time.ZoneId.getAvailableZoneIds().filter { '/' in it && !it.startsWith("Etc/") && !it.startsWith("SystemV/") }.sorted() }
@@ -438,13 +462,13 @@ private fun ZoneDialog(current: String?, onDismiss: () -> Unit, onPick: (String?
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Fuseau horaire") },
+        title = { Text(title) },
         text = {
             Column {
                 OutlinedTextField(q, { q = it }, placeholder = { Text("Rechercher (ville, région)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 LazyColumn(Modifier.heightIn(max = 380.dp)) {
                     if (q.isBlank()) {
-                        item { ZoneItem("Celui de l'appareil (heure flottante)", current == null) { onPick(null); onDismiss() } }
+                        if (floating) item { ZoneItem("Celui de l'appareil (heure flottante)", current == null) { onPick(null); onDismiss() } }
                         item { ZoneItem("Ici : ${zoneLabel(device)}", current == device) { onPick(device); onDismiss() } }
                     }
                     items(shown) { z -> ZoneItem(zoneLabel(z), current == z) { onPick(z); onDismiss() } }

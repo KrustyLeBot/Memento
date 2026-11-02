@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from . import zones
+
 MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
           "novembre", "décembre"]
 MONTHS_SHORT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
@@ -51,6 +53,23 @@ def clock(value: datetime, h24: bool = True) -> str:
         return f"{value.hour:02d}:{value.minute:02d}"
     hour = value.hour % 12 or 12
     return f"{hour}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
+
+
+def departure_arrival(start: date, end: date | None, tz: str | None, end_tz: str | None, h24: bool = True) -> str | None:
+    """Detail card, an end in its own zone (a flight): "Départ 10:00 (Paris) → arrivée 13:00 (New York)", the
+    arrival on another day "… → arrivée le 18 déc. à 08:00 (Paris)". `start`/`end`: the occurrence's walls (each
+    in its own zone). None for any other event (same text as Android's `AgendaText.departureArrival`)."""
+    if not tz or not end_tz or end_tz == tz or not zones.is_valid(end_tz):
+        return None
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        return None
+    at = clock(end, h24)
+    arrival = f"le {end.day} {MONTHS_SHORT[end.month - 1]} à {at}" if end.date() != start.date() else at
+    return f"Départ {clock(start, h24)} ({_city(tz)}) → arrivée {arrival} ({_city(end_tz)})"
+
+
+def _city(tz_name: str) -> str:
+    return tz_name.rsplit("/", 1)[-1].replace("_", " ")
 
 
 def day_span(first: date, last: date, today: date | None = None) -> str:

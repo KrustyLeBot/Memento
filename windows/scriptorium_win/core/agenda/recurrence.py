@@ -9,7 +9,8 @@ Rules, identical on Android (`Recurrence.kt`):
   a local date-time (compared in wall time) or UTC `...Z` (compared as an instant).
 - EXDATE and the `recurrence_at` of exception files remove occurrences: an exact stamp; a date removes the day of
   an all-day series, and the occurrence at the series' start time that day of a timed one (as exported).
-- Timed occurrences last the exact duration DTEND - DTSTART of the first one (RFC 5545). All-day ones are dates
+- Timed occurrences last the exact duration DTEND - DTSTART of the first one (RFC 5545), DTEND being a wall time
+  of `end_tz` when set (the occurrence's end wall time is then given in that zone). All-day ones are dates
   of the device zone: [first day 00:00, day after the last day 00:00).
 - An occurrence is in the window when it overlaps it; a zero-length one when from <= start < to.
 - At most MAX_OCCURRENCES occurrences per window and MAX_ITERATIONS rule steps: beyond, `truncated`.
@@ -169,13 +170,16 @@ def expand(event: Event, window_from: datetime, window_to: datetime, device_zone
             return Occurrence(event, stamp, end_day, zones.day_start(stamp, device_tz),
                               zones.day_start(end_day + timedelta(days=1), device_tz))
     else:
+        # with `end_tz` the end is a wall time of another zone: the duration is the instant difference of the
+        # first occurrence, applied to every occurrence's start (RFC 5545, DTEND with its own TZID)
+        end_tz = zones.end_zone_or(event, device_zone)
         first_start = zones.to_instant(event.start, tz)
-        duration = zones.to_instant(event.end, tz) - first_start if event.end is not None else timedelta(0)
+        duration = zones.to_instant(event.end, end_tz) - first_start if event.end is not None else timedelta(0)
 
         def make(stamp: date) -> Occurrence:
             s = zones.to_instant(stamp, tz)
             e = s + duration
-            return Occurrence(event, stamp, zones.to_wall(e, tz) if event.end is not None else None, s, e)
+            return Occurrence(event, stamp, zones.to_wall(e, end_tz) if event.end is not None else None, s, e)
 
     def inside(o: Occurrence) -> bool:
         if o.end_instant == o.start_instant:

@@ -1,0 +1,96 @@
+{
+  "vector": "vols_paris_new_york.ics",
+  "device_zone": "Europe/Paris",
+  "window": [
+    "2026-01-01T00:00:00Z",
+    "2027-01-01T00:00:00Z"
+  ],
+  "now_ms": 1793520000000,
+  "import_id": "20261101T092000-vector",
+  "preview": [
+    {
+      "name": "Voyages",
+      "events": 5,
+      "series": 1,
+      "exceptions": 0,
+      "cancelled": 0,
+      "ignored": 0,
+      "unresolved_zones": 0,
+      "first": "2026-10-19",
+      "last": "2026-12-18",
+      "errors": 0
+    }
+  ],
+  "created": 5,
+  "occurrences": [
+    {
+      "title": "Navette Paris → Londres",
+      "all_day": false,
+      "start": "2026-10-19T06:00:00Z",
+      "end": "2026-10-19T07:30:00Z"
+    },
+    {
+      "title": "Navette Paris → Londres",
+      "all_day": false,
+      "start": "2026-10-26T07:00:00Z",
+      "end": "2026-10-26T08:30:00Z"
+    },
+    {
+      "title": "Navette Paris → Londres",
+      "all_day": false,
+      "start": "2026-11-02T07:00:00Z",
+      "end": "2026-11-02T08:30:00Z"
+    },
+    {
+      "title": "Vol Lyon → Lisbonne",
+      "all_day": false,
+      "start": "2026-11-05T07:15:00Z",
+      "end": "2026-11-05T09:00:00Z"
+    },
+    {
+      "title": "Train Paris → Bruxelles",
+      "all_day": false,
+      "start": "2026-11-20T06:00:00Z",
+      "end": "2026-11-20T08:25:00Z"
+    },
+    {
+      "title": "Vol Paris CDG → New York JFK",
+      "all_day": false,
+      "start": "2026-12-10T09:30:00Z",
+      "end": "2026-12-10T18:05:00Z"
+    },
+    {
+      "title": "Vol New York JFK → Paris CDG",
+      "all_day": false,
+      "start": "2026-12-17T23:30:00Z",
+      "end": "2026-12-18T07:00:00Z"
+    }
+  ],
+  "files": {
+    "Vol Paris CDG → New York JFK": [
+      "start: 2026-12-10T10:30\n",
+      "end: 2026-12-10T13:05\n",
+      "tz: Europe/Paris\nend_tz: America/New_York\n",
+      "alerts: [-3h]"
+    ],
+    "Vol New York JFK → Paris CDG": [
+      "start: 2026-12-17T18:30\n",
+      "end: 2026-12-18T08:00\n",
+      "tz: America/New_York\nend_tz: Europe/Paris\n"
+    ],
+    "Navette Paris → Londres": [
+      "end: 2026-10-19T08:30\n",
+      "tz: Europe/Paris\nend_tz: Europe/London\n",
+      "rrule: FREQ=WEEKLY;COUNT=3"
+    ],
+    "Train Paris → Bruxelles": [
+      "end: 2026-11-20T09:25\n",
+      "tz: Europe/Paris\ncalendar:"
+    ],
+    "Vol Lyon → Lisbonne": [
+      "start: 2026-11-05T08:15\n",
+      "end: 2026-11-05T10:00\n",
+      "tz: Europe/Paris\ncalendar:"
+    ]
+  }
+}

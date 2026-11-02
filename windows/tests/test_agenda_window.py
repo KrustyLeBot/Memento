@@ -2,24 +2,24 @@
 editors, series scopes, delete + undo, calendars, the import dialog on the shared vectors, export, dated notes."""
 import io
 import zipfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QDate, QEvent, Qt, QTime
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from agenda_ui_data import ZONE, at, populate
 from scriptorium_win.core import note as fmt
 from scriptorium_win.core.agenda import rules
 from scriptorium_win.core.agenda.calendars import CalendarSettings
-from scriptorium_win.core.agenda.entries import EntryKind
+from scriptorium_win.core.agenda.entries import AgendaSources, EntryKind, build_entries
 from scriptorium_win.core.agenda.model import event_from_note, new_event
 from scriptorium_win.core.note import Note
 from scriptorium_win.core.store import Store
 from scriptorium_win.services import updater
 from scriptorium_win.ui import agenda_data, agenda_editor, theme
-from scriptorium_win.ui.agenda_editor import EventDialog, RecurrenceDialog
+from scriptorium_win.ui.agenda_editor import EventDetailDialog, EventDialog, RecurrenceDialog
 from scriptorium_win.ui.main_window import MainWindow
 
 VECTORS = Path(__file__).resolve().parents[2] / "testdata" / "agenda"
@@ -318,6 +318,38 @@ def test_editor_time_zone_row_and_end_follows_start(window):
     same.all_day.setChecked(True)
     built = same.build()
     assert built.start == date(2026, 12, 1) and built.end is None and built.tz is None
+
+
+def test_editor_end_zone_for_a_flight(window):
+    ny = "America/New_York"
+    dialog = EventDialog(window, new_event("Vol", datetime(2026, 12, 10, 10), datetime(2026, 12, 10, 13), tz=ZONE),
+                         CalendarSettings(), ZONE, date(2026, 11, 2), is_new=False)
+    dialog.show()
+    assert not dialog.zone_row.isVisible() and not dialog.end_zone.isVisible() and dialog.end_zone_check.isVisible()
+    dialog.end_zone_check.setChecked(True)
+    assert dialog.zone_row.isVisible() and dialog.end_zone.isVisible()  # both zones once the end has its own
+    assert dialog.zone_label.text() == "Fuseau de départ"
+    dialog.end_zone.set_zone(ny)
+    built = dialog.build()
+    assert (built.tz, built.end_tz, built.end) == (ZONE, ny, datetime(2026, 12, 10, 13))
+    dialog.end_time.setTime(QTime(3, 0))  # 03:00 New York = 09:00 Paris, before the departure
+    dialog._accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted and "après le départ" in dialog.error.text()
+    dialog.end_zone_check.setChecked(False)
+    assert dialog.build().end_tz is None
+    edit = EventDialog(window, built, CalendarSettings(), ZONE, date(2026, 11, 2), is_new=False)
+    edit.show()
+    assert edit.end_zone_check.isChecked() and edit.end_zone.zone() == ny and edit.zone_row.isVisible()
+
+
+def test_detail_card_says_departure_and_arrival(window):
+    flight = new_event("Vol", datetime(2026, 12, 17, 18, 30), datetime(2026, 12, 18, 8), tz="America/New_York",
+                       end_tz=ZONE)
+    entry = build_entries(AgendaSources(events=[flight]), datetime(2026, 12, 17, tzinfo=timezone.utc),
+                          datetime(2026, 12, 19, tzinfo=timezone.utc), ZONE).entries[0]
+    card = EventDetailDialog(window, entry, CalendarSettings(), ZONE, date(2026, 11, 2), False)
+    texts = [w.text() for w in card.findChildren(QLabel)]
+    assert any(t.startswith("Départ ") and "(New York) → arrivée le 18 déc. à " in t and t.endswith(" (Paris)") for t in texts), texts
 
 
 # ---- writing ----

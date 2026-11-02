@@ -19,6 +19,8 @@ data class EventDraft(
     val endTime: LocalTime = startTime.plusHours(1),
     /** IANA zone; null = floating ("celui de l'appareil"). */
     val tz: String? = null,
+    /** The end's own zone ("Fuseau d'arrivée différent"): [endTime] is a wall time there. */
+    val endTz: String? = null,
     val calendar: String? = null,
     val location: String = "",
     val rrule: String? = null,
@@ -33,9 +35,18 @@ data class EventDraft(
         else -> Stamp(endDate, endTime)
     }
 
+    /** The end zone written to the file: only on a timed event with a start zone, and when it differs from it. */
+    val endZone: String? get() = if (!allDay && tz != null && endTz != null && endTz != tz) endTz else null
+
     /** French problem, or null when the draft can be saved. */
     fun problem(): String? {
         val e = end ?: return null
+        val ez = endZone
+        if (ez != null && Zones.isValid(ez) && Zones.isValid(tz)) {
+            val arrival = Zones.toInstant(e.dateTime(), Zones.zone(ez))
+            val departure = Zones.toInstant(start.dateTime(), Zones.zone(tz!!))
+            return if (arrival.isAfter(departure)) null else "L'arrivée (heure de ${AgendaText.city(ez)}) doit être après le départ"
+        }
         if (e < start) return "La fin est avant le début"
         return null
     }
@@ -54,7 +65,7 @@ data class EventDraft(
         val exdate = if (base.isSeries || rrule != null) carryExdates(base.exdate, base.start, newStart) else base.exdate
         return base.copy(
             note = base.note.copy(title = title.trim()),
-            start = newStart, end = end, tz = if (allDay) null else tz, calendar = calendar,
+            start = newStart, end = end, tz = if (allDay) null else tz, endTz = endZone, calendar = calendar,
             location = location.trim().ifEmpty { null }, rrule = rrule?.ifBlank { null }, exdate = exdate,
             alerts = alerts.distinct().sorted(), warnings = emptyList(),
         )
@@ -69,7 +80,7 @@ data class EventDraft(
             val endTime = end?.time ?: if (start.allDay) startTime.plusHours(1) else startTime
             return EventDraft(
                 title = e.title, allDay = start.allDay, startDate = start.date, startTime = startTime,
-                endDate = endDate, endTime = endTime, tz = e.tz, calendar = e.calendar, location = e.location.orEmpty(),
+                endDate = endDate, endTime = endTime, tz = e.tz, endTz = e.endTz, calendar = e.calendar, location = e.location.orEmpty(),
                 rrule = e.rrule, alerts = e.alerts, noEnd = end == null && !start.allDay,
             )
         }

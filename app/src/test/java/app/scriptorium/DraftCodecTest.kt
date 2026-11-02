@@ -14,7 +14,7 @@ class DraftCodecTest {
         val initial = EventDraft(startDate = LocalDate.of(2026, 11, 3))
         val edited = initial.copy(
             title = "Dîner : chez Léa\nétage 2 = porte B", allDay = false, startTime = LocalTime.of(19, 30),
-            endDate = LocalDate.of(2026, 11, 4), endTime = LocalTime.of(0, 15), tz = "Europe/Paris", calendar = "perso",
+            endDate = LocalDate.of(2026, 11, 4), endTime = LocalTime.of(0, 15), tz = "Europe/Paris", endTz = "America/New_York", calendar = "perso",
             location = "#3 rue \\ de la Paix", rrule = "FREQ=WEEKLY;BYDAY=TU", alerts = listOf(10, 1440), noEnd = false,
         )
         val d = EventEditorDraft("occurrence", seriesId = "abc123", recurrenceAt = Stamp(LocalDate.of(2026, 11, 3), LocalTime.of(19, 0)), draft = edited, initial = initial)

@@ -134,7 +134,8 @@ data class UndoReport(val deleted: Int, val exdatesRemoved: Int, val calendarsRe
  *   cancelled override becomes an exdate of its series).
  * - DTSTART/DTEND/DURATION: VALUE=DATE -> all-day (exclusive DTEND -> inclusive end); TZID -> wall time + IANA zone
  *   ([Zones.resolveTzid]; unresolved -> device zone, counted); `Z` -> wall time of the device zone + that zone;
- *   neither -> floating. A DTEND in another zone is converted to the start's zone.
+ *   neither -> floating. A DTEND with another TZID than DTSTART's is kept as `end_tz` (its wall time there, no
+ *   conversion); any other DTEND (UTC, or a zone on a start without one) is converted to the start's zone.
  * - RRULE verbatim; EXDATE converted to the series' form; RDATE: one extra single event per date; RECURRENCE-ID
  *   overrides -> exception files + exdate on the series.
  * - VALARM relative to the start (not EMAIL) -> alerts; others ignored (counted).
@@ -329,6 +330,7 @@ object IcsImport {
         }
 
         var end: Stamp? = null
+        var endTz: String? = null
         val dtend = comp.first("DTEND")
         val duration = comp.first("DURATION")
         if (dtend != null) {
@@ -338,6 +340,9 @@ object IcsImport {
                 var last = toEventStamp(endTv, true, null, device)
                 if (endTv.kind == TimeValue.Kind.DATE) last = last.plusDays(-1)
                 end = if (last > start) last else null
+            } else if (startTv.kind == TimeValue.Kind.ZONED && endTv.kind == TimeValue.Kind.ZONED && endTv.tz != tz) {
+                // a flight: DTEND in the arrival zone stays a wall time of that zone
+                if (instantOf(endTv, device) > instantOf(startTv, device)) { end = Stamp.of(endTv.wall!!); endTz = endTv.tz }
             } else if (endTv.kind != TimeValue.Kind.DATE) {
                 val e = toEventStamp(endTv, false, tz, device)
                 end = if (e > start) e else null
@@ -368,7 +373,7 @@ object IcsImport {
         val body = buildBody(comp)
         val note = Note(path = "", id = "", title = title.ifEmpty { UNTITLED }, body = body, created = now, updated = now)
         val event = Event(
-            note = note, start = start, end = end, tz = tz, rrule = comp.first("RRULE")?.value?.trim(),
+            note = note, start = start, end = end, tz = tz, endTz = endTz, rrule = comp.first("RRULE")?.value?.trim(),
             exdate = exdate, alerts = alerts(comp, preview), location = location.ifEmpty { null }, status = status, uid = uid,
             icalHash = EventFormat.fnv32(body), icalExtra = comp.lines.filter { it.name !in CONSUMED }.map { it.raw },
         )
@@ -388,7 +393,14 @@ object IcsImport {
     }
 
     private fun rdateCopy(e: Event, s: Stamp): Event {
-        val end = e.end?.let { s.plusSeconds(java.time.Duration.between(e.start.dateTime(), it.dateTime()).seconds) }
+        val end = e.end?.let { end ->
+            if (e.endTz != null && e.tz != null && !s.allDay) {
+                val zone = Zones.zone(e.tz)
+                val endZone = Zones.zone(e.endTz)
+                val span = java.time.Duration.between(Zones.toInstant(e.start.dateTime(), zone), Zones.toInstant(end.dateTime(), endZone))
+                Stamp.of(Zones.toWall(Zones.toInstant(s.dateTime(), zone).plus(span), endZone))
+            } else s.plusSeconds(java.time.Duration.between(e.start.dateTime(), end.dateTime()).seconds)
+        }
         return e.copy(start = s, end = end, rrule = null, exdate = emptyList(), uid = e.uid?.let { "$it#$s" })
     }
 

@@ -5,6 +5,7 @@ File format (README, "Agenda"): flat keys after the usual note keys.
     start: 2026-11-12T14:30        # a date alone (2026-11-12) means all-day
     end: 2026-11-12T15:15          # all-day: last day INCLUDED
     tz: Europe/Paris               # absent = floating (the device zone)
+    end_tz: America/New_York       # the end's own zone (a flight); absent = tz. Timed events with tz only
     calendar: perso
     rrule: FREQ=WEEKLY;BYDAY=TH
     exdate: [2026-11-19T14:30]     # same form as start
@@ -33,7 +34,7 @@ from ..note import Note
 from . import zones
 
 AGENDA_DIR = "agenda"
-AGENDA_KEYS = ("start", "end", "tz", "calendar", "rrule", "exdate", "alerts", "location", "status", "uid",
+AGENDA_KEYS = ("start", "end", "tz", "end_tz", "calendar", "rrule", "exdate", "alerts", "location", "status", "uid",
                "recurrence_of", "recurrence_at", "import", "ical_hash", "ical_extra")
 STATUSES = ("confirmed", "tentative", "cancelled")
 
@@ -107,6 +108,7 @@ class Event:
     start: date
     end: date | None = None
     tz: str | None = None
+    end_tz: str | None = None  # the end's own zone: `end` is a wall time there (timed events with `tz` only)
     calendar: str | None = None
     rrule: str | None = None
     exdate: list[date] = field(default_factory=list)
@@ -230,8 +232,21 @@ def event_from_note(note: Note) -> Event | None:
             return None
         return value
 
+    text = {k: (_scalar(found[k]) or None) if k in found else None
+            for k in ("tz", "end_tz", "calendar", "rrule", "location", "status", "uid", "recurrence_of", "import",
+                      "ical_hash")}
+    end_tz = text["end_tz"]
+    if end_tz:
+        if is_all_day(start):
+            warnings.append(f"end_tz ignoré : {end_tz!r} (événement sur la journée)")
+            end_tz = None
+        elif not text["tz"]:
+            warnings.append(f"end_tz ignoré : {end_tz!r} (pas de fuseau tz pour le début)")
+            end_tz = None
+        elif not zones.is_valid(end_tz):
+            warnings.append(f"fuseau de fin inconnu : {end_tz!r} (celui du début est utilisé)")
     end = stamp("end")
-    if end is not None and end < start:
+    if end is not None and ends_before_start(start, end, text["tz"], end_tz):
         warnings.append(f"fin avant le début ignorée : {format_stamp(end)}")
         end = None
     exdate: list[date] = []
@@ -246,8 +261,6 @@ def event_from_note(note: Note) -> Event | None:
             alerts.append(parse_alert(raw))
         except ValueError:
             warnings.append(f"rappel illisible : {raw!r}")
-    text = {k: (_scalar(found[k]) or None) if k in found else None
-            for k in ("tz", "calendar", "rrule", "location", "status", "uid", "recurrence_of", "import", "ical_hash")}
     if text["tz"] and not zones.is_valid(text["tz"]):
         warnings.append(f"fuseau inconnu : {text['tz']!r} (celui de l'appareil est utilisé)")
     rrule = text["rrule"]
@@ -256,13 +269,20 @@ def event_from_note(note: Note) -> Event | None:
     status = text["status"].lower() if text["status"] else None
     return Event(
         note=note.copy(extra=rest),
-        start=start, end=end, tz=text["tz"], calendar=text["calendar"], rrule=rrule or None,
+        start=start, end=end, tz=text["tz"], end_tz=end_tz, calendar=text["calendar"], rrule=rrule or None,
         exdate=exdate, alerts=alerts, location=text["location"], status=status, uid=text["uid"],
         recurrence_of=text["recurrence_of"], recurrence_at=stamp("recurrence_at", same_form=False),
         import_id=text["import"], ical_hash=text["ical_hash"],
         ical_extra=_list(found["ical_extra"]) if "ical_extra" in found else [],
         warnings=warnings,
     )
+
+
+def ends_before_start(start: date, end: date, tz: str | None, end_tz: str | None) -> bool:
+    """With two known zones the instants are compared (Paris 14:00 -> New York 12:00 is fine), else the walls."""
+    if not is_all_day(start) and zones.is_valid(tz) and zones.is_valid(end_tz):
+        return zones.to_instant(end, zones.zone(end_tz)) < zones.to_instant(start, zones.zone(tz))
+    return end < start
 
 
 def _ical_line(line: str) -> str:
@@ -277,6 +297,8 @@ def agenda_lines(event: Event) -> list[str]:
         out.append(f"end: {format_stamp(event.end)}")
     if event.tz:
         out.append(f"tz: {fmt.yaml_quote(event.tz)}")
+    if event.end_tz:
+        out.append(f"end_tz: {fmt.yaml_quote(event.end_tz)}")
     if event.calendar:
         out.append(f"calendar: {fmt.yaml_quote(event.calendar)}")
     if event.rrule:

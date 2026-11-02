@@ -109,7 +109,7 @@ class AgendaVectorTest {
     @Test
     fun vectorsGiveTheSameOccurrencesAndReportsAsPython() {
         val names = Vectors.names()
-        assertEquals(listOf("google_perso", "outlook_calendrier", "proton_travail"), names)
+        assertEquals(listOf("google_perso", "outlook_calendrier", "proton_travail", "vols_paris_new_york"), names)
         for (name in names) {
             val expected = Vectors.expected(name)
             assertEquals(Vectors.NOW, expected["now_ms"])

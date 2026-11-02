@@ -22,7 +22,8 @@ from ..core import note as fmt
 from ..core.agenda import rules, zones
 from ..core.agenda.calendars import CalendarSettings
 from ..core.agenda.entries import Entry, EntryKind
-from ..core.agenda.frdates import MONTHS, WEEKDAYS, alert_label, clock, day_number, long_date, short_date
+from ..core.agenda.frdates import (MONTHS, WEEKDAYS, alert_label, clock, day_number, departure_arrival, long_date,
+                                   short_date)
 from ..core.agenda.model import Event, is_all_day, stamp_date
 from . import icons, theme
 from .agenda_views import uses_24h, wall
@@ -499,6 +500,14 @@ class EventDialog(QDialog):
         link_row.addWidget(self.zone_link)
         link_row.addStretch()
         form.addRow("", self.zone_link_row)
+        # a flight: the end is a wall time of its own zone (end_tz), which needs a start zone too
+        self.end_zone_check = QCheckBox("Fuseau d'arrivée différent")
+        self.end_zone_check.setChecked(bool(event.end_tz) and not event.all_day)
+        form.addRow("", self.end_zone_check)
+        self.end_zone = ZoneBox()
+        self.end_zone.set_zone(event.end_tz or event.tz or device_zone)
+        form.addRow("Fuseau d'arrivée", self.end_zone)
+        self.end_zone_label = form.labelForField(self.end_zone)
         differs = bool(event.tz) and event.tz != device_zone
         self._zone_visible = differs
         self._form = form
@@ -599,6 +608,7 @@ class EventDialog(QDialog):
         self.start_time.timeChanged.connect(self._start_changed)
         self.end_date.dateChanged.connect(self._end_changed)
         self.end_time.timeChanged.connect(self._end_changed)
+        self.end_zone_check.toggled.connect(self._end_zone_toggled)
         self.repeat.activated.connect(self._repeat_chosen)
         self._duration = self._end_value() - self._start_value()
         self._fill_repeat()
@@ -669,18 +679,39 @@ class EventDialog(QDialog):
         self._zone_visible = True
         self._update_zone_row()
 
+    def _end_zone_toggled(self, on: bool) -> None:
+        if on and self.zone.zone() is None:
+            self.zone.set_zone(self.device_zone)
+        if on and self.end_zone.zone() is None:
+            self.end_zone.set_zone(self.zone.zone())
+        self.error.clear()
+        self._update_zone_row()
+
     def _update_zone_row(self) -> None:
         timed = not self.all_day.isChecked()
-        show = timed and self._zone_visible
+        has_end = timed and self.end_zone_check.isChecked()
+        show = timed and (self._zone_visible or has_end)
         self.zone_row.setVisible(show)
         if self.zone_label is not None:
             self.zone_label.setVisible(show)
-        self.zone_link_row.setVisible(timed and not self._zone_visible)
+            self.zone_label.setText("Fuseau de départ" if has_end else "Fuseau horaire")
+        self.zone_link_row.setVisible(timed and not show)
+        self.end_zone_check.setVisible(timed)
+        self.end_zone.setVisible(has_end)
+        if self.end_zone_label is not None:
+            self.end_zone_label.setVisible(has_end)
 
     # ---- repetition ----
 
     def _tz(self) -> str | None:
         return None if self.all_day.isChecked() else self.zone.zone()
+
+    def _end_tz(self) -> str | None:
+        """The end zone written to the file: only on a timed event with a start zone, and when it differs from it."""
+        tz, end_tz = self._tz(), self.end_zone.zone()
+        if tz is None or not self.end_zone_check.isChecked() or end_tz in (None, tz):
+            return None
+        return end_tz
 
     def _fill_repeat(self, follow_start: bool = False) -> None:
         start = self._start_value()
@@ -736,7 +767,12 @@ class EventDialog(QDialog):
 
     def _accept(self) -> None:
         start, end = self._start_value(), self._end_value()
-        if end < start:
+        tz, end_tz = self._tz(), self._end_tz()
+        if end_tz and zones.is_valid(end_tz) and zones.is_valid(tz):
+            if zones.to_instant(end, zones.zone(end_tz)) <= zones.to_instant(start, zones.zone(tz)):
+                self.error.setText(f"L'arrivée (heure de {city(end_tz)}) doit être après le départ.")
+                return
+        elif end < start:
             self.error.setText("La fin est avant le début.")
             return
         self.accept()
@@ -753,7 +789,7 @@ class EventDialog(QDialog):
             body = self.description.markdown()
         note = self.source_event.note.copy(title=self.title.text().strip(), body=body)
         return self.source_event.copy(
-            note=note, start=start, end=end_value, tz=self._tz(), calendar=self.calendar.currentData(),
+            note=note, start=start, end=end_value, tz=self._tz(), end_tz=self._end_tz(), calendar=self.calendar.currentData(),
             location=self.location.text().strip() or None, alerts=list(self.alerts.values),
             rrule=None if self.scope == "one" or self.source_event.recurrence_of else self.rrule, warnings=[])
 
@@ -793,7 +829,12 @@ class EventDetailDialog(QDialog):
 
         tz = zones.zone(device_zone)
         lines: list[tuple[str, str]] = [("schedule", when_text(entry, tz, today, event_zone))]
-        if ev is not None and ev.tz and not entry.all_day and isinstance(ev.start, datetime) and ev.tz != device_zone:
+        o = entry.occurrence
+        flight = departure_arrival(o.start, o.end, ev.tz, ev.end_tz, uses_24h()) \
+            if ev is not None and o is not None and not entry.all_day else None
+        if flight:
+            lines.append(("schedule", flight))
+        elif ev is not None and ev.tz and not entry.all_day and isinstance(ev.start, datetime) and ev.tz != device_zone:
             o = entry.occurrence
             start = o.start if o is not None else ev.start
             lines.append(("schedule", f"{clock(start, uses_24h())} à {city(ev.tz)} ({ev.tz})"))

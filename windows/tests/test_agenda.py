@@ -13,6 +13,7 @@ from scriptorium_win.core.agenda import ics, zones
 from scriptorium_win.core.agenda.calendars import PALETTE, Calendar, CalendarSettings, Layer
 from scriptorium_win.core.agenda.entries import (AgendaSources, Birthday, EntryKind, activity_subtitle, alarms,
                                                  build_entries, parse_birthday)
+from scriptorium_win.core.agenda.frdates import departure_arrival
 from scriptorium_win.core.agenda.ics_export import export_all, export_calendar
 from scriptorium_win.core.agenda.ics_import import (IcsSource, ImportOptions, ImportTarget, apply_import, preview,
                                                     read_sources, undo_import)
@@ -454,3 +455,86 @@ def test_all_day_alerts_keep_their_wall_time_across_daylight_saving():
     assert walls == [datetime(2026, 3, 24, 9), datetime(2026, 3, 29, 9), datetime(2026, 3, 30, 18)]
     t = ev("start: 2026-03-30T09:00\ntz: Europe/Paris\nalerts: [-1d]\n")
     assert [a.at for a in alarms(AgendaSources([t]), utc(2026, 3, 28), PARIS)] == [utc(2026, 3, 29, 7)]
+
+
+# ---- end_tz (an end in its own zone: flights) ----
+
+NY = "America/New_York"
+
+
+def test_end_tz_is_read_written_and_only_kept_on_zoned_timed_events():
+    e = ev("start: 2026-12-10T10:00\nend: 2026-12-10T13:00\ntz: Europe/Paris\nend_tz: America/New_York\n")
+    assert (e.tz, e.end_tz, e.warnings) == (PARIS, NY, [])
+    assert "tz: Europe/Paris\nend_tz: America/New_York\n" in fmt.serialize(event_to_note(e))
+    floating = ev("start: 2026-12-10T10:00\nend: 2026-12-10T13:00\nend_tz: America/New_York\n")
+    assert floating.end_tz is None and "end_tz ignoré" in floating.warnings[0]
+    all_day = ev("start: 2026-12-10\ntz: Europe/Paris\nend_tz: America/New_York\n")
+    assert all_day.end_tz is None and "end_tz ignoré" in all_day.warnings[0]
+    unknown = ev("start: 2026-12-10T10:00\nend: 2026-12-10T13:00\ntz: Europe/Paris\nend_tz: Mars/Olympus\n")
+    assert unknown.end_tz == "Mars/Olympus" and "fuseau de fin inconnu" in unknown.warnings[0]
+    assert occ(unknown).occurrences[0].end_instant == utc(2026, 12, 10, 12)  # the start's zone
+
+
+def test_end_before_start_compares_instants_with_end_tz():
+    # Paris 14:00 -> New York 12:00 ends after the start (18:00 Paris); New York 07:00 ends before it
+    later = ev("start: 2026-12-10T14:00\nend: 2026-12-10T12:00\ntz: Europe/Paris\nend_tz: America/New_York\n")
+    assert later.end == datetime(2026, 12, 10, 12) and later.warnings == []
+    before = ev("start: 2026-12-10T14:00\nend: 2026-12-10T07:00\ntz: Europe/Paris\nend_tz: America/New_York\n")
+    assert before.end is None and "fin avant le début" in before.warnings[0]
+
+
+def test_end_tz_expansion_keeps_the_first_duration_and_gives_the_end_in_its_zone():
+    flight = ev("start: 2026-12-10T10:00\nend: 2026-12-10T13:00\ntz: Europe/Paris\nend_tz: America/New_York\n")
+    o = occ(flight).occurrences[0]
+    assert (o.start_instant, o.end_instant, o.end) == (utc(2026, 12, 10, 9), utc(2026, 12, 10, 18), datetime(2026, 12, 10, 13))
+    # weekly, Paris 08:00 -> London 08:30 (1 h 30): still 1 h 30 once both zones left summer time
+    series = ev("start: 2026-10-19T08:00\nend: 2026-10-19T08:30\ntz: Europe/Paris\nend_tz: Europe/London\n"
+                "rrule: FREQ=WEEKLY;COUNT=2\n")
+    got = [(o.start_instant, o.end_instant, o.end) for o in occ(series).occurrences]
+    assert got == [(utc(2026, 10, 19, 6), utc(2026, 10, 19, 7, 30), datetime(2026, 10, 19, 8, 30)),
+                   (utc(2026, 10, 26, 7), utc(2026, 10, 26, 8, 30), datetime(2026, 10, 26, 8, 30))]
+    entries = build_entries(AgendaSources(events=[flight]), utc(2026, 12, 10), utc(2026, 12, 11), PARIS).entries
+    assert (entries[0].start, entries[0].end, entries[0].end_date) == (utc(2026, 12, 10, 9), utc(2026, 12, 10, 18), date(2026, 12, 10))
+    o = entries[0].occurrence
+    assert departure_arrival(o.start, o.end, flight.tz, flight.end_tz) == "Départ 10:00 (Paris) → arrivée 13:00 (New York)"
+    back = ev("start: 2026-12-17T18:30\nend: 2026-12-18T08:00\ntz: America/New_York\nend_tz: Europe/Paris\n")
+    o = occ(back).occurrences[0]
+    assert departure_arrival(o.start, o.end, back.tz, back.end_tz) == \
+        "Départ 18:30 (New York) → arrivée le 18 déc. à 08:00 (Paris)"
+    assert departure_arrival(o.start, o.end, back.tz, None) is None
+
+
+def _ics(*vevent_lines: str) -> bytes:
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT", "UID:x@test", *vevent_lines, "SUMMARY:Vol", "END:VEVENT",
+             "END:VCALENDAR"]
+    return ("\r\n".join(lines) + "\r\n").encode()
+
+
+def test_import_end_zone_rules():
+    def one(*lines):
+        parsed = read_sources([IcsSource.from_bytes("v.ics", _ics(*lines))], DEVICE_ZONE, NOW)
+        return parsed[0].events[0], parsed[0].preview
+    e, _ = one("DTSTART;TZID=Europe/Paris:20261210T100000", "DTEND;TZID=America/New_York:20261210T130000")
+    assert (e.start, e.end, e.tz, e.end_tz) == (datetime(2026, 12, 10, 10), datetime(2026, 12, 10, 13), PARIS, NY)
+    e, _ = one("DTSTART;TZID=Europe/Paris:20261210T100000", "DTEND;TZID=Europe/Paris:20261210T130000")
+    assert e.end_tz is None
+    e, _ = one("DTSTART;TZID=Europe/Paris:20261210T100000", "DTEND:20261210T180000Z")
+    assert (e.end, e.tz, e.end_tz) == (datetime(2026, 12, 10, 19), PARIS, None)
+    e, _ = one("DTSTART:20261210T090000Z", "DTEND:20261210T180000Z")
+    assert (e.start, e.end, e.tz, e.end_tz) == (datetime(2026, 12, 10, 10), datetime(2026, 12, 10, 19), PARIS, None)
+    # an unknown end TZID falls back to the device zone and is counted, like a start's
+    e, pv = one("DTSTART;TZID=America/New_York:20261210T100000", "DTEND;TZID=Nowhere/Land:20261210T230000")
+    assert (e.end, e.tz, e.end_tz, pv.unresolved_zones) == (datetime(2026, 12, 10, 23), NY, PARIS, 1)
+    # an arrival before the departure (instants) is dropped
+    e, _ = one("DTSTART;TZID=Europe/Paris:20261210T100000", "DTEND;TZID=America/New_York:20261210T030000")
+    assert e.end is None and e.end_tz is None
+
+
+def test_export_writes_dtend_in_end_tz_with_its_vtimezone():
+    flight = new_event("Vol", datetime(2026, 12, 10, 10), datetime(2026, 12, 10, 13), tz=PARIS, end_tz=NY, now=NOW)
+    text = export_calendar([flight], CalendarSettings(), None, EXPORT_NOW).text
+    assert "DTSTART;TZID=Europe/Paris:20261210T100000\r\n" in text
+    assert "DTEND;TZID=America/New_York:20261210T130000\r\n" in text
+    assert "TZID:America/New_York\r\n" in text and "TZID:Europe/Paris\r\n" in text
+    back = read_sources([IcsSource.from_bytes("v.ics", text.encode())], DEVICE_ZONE, NOW)[0].events[0]
+    assert (back.start, back.end, back.tz, back.end_tz) == (flight.start, flight.end, PARIS, NY)

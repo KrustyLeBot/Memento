@@ -55,6 +55,7 @@ object DraftCodec {
         p["$prefix.endDate"] = d.endDate.toString()
         p["$prefix.endTime"] = d.endTime.toString()
         d.tz?.let { p["$prefix.tz"] = it }
+        d.endTz?.let { p["$prefix.endTz"] = it }
         d.calendar?.let { p["$prefix.calendar"] = it }
         p["$prefix.location"] = d.location
         d.rrule?.let { p["$prefix.rrule"] = it }
@@ -72,6 +73,7 @@ object DraftCodec {
             endDate = LocalDate.parse(p.str("$prefix.endDate")),
             endTime = LocalTime.parse(p.str("$prefix.endTime")),
             tz = p.str("$prefix.tz"),
+            endTz = p.str("$prefix.endTz"),
             calendar = p.str("$prefix.calendar"),
             location = p.str("$prefix.location").orEmpty(),
             rrule = p.str("$prefix.rrule"),

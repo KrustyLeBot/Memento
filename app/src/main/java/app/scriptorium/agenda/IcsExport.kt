@@ -21,7 +21,7 @@ data class ExportResult(
  * ICS export (README, "Agenda", export): the inverse mapping of the import. Same output, byte for byte, as
  * Python's `core/agenda/ics_export.py` (CRLF, lines folded at 75 octets).
  * - all-day: `DTSTART;VALUE=DATE`, DTEND = the day after the last day; timed with a known zone: `TZID=<IANA>`
- *   plus one VTIMEZONE per zone used; floating (or an unknown zone name): no TZID;
+ *   plus one VTIMEZONE per zone used (`end_tz`: DTEND in that zone, its VTIMEZONE too); floating (or an unknown zone name): no TZID;
  * - RRULE verbatim, EXDATE one line per value in DTSTART's form (a date on a timed series: that day at the
  *   series' start time), except the occurrences an exported exception file overrides; an exception file becomes
  *   an override (UID of its series, RECURRENCE-ID in the series' form);
@@ -60,6 +60,17 @@ object IcsExport {
             return null
         }
 
+        /** DTEND's zone: `end_tz` when known on an event exported with its zone, else the start's. */
+        fun endZoneOf(e: Event, tz: String?): String? {
+            val end = e.endTz ?: return tz
+            if (tz == null || e.allDay) return tz
+            if (!Zones.isValid(end)) {
+                warnings.add("${e.title} : fuseau de fin inconnu « $end », exporté dans celui du début"); return tz
+            }
+            zones.add(end)
+            return end
+        }
+
         fun alarms(title: String, alerts: List<Int>) {
             for (m in alerts) lines += listOf("BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:${Ics.escapeText(title)}",
                 "TRIGGER:${Ics.formatAlertTrigger(m)}", "END:VALARM")
@@ -75,7 +86,7 @@ object IcsExport {
             lines.add("SUMMARY:${Ics.escapeText(e.title)}")
             lines.add(timeLine("DTSTART", e.start, tz))
             if (e.allDay) lines.add(timeLine("DTEND", (e.end ?: e.start).plusDays(1), null))
-            else e.end?.let { lines.add(timeLine("DTEND", it, tz)) }
+            else e.end?.let { lines.add(timeLine("DTEND", it, endZoneOf(e, tz))) }
             e.rrule?.let { lines.add("RRULE:$it") }
             // an overridden occurrence is replaced by its override, never excluded too (Google drops such overrides)
             for (x in e.exdate.map { exdateStamp(e, it) }.distinct()) if (x !in overridden) lines.add(timeLine("EXDATE", x, tz))

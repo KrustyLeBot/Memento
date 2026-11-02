@@ -98,6 +98,23 @@ object AgendaText {
     fun city(zone: String): String = zone.substringAfterLast('/').replace('_', ' ')
 
     /**
+     * Detail screen, an end in its own zone (a flight): "Départ 10:00 (Paris) → arrivée 13:00 (New York)", the
+     * arrival on another day "… → arrivée le 18 déc. à 08:00 (Paris)". Null for any other event.
+     */
+    fun departureArrival(o: Occurrence, h24: Boolean): String? {
+        val e = o.event
+        val tz = e.tz ?: return null
+        val endTz = e.endTz ?: return null
+        val start = o.start.time ?: return null
+        val endStamp = o.end ?: return null
+        val end = endStamp.time ?: return null
+        if (endTz == tz || !Zones.isValid(endTz)) return null
+        val at = time(end, h24)
+        val arrival = if (endStamp.date != o.start.date) "le ${shortDate(endStamp.date)} à $at" else at
+        return "Départ ${time(start, h24)} (${city(tz)}) → arrivée $arrival (${city(endTz)})"
+    }
+
+    /**
      * Detail screen: "lundi 12 novembre 2026", "14:30 – 15:15" or "Toute la journée", over several days
      * "Du 1 au 3 déc. 2026". [zone] is the zone the times are shown in.
      */

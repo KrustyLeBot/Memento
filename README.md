@@ -110,6 +110,7 @@ description is the note body. Agenda keys follow the usual note keys in the fron
 start: 2026-11-12T14:30        # local wall time; a date alone (2026-11-12) means all-day
 end: 2026-11-12T15:15          # optional; all-day: LAST day included
 tz: Europe/Paris               # IANA zone of start/end; absent = floating (follows the device zone)
+end_tz: America/New_York       # optional: the end's own zone (a flight), `end` is a wall time there; absent = tz
 calendar: perso                # id in agenda/calendars.json; unknown or absent = the default calendar
 rrule: FREQ=WEEKLY;BYDAY=TH    # RFC 5545 without "RRULE:"
 exdate: [2026-11-19T14:30]     # skipped occurrences, same form as start (a date skips that whole day)
@@ -134,13 +135,20 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   converted to instants: a time in the spring-forward gap moves forward by the gap (02:30 → 03:30), a repeated time
   takes the first one. `DTSTART` always counts as the first occurrence (RFC 5545). At most 10 000 occurrences per
   window. All-day entries are dates and never move.
+- `end_tz` (RFC 5545's `DTEND;TZID=` other than `DTSTART`'s, Google's "fuseau horaire de fin"): only on a timed event
+  with `tz`, otherwise ignored with a warning. The end instant is `end` in `end_tz`; each occurrence of a series lasts
+  the instant duration of the first one (start in `tz`, end in `end_tz`). The views and widgets still show device
+  times; the detail adds "Départ 10:00 (Paris) → arrivée 13:00 (New York)". The editor's "Fuseau d'arrivée
+  différent" sets it and refuses an arrival that is not after the departure.
 - ICS import (`.ics` or a `.zip` of them): preview, target calendar, "depuis le …" cut-off, duplicates by UID (skip,
   update, keep both), undo. `TZID`s are IANA names, Windows names (CLDR table) or embedded `VTIMEZONE`s recognised
-  from their rules; an unknown zone falls back to the device zone and is counted. A single UTC event takes the
-  device zone; a UTC **series** keeps `tz: UTC` so it does not shift with daylight saving. Overrides
+  from their rules; an unknown zone falls back to the device zone and is counted. A `DTEND` with another `TZID`
+  than `DTSTART`'s is kept as `end_tz` (no conversion); a UTC `DTEND` is converted to the start's zone. A single UTC
+  event takes the device zone; a UTC **series** keeps `tz: UTC` so it does not shift with daylight saving. Overrides
   (`RECURRENCE-ID`) become exception files; HTML descriptions become text; attendees are listed as text.
-- Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used; same bytes on Android
-  and Windows. Shared test vectors (synthetic Google, Proton and Outlook shapes): `testdata/agenda/`.
+- Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used (`end_tz` included,
+  written as `DTEND;TZID=<end_tz>`); same bytes on Android
+  and Windows. Shared test vectors (synthetic Google, Proton, Outlook and airline-booking shapes): `testdata/agenda/`.
 - Windows: views Agenda, Mois, Semaine, Jour (keys T, ← →, Ctrl+F), the event editor (repetition presets and a
   custom editor writing plain `RRULE`s; a rule it cannot express is shown as "Règle importée" and kept as is),
   series scopes "cet événement" / "tous les événements", delete with undo, calendars, import and export, and

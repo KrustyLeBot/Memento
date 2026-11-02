@@ -148,6 +148,10 @@ object Zones {
     /** The event's zone, or the fallback (device zone) for a floating event or an unknown name. */
     fun zoneOr(name: String?, fallback: ZoneId): ZoneId = if (isValid(name)) zone(name!!) else fallback
 
+    /** The zone of the event's end: its `end_tz` when known (timed events with `tz` only), else the start's. */
+    fun endZoneOr(e: Event, fallback: ZoneId): ZoneId =
+        if (!e.allDay && e.tz != null && isValid(e.endTz)) zone(e.endTz!!) else zoneOr(e.tz, fallback)
+
     /** Wall time of [zone] -> instant (gap: moved forward by the gap; overlap: the first instant). */
     fun toInstant(wall: LocalDateTime, zone: ZoneId): Instant = ZonedDateTime.ofLocal(wall, zone, null).toInstant()
 
