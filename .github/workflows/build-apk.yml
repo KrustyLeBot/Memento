@@ -91,6 +91,15 @@ jobs:
         run: python -m pytest tests -q
       - name: Build the exe (one file, Qt filtered by the spec)
         run: pyinstaller --noconfirm scriptorium.spec
+      # The built exe checks it carries what it loads at run time (tzdata, the map page, Qt WebEngine, plugins).
+      # It is a windowed exe: Start-Process waits for it, the report goes to a file.
+      - name: Self-test of the built exe
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\Scriptorium.exe -ArgumentList '--selftest', 'selftest.txt' -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: scriptorium-windows

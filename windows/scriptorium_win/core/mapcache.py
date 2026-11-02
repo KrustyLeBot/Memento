@@ -129,7 +129,7 @@ def purge(root: Path, limit: int = CACHE_LIMIT, target: int = PURGE_TARGET) -> t
             path = os.path.join(dirpath, name)
             try:
                 st = os.stat(path)
-            except FileNotFoundError:
+            except OSError:  # vanished, or locked (Windows): left for the next purge
                 continue
             entries.append((st.st_mtime, st.st_size, path))
     total = sum(e[1] for e in entries)
@@ -143,6 +143,8 @@ def purge(root: Path, limit: int = CACHE_LIMIT, target: int = PURGE_TARGET) -> t
             os.remove(path)
         except FileNotFoundError:
             pass
+        except PermissionError:
+            continue  # being read right now (Windows refuses to delete an open file): kept, the purge goes on
         total -= size
         deleted += 1
     return total, deleted

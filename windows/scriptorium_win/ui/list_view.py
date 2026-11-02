@@ -133,6 +133,7 @@ class ListScreen(QWidget):
         self.notes: list[Note] = []
         self.label: str | None = None
         self._items: list[tuple[str, QWidget]] = []  # ("card" | "header", widget)
+        self._stale = False  # new notes arrived while the list was hidden: rebuilt when it shows
 
         root = QVBoxLayout(self)
         root.setContentsMargins(MARGIN, 12, MARGIN, 0)
@@ -269,7 +270,25 @@ class ListScreen(QWidget):
         self.rebuild()
 
     def set_notes(self, notes: list[Note]) -> None:
+        # Every save in the editor and every sync tick lands here: with hundreds of notes a rebuild takes
+        # seconds, so an unchanged list (the store hands back the same objects) is not rebuilt, and a hidden
+        # one waits until it shows.
+        if len(notes) == len(self.notes) and all(a is b for a, b in zip(notes, self.notes)):
+            return
         self.notes = notes
+        if not self.isVisible():
+            self._stale = True
+            return
+        self._apply_notes()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._stale:
+            self._apply_notes()
+
+    def _apply_notes(self) -> None:
+        self._stale = False
+        notes = self.notes
         labels = sorted({x for n in notes for x in n.labels}, key=fmt.fold)
         if self.label not in labels:
             self.label = None
@@ -316,7 +335,7 @@ class ListScreen(QWidget):
 
     def rebuild(self) -> None:
         for _kind, widget in self._items:
-            widget.setParent(None)
+            widget.hide()  # not setParent(None): that turns each card into a window first, slow by the hundred
             widget.deleteLater()
         self._items = []
         notes = self.visible_notes()

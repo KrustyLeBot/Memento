@@ -101,8 +101,10 @@ def covering(directory: Path, box: Box) -> list[dict] | None:
                 break
     for f in files:
         try:
-            return json.loads(f.read_text(encoding="utf-8"))["candidates"]
-        except (OSError, ValueError, KeyError):
+            candidates = json.loads(f.read_text(encoding="utf-8"))["candidates"]
+            if isinstance(candidates, list) and all(isinstance(p, dict) for p in candidates):
+                return candidates
+        except (OSError, ValueError, KeyError, TypeError):
             continue  # a damaged entry is just a miss: it is refetched and rewritten
     return None
 

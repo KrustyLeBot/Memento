@@ -85,6 +85,42 @@ def test_purge_removes_least_recently_used_tiles_first(tmp_path):
     assert (tmp_path / "peaks" / "a.json").exists()
 
 
+def test_purge_goes_on_past_a_tile_windows_refuses_to_delete(tmp_path, monkeypatch):
+    files = []
+    for i in range(4):
+        f = tmp_path / "plan" / "10" / str(i) / "1.png"
+        f.parent.mkdir(parents=True)
+        f.write_bytes(b"x" * 1000)
+        os.utime(f, (1_700_000_000 + i, 1_700_000_000 + i))
+        files.append(f)
+    real_remove = os.remove
+
+    def remove(path):
+        if path == str(files[0]):
+            raise PermissionError(13, "in use", path)  # open in the map host at that moment
+        real_remove(path)
+    monkeypatch.setattr(mapcache.os, "remove", remove)
+    left, deleted = mapcache.purge(tmp_path, limit=3_000, target=2_000)
+    assert (left, deleted) == (2_000, 2)
+    assert [f.exists() for f in files] == [True, False, False, True]
+
+
+def test_a_malformed_summit_answer_still_answers_every_waiting_request(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from scriptorium_win.services import maphost
+    store = maphost.TileStore(tmp_path)
+    box = (6.8, 45.9, 6.9, 46.0)
+    answers = []
+    store._peaks_waiting[box] = [answers.append, answers.append]
+    monkeypatch.setattr(store, "_text", lambda reply: "[1, 2]")  # valid JSON, not the expected object
+    store._wfs_done(None, box, tmp_path / "peaks")
+    assert answers == [[], []] and box not in store._peaks_waiting
+    (tmp_path / "peaks").mkdir(exist_ok=True)
+    peaks.cache_file(tmp_path / "peaks", box).write_text('{"candidates": {"a": 1}}')
+    assert peaks.covering(tmp_path / "peaks", box) is None  # a damaged entry is a miss, not an exception
+
+
 def test_backoff_after_a_connection_failure():
     b = mapcache.Backoff(20)
     assert not b.blocked(100.0)

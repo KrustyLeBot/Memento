@@ -189,6 +189,35 @@ def test_external_change_reloads_when_there_is_no_local_edit(window, tmp_path):
     assert window.editor.body.document().toPlainText() == "v2 depuis le PC"
 
 
+@pytest.mark.parametrize("choice", ["Recharger", "Garder ma version"])
+def test_autosave_does_not_overwrite_a_version_the_sync_just_brought(window, tmp_path, monkeypatch, choice):
+    """The autosave (700 ms) runs before the watcher (800 ms): it used to write over the synced file silently."""
+    from PySide6.QtWidgets import QMessageBox
+    note = add(window.store, "Partagée", "v1")
+    window.refresh()
+    window.open_note(note)
+    path = tmp_path / note.path
+    window.editor.title.setText("Partagée (PC)")  # a local edit, not saved yet
+    path.write_text(path.read_text(encoding="utf-8").replace("v1", "v2 du téléphone"), encoding="utf-8")
+    asked = []
+
+    def answer(box):
+        asked.append(box.text())
+        next(b for b in box.buttons() if b.text() == choice).click()
+        return 0
+    monkeypatch.setattr(QMessageBox, "exec", answer)
+    window.editor.save()  # the autosave timer, before any watcher event
+    assert len(asked) == 1
+    text = path.read_text(encoding="utf-8")
+    if choice == "Recharger":
+        assert "v2 du téléphone" in text and "Partagée (PC)" not in text
+        assert window.editor.title.text() == "Partagée"
+    else:
+        assert "Partagée (PC)" in text and "v2 du téléphone" not in text  # the user chose this PC's version
+    window._on_disk_changed()  # the watcher's tick afterwards asks nothing more
+    assert len(asked) == 1
+
+
 def test_external_note_appears_in_the_list(window, tmp_path):
     (tmp_path / "du-pc.md").write_text("Bonjour")
     window._on_disk_changed()
@@ -287,3 +316,43 @@ def test_rail_switches_modules_and_hides_them(window):
     window.show_module("agenda")  # a hidden module falls back to the notes
     assert window.stack.currentWidget() is window.list_screen
     window.set_module_visible("agenda", True)
+
+
+def test_an_unchanged_refresh_does_not_rebuild_the_lists(window, tmp_path):
+    """Every editor save and sync tick refreshes: rebuilding hundreds of cards each time froze the window."""
+    add(window.store, "Une")
+    window.refresh()
+    cards = [w for kind, w in window.list_screen._items if kind == "card"]
+    assert len(cards) == 1
+    window.refresh()
+    assert [w for kind, w in window.list_screen._items if kind == "card"] == cards
+
+
+def test_notes_saved_while_the_list_is_hidden_show_when_it_comes_back(window, tmp_path):
+    window.show_module("contacts")
+    add(window.store, "Pendant")
+    window.refresh()
+    window.show_module("notes")
+    QApplication.processEvents()
+    assert [w.note.title for kind, w in window.list_screen._items if kind == "card"] == ["Pendant"]
+
+
+def test_escape_key_leaves_the_editor_and_clears_searches(window):
+    """Real key presses: two window-wide Escape shortcuts visible at once cancel each other (ambiguous)."""
+    window.activateWindow()
+    assert QTest.qWaitForWindowActive(window)
+    note = add(window.store, "Clavier")
+    window.refresh()
+    window.open_note(note)
+    window.editor.title.setFocus()
+    QTest.keyClick(window.editor.title, Qt.Key.Key_Escape)
+    assert window.stack.currentWidget() is window.list_screen
+    window.list_screen.search.setFocus()
+    QTest.keyClicks(window.list_screen.search, "cla")
+    QTest.keyClick(window.list_screen.search, Qt.Key.Key_Escape)
+    assert window.list_screen.search.text() == ""
+    window.show_module("contacts")
+    window.contacts.search.setFocus()
+    QTest.keyClicks(window.contacts.search, "x")
+    QTest.keyClick(window.contacts.search, Qt.Key.Key_Escape)
+    assert window.contacts.search.text() == ""

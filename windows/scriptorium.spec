@@ -4,6 +4,8 @@
 #   pyinstaller --noconfirm scriptorium.spec
 import re
 
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
 # Qt libraries the widgets and WebEngine really load (from their imports); the rest of Qt goes.
 QT_LIBS = {
     "Core", "Gui", "Widgets", "Network", "Svg", "OpenGL", "OpenGLWidgets", "PrintSupport", "Positioning",
@@ -41,8 +43,10 @@ def keep(dest: str) -> bool:
         return name.rsplit(".", 1)[0] in LANGUAGES
     if "/translations/" in path:
         return bool(re.search(r"_(fr)\.qm$", name))
-    if name == "qtwebengine_devtools_resources.pak":
-        return False  # only for the web inspector
+    if name.startswith("qtwebengine_devtools_resources"):
+        return False  # only for the web inspector (its .debug.pak alone is 76 MB on Windows)
+    if ".debug." in name:
+        return False  # *.debug.pak / *.debug.bin: Chromium's resources for debug builds of Qt, never loaded here
     if name == "opengl32sw.dll":
         return False  # software OpenGL fallback: widgets draw in software anyway, WebEngine has its own
     return True
@@ -50,7 +54,11 @@ def keep(dest: str) -> bool:
 
 a = Analysis(
     ["run.py"],
-    datas=[("scriptorium_win/assets", "scriptorium_win/assets")] + [(f"../web/map/{f}", "web/map") for f in MAP_FILES],
+    # tzdata: Windows has no time zone database, zoneinfo reads this package's files (resolved as packages:
+    # tzdata.zoneinfo.Europe...). Without it every zone of the agenda fails; `--selftest` checks it.
+    datas=[("scriptorium_win/assets", "scriptorium_win/assets")] + [(f"../web/map/{f}", "web/map") for f in MAP_FILES]
+    + collect_data_files("tzdata"),
+    hiddenimports=collect_submodules("tzdata"),
     excludes=["tkinter", "lxml", "cryptography", "OpenSSL", "numpy", "PIL", "html5lib", "chardet", "brotli",
               "unittest", "pydoc", "xmlrpc", "lib2to3", "test",
               # Python bindings nothing imports (their Qt libraries stay, WebEngine loads them).

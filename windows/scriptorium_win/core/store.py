@@ -72,7 +72,7 @@ class Store:
             note = fmt.parse(name, text, mtime // 1_000_000)
             self._cache[name] = (mtime, note)
             notes.append(note)
-        for stale in set(self._cache) - seen:
+        for stale in [k for k in self._cache if "/" not in k and k not in seen]:  # activities/ is scan_activities'
             del self._cache[stale]
         return notes
 

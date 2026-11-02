@@ -24,7 +24,7 @@ from ..core.agenda.frdates import long_date, month_title, week_title
 from ..core.agenda.ics_export import export_all, export_calendar
 from ..core.agenda.ics_import import IcsSource, apply_import, preview, read_sources, undo_import
 from ..core.agenda.model import Event, event_to_note, new_event
-from . import icons, theme
+from . import icons, overwrite, theme
 from .agenda_data import AgendaData, AgendaPrefs
 from .agenda_editor import EventDetailDialog, EventDialog, ask_scope, color_icon, french_locale
 from .agenda_import import CalendarsDialog, ExportDialog, ImportDialog, PastImportsDialog, palette_menu, plural
@@ -634,11 +634,15 @@ class AgendaScreen(QWidget):
             return
         settings, today, zone = self.data.settings, self.data.today(), self.data.zone
         agenda = self.store.agenda
+        before = self.data.file_stamp(ev.path)  # the version on screen, not the one on disk right now
 
         def run(dialog: EventDialog) -> bool:
-            if dialog_hook is not None:
-                return dialog_hook(dialog)
-            return dialog.exec() == QDialog.DialogCode.Accepted
+            accepted = dialog_hook(dialog) if dialog_hook is not None else dialog.exec() == QDialog.DialogCode.Accepted
+            # the dialog is modal but the sync is not: the file may have been replaced (or deleted) meanwhile
+            if accepted and not overwrite.may_overwrite(self, self.store.root / ev.path, before, ev.title or "Sans titre"):
+                self._after_write()
+                return False
+            return accepted
 
         if ev.rrule:
             scope = scope or ask_scope(self, "Modifier")
