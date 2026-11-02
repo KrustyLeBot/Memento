@@ -20,6 +20,7 @@ from .config import Config
 from .data import Data
 from .errors import ApiError
 from .modules.common import Common
+from .modules.contacts import Contacts
 from .modules.maphost import MapHost
 from .modules.notes import Notes
 from .security import Guard
@@ -85,6 +86,7 @@ def create_app(config: Config, fetch=None) -> Starlette:
         Route("/api/events", events, methods=["GET"]),
         *Common(data).routes(),
         *Notes(data).routes(),
+        *Contacts(data).routes(),
         *maphost.routes(),
     ]
 
