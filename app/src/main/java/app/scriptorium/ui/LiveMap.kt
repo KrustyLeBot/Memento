@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -81,7 +82,7 @@ fun LiveMap(settings: Settings, l: Live, modifier: Modifier = Modifier) {
                 MapHost.call("setRoute", payload)
                 route.bbox?.let { MapHost.call("setSquare", MapPayload.bbox(MapSquare.of(it))) }
             } else {
-                MapHost.call("setLiveSquare", "3")
+                MapHost.call("setLiveSquare", "5")
             }
             MapHost.call("setFollow", "true")
             following = true
@@ -125,6 +126,12 @@ fun LiveMap(settings: Settings, l: Live, modifier: Modifier = Modifier) {
                 onClick = { following = true; MapHost.call("setFollow", "true") },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
             ) { Icon(Icons.Default.MyLocation, "Recentrer sur ma position") }
+        } else {
+            // the whole route (or the live square) at once; the button above brings the camera back
+            SmallFloatingActionButton(
+                onClick = { following = false; MapHost.call("setFollow", "false"); MapHost.call("fit") },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+            ) { Icon(Icons.Default.ZoomOutMap, "Vue d'ensemble") }
         }
     }
 }
