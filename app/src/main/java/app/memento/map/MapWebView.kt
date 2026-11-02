@@ -31,7 +31,7 @@ import androidx.compose.runtime.setValue
 object MapHost {
     private const val TAG = "MapHost"
     /** Calls that only add to what a setter already said: dropped while paused, the screen resends a full state on return. */
-    private val TRANSIENT = setOf("appendLive", "fit", "locFail")
+    private val TRANSIENT = setOf("appendLive", "fit", "reset", "locFail")
     private val VIEW_SETTINGS = setOf("setMode", "setTheme", "setExag")
 
     private var web: WebView? = null

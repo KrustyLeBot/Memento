@@ -51,7 +51,7 @@
   // window.SMap exists from the first line: calls made before the style is loaded (or on a machine without
   // WebGL, where the map never comes) are queued, then replayed in order.
   const API = ['setTrack', 'setLines', 'setRoute', 'setLive', 'appendLive', 'setDots', 'setPos', 'locFail', 'setFollow',
-    'setLiveSquare', 'setSquare', 'setMode', 'setExag', 'setTheme', 'setCursor', 'fit'];
+    'setLiveSquare', 'setSquare', 'setMode', 'setExag', 'setTheme', 'setCursor', 'fit', 'reset'];
   let ready = false, call = null;
   const queue = [];
   window.SMap = {};
@@ -444,12 +444,16 @@
   // With terrain on, MapLibre 4.7's easeTo freezes the camera's elevation at the value it had when the move began
   // (0 while the DEM is still loading) and never unfreezes it: the camera then looks at sea level, under the block.
   // So with terrain every move is a jumpTo, and the follow mode glides by jumping each frame.
-  let glideFrame = 0, movingUntil = 0;
+  let glideFrame = 0, movingUntil = 0, ownJump = 0;
+  function jump(camera) {
+    ownJump++;
+    try { map.jumpTo(camera); } finally { ownJump--; }
+  }
   function move(camera, duration) {
     cancelAnimationFrame(glideFrame);
     const animate = duration && !map.getTerrain();
     movingUntil = animate ? performance.now() + duration : 0;
-    if (animate) map.easeTo(Object.assign({ duration }, camera)); else map.jumpTo(camera);
+    if (animate) map.easeTo(Object.assign({ duration }, camera)); else jump(camera);
   }
   function glide(to, duration) {
     cancelAnimationFrame(glideFrame);
@@ -457,7 +461,7 @@
     const from = map.getCenter(), t0 = performance.now();
     const step = (now) => {
       const k = Math.min(1, (now - t0) / duration), e = k * (2 - k);
-      map.jumpTo({ center: [from.lng + (to[0] - from.lng) * e, from.lat + (to[1] - from.lat) * e] });
+      jump({ center: [from.lng + (to[0] - from.lng) * e, from.lat + (to[1] - from.lat) * e] });
       if (k < 1) glideFrame = requestAnimationFrame(step);
     };
     glideFrame = requestAnimationFrame(step);
@@ -544,6 +548,32 @@
     if (!cam) return;
     map.setMinZoom(0);
     move({ center: cam.center, zoom: cam.zoom, pitch: is3d ? PITCH : 0, bearing: 0, padding: NO_PADDING }, duration);
+  }
+  // MapLibre 4.7 keeps the camera above the elevation at the centre of the view only: tilting or zooming towards a
+  // slope (or the inertia after a drag) takes it inside the relief, where the view goes wrong. Any move that is not
+  // ours and ends below the ground under the camera is undone, back to the last camera that was above it.
+  const CLEARANCE_M = 30;
+  let lastAbove = null;
+  function underground() {
+    const t = map.transform, cam = t.getCameraPosition();
+    return cam.altitude < map.terrain.getElevationForLngLatZoom(cam.lngLat, t.tileZoom) + CLEARANCE_M;
+  }
+  map.on('move', () => {
+    if (!map.terrain) { lastAbove = null; return; }
+    // our own cameras are trusted as they are: a gesture from one that starts low must not be sent back elsewhere
+    if (ownJump || !underground()) {
+      lastAbove = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
+    } else if (lastAbove) {
+      map.stop();
+      jump(lastAbove);
+    }
+  });
+  /** The default view, from whatever state the camera is in: stops any move, then the overview (or the follow view). */
+  function reset() {
+    cancelAnimationFrame(glideFrame);
+    map.stop();
+    lastAbove = null;
+    fit(0);
   }
   ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach((ev) => map.on(ev, (e) => {
     if (!e.originalEvent) return;
@@ -1096,6 +1126,7 @@
       src('cursor').setData(lon == null ? EMPTY : { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } });
     },
     fit() { fit(300); },
+    reset() { reset(); },
   };
 
   call = (name, args) => {

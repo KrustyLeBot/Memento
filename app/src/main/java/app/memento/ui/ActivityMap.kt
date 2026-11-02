@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material3.Icon
@@ -107,6 +108,15 @@ fun ActivityMapView(settings: Settings, detail: ActivityDetail, full: Boolean, o
                 if (full) Icon(Icons.Default.FullscreenExit, "Réduire la carte") else Icon(Icons.Default.Fullscreen, "Agrandir la carte")
             }
         }
+        MapResetButton(Modifier.align(Alignment.TopEnd).padding(top = (if (full) 40.dp else 8.dp) + 56.dp, end = if (full) 12.dp else 8.dp))
+    }
+}
+
+/** Back to the default view, whatever state the camera is in (lost, upside down, inside the relief). */
+@Composable
+fun MapResetButton(modifier: Modifier = Modifier) {
+    MapOverlaySurface(modifier, shape = CircleShape) {
+        IconButton(onClick = { MapHost.call("reset") }) { Icon(Icons.Default.CenterFocusStrong, "Vue par défaut") }
     }
 }
 

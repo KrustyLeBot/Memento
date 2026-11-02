@@ -157,6 +157,7 @@ fun LiveMap(
                 if (full) Icon(Icons.Default.FullscreenExit, "Réduire la carte") else Icon(Icons.Default.Fullscreen, "Agrandir la carte")
             }
         }
+        MapResetButton(Modifier.align(Alignment.TopEnd).padding(top = top + 56.dp, end = if (full) 12.dp else 8.dp))
         if (forced2d) OfflineBadge(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp + bottomInset))
         if (!following) {
             SmallFloatingActionButton(

@@ -104,7 +104,7 @@
       <button role="radio" aria-checked={mode === '2d'} class:on={mode === '2d'} title="Carte à plat" on:click={() => setMode('2d')}>2D</button>
     </div>
     <span class="spacer"></span>
-    <button class="round" title="Recentrer" aria-label="Recentrer" on:click={() => call('fit')}><Glyph name="center" size={20} /></button>
+    <button class="round" title="Vue par défaut" aria-label="Vue par défaut" on:click={() => call('reset')}><Glyph name="center" size={20} /></button>
     <button class="round" title={expanded ? 'Quitter le plein écran' : 'Plein écran'} aria-label={expanded ? 'Quitter le plein écran' : 'Plein écran'}
       on:click={() => (expanded = !expanded)}><Glyph name={expanded ? 'fullscreenExit' : 'fullscreen'} size={20} /></button>
   </div>

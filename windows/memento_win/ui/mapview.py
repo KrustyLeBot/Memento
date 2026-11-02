@@ -156,7 +156,7 @@ class LiveLocation(QObject):
 
 
 class MapPanel(QWidget):
-    """The map with its native 3D/2D switch, a re-centre button and an "Agrandir" button that lays it over the whole
+    """The map with its native 3D/2D switch, a "Vue par défaut" button and an "Agrandir" button that lays it over the whole
     Mémento window (not full screen) until "Réduire" or Escape. `mode_changed` lets the owner remember the mode."""
     mode_changed = Signal(str)
 
@@ -187,10 +187,11 @@ class MapPanel(QWidget):
             segments.addWidget(button)
         bar.addWidget(switch)
         bar.addStretch()
-        recentre = QPushButton("Recentrer")
-        recentre.setObjectName("mapButton")
-        recentre.clicked.connect(lambda: self.view.call("fit"))
-        bar.addWidget(recentre)
+        reset = QPushButton("Vue par défaut")
+        reset.setObjectName("mapButton")
+        reset.setToolTip("Revenir à la vue de départ, d'où que soit la caméra")
+        reset.clicked.connect(lambda: self.view.call("reset"))
+        bar.addWidget(reset)
         self.expand_button = QPushButton("Agrandir")
         self.expand_button.setObjectName("mapButton")
         self.expand_button.setToolTip("La carte occupe toute la fenêtre (Échap pour revenir)")
