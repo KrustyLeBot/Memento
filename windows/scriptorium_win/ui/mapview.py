@@ -1,0 +1,222 @@
+"""The activity map: the shared web page (web/map, MapLibre) in a QWebEngineView, a native 3D/2D switch, and the
+PC's live location while the map is on screen. One view is kept and reused, so opening an activity only sends data."""
+from __future__ import annotations
+
+import json
+import sys
+
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtPositioning import QGeoPositionInfo, QGeoPositionInfoSource
+from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+
+from ..services import maphost
+from . import theme
+
+# Setters whose last value is replayed after the page reloads (renderer crash), in this order.
+STATE_ORDER = ("setTheme", "setMode", "setExag", "setSquare", "setRoute", "setLines", "setTrack", "setDots",
+               "setLive", "setLiveSquare", "setFollow", "setPos", "setCursor")
+
+
+class _Bridge(QObject):
+    """The page's `SMapHost` (QWebChannel): it posts JSON events here."""
+    received = Signal(dict)
+
+    @Slot(str)
+    def post(self, text: str) -> None:
+        try:
+            event = json.loads(text)
+        except ValueError as error:
+            print(f"map: unreadable event {text!r}: {error}", file=sys.stderr)
+            return
+        self.received.emit(event)
+
+
+class _Page(QWebEnginePage):
+    def javaScriptConsoleMessage(self, level, message: str, line: int, source: str) -> None:
+        if level == QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
+            print(f"map: {message} ({source}:{line})", file=sys.stderr)
+
+
+class MapView(QWebEngineView):
+    """Calls `window.SMap.<name>(...)` on the page. Until the page is loaded nothing is lost: the last value of
+    each setter is kept and sent (again) whenever the page (re)loads."""
+    event = Signal(dict)
+
+    def __init__(self, mode: str = "3d", parent: QWidget | None = None):
+        super().__init__(parent)
+        self.loaded = False
+        self.state: dict[str, tuple] = {"setMode": (mode,), "setTheme": (_theme(),)}
+        page = _Page(maphost.profile(), self)
+        self.setPage(page)
+        self.bridge = _Bridge(self)
+        self.bridge.received.connect(self.event)
+        self.channel = QWebChannel(page)
+        self.channel.registerObject("SMapHost", self.bridge)
+        page.setWebChannel(self.channel)
+        page.loadFinished.connect(self._load_finished)
+        page.renderProcessTerminated.connect(self._crashed)
+        self.setMinimumHeight(260)
+        self.load(QUrl(f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={_theme()}&interactive=1"))
+
+    def call(self, name: str, *args) -> None:
+        if name in STATE_ORDER:
+            self.state[name] = args
+        if self.loaded:
+            self._run(name, args)
+
+    def _run(self, name: str, args: tuple) -> None:
+        self.page().runJavaScript(f"window.SMap && window.SMap.{name}({', '.join(json.dumps(a) for a in args)})")
+
+    def _load_finished(self, ok: bool) -> None:
+        self.loaded = ok
+        if not ok:
+            print("map: the page did not load", file=sys.stderr)
+            return
+        for name in STATE_ORDER:
+            if name in self.state:
+                self._run(name, self.state[name])
+
+    def _crashed(self, status, code: int) -> None:
+        if status == QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus:
+            return
+        print(f"map: renderer ended ({status}, {code}), reloading", file=sys.stderr)
+        self.loaded = False
+        QTimer.singleShot(500, self.reload)
+
+
+def _theme() -> str:
+    return "dark" if theme.is_dark() else "light"
+
+
+class LiveLocation(QObject):
+    """Windows location service → setPos; an error, a refusal or 15 s without a fix → locFail."""
+    enabled = True  # tests switch it off: no location service on the CI machines
+
+    def __init__(self, view: MapView):
+        super().__init__(view)
+        self.view = view
+        self.source: QGeoPositionInfoSource | None = None
+        self.timer = QTimer(self, singleShot=True, interval=15000)
+        self.timer.timeout.connect(self._failed)
+        self.running = False
+
+    def start(self) -> None:
+        if self.running or not self.enabled:
+            return
+        self.running = True
+        try:
+            from PySide6.QtCore import QLocationPermission
+            permission = QLocationPermission()
+            permission.setAccuracy(QLocationPermission.Accuracy.Precise)
+            app = QCoreApplication.instance()
+            status = app.checkPermission(permission)
+            if status == Qt.PermissionStatus.Undetermined:
+                app.requestPermission(permission, self, lambda p: self._begin() if p.status() == Qt.PermissionStatus.Granted else self._failed())
+                return
+            if status == Qt.PermissionStatus.Denied:
+                self._failed()
+                return
+        except (ImportError, AttributeError, TypeError) as error:  # no usable permission API: the source itself will say
+            print(f"map: location permission not checked: {error}", file=sys.stderr)
+        self._begin()
+
+    def _begin(self) -> None:
+        if not self.running:
+            return
+        if self.source is None:
+            self.source = QGeoPositionInfoSource.createDefaultSource(self)
+            if self.source is None:
+                self._failed()
+                return
+            self.source.positionUpdated.connect(self._position)
+            self.source.errorOccurred.connect(lambda error: self._failed())
+        self.timer.start()
+        self.source.startUpdates()
+
+    def stop(self) -> None:
+        self.running = False
+        self.timer.stop()
+        if self.source is not None:
+            self.source.stopUpdates()
+
+    def _position(self, info: QGeoPositionInfo) -> None:
+        self.timer.stop()
+        c = info.coordinate()
+        heading = info.attribute(QGeoPositionInfo.Attribute.Direction) if info.hasAttribute(QGeoPositionInfo.Attribute.Direction) else None
+        accuracy = info.attribute(QGeoPositionInfo.Attribute.HorizontalAccuracy) if info.hasAttribute(QGeoPositionInfo.Attribute.HorizontalAccuracy) else None
+        self.view.call("setPos", c.longitude(), c.latitude(), heading, accuracy)
+
+    def _failed(self) -> None:
+        self.timer.stop()
+        if self.running:
+            self.view.call("locFail")
+
+
+class MapPanel(QWidget):
+    """The map with its native 3D/2D switch and a re-centre button. `mode_changed` lets the owner remember it."""
+    mode_changed = Signal(str)
+
+    def __init__(self, mode: str = "3d", parent: QWidget | None = None):
+        super().__init__(parent)
+        self.mode = mode if mode in ("3d", "2d") else "3d"
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        bar = QHBoxLayout()
+        self.group = QButtonGroup(self)
+        for key, label, tip in (("3d", "3D", "Relief en bloc"), ("2d", "2D", "Carte à plat")):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(key == self.mode)
+            button.setToolTip(tip)
+            button.setFixedWidth(48)
+            button.clicked.connect(lambda _=False, k=key: self.set_mode(k))
+            self.group.addButton(button)
+            bar.addWidget(button)
+        bar.addStretch()
+        recentre = QPushButton("Recentrer")
+        recentre.clicked.connect(lambda: self.view.call("fit"))
+        bar.addWidget(recentre)
+        layout.addLayout(bar)
+        self.view = MapView(self.mode, self)
+        self.view.setMinimumHeight(420)
+        layout.addWidget(self.view)
+        self.location = LiveLocation(self.view)
+
+    def set_mode(self, mode: str) -> None:
+        if mode == self.mode:
+            return
+        self.mode = mode
+        for button in self.group.buttons():
+            button.setChecked(button.text().lower() == mode)
+        self.view.call("setMode", mode)
+        self.mode_changed.emit(mode)
+
+    def restyle(self) -> None:
+        self.view.call("setTheme", _theme())
+
+    def show_activity(self, *, track: dict | None = None, lines: list | None = None, dots: list | None = None,
+                      square: list | None = None) -> None:
+        """Replaces what the map shows. The square goes first so the 3D block is built once, for the new data."""
+        self.view.call("setSquare", square)
+        self.view.call("setLines", lines or [])
+        self.view.call("setTrack", track)
+        self.view.call("setDots", dots or [])
+        self.view.call("setCursor", None)
+
+    def set_lines(self, lines: list) -> None:
+        self.view.call("setLines", lines)
+
+    def set_cursor(self, lon: float | None, lat: float | None = None) -> None:
+        self.view.call("setCursor", lon, lat)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.location.start()  # only while a map is on screen
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self.location.stop()

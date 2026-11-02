@@ -89,12 +89,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests -q
-      - name: Build the exe
-        run: >
-          pyinstaller --noconfirm --onefile --windowed --name Scriptorium
-          --icon scriptorium_win/assets/icon.ico
-          --add-data "scriptorium_win/assets;scriptorium_win/assets"
-          run.py
+      - name: Build the exe (one file, Qt filtered down to what the app loads: see the spec)
+        run: pyinstaller --noconfirm scriptorium.spec
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: scriptorium-windows

@@ -258,8 +258,6 @@ def test_change_on_the_share_is_picked_up_without_a_watcher_event(window, tmp_pa
 
 def test_activities_screen_lists_and_opens_an_activity(window, tmp_path, monkeypatch):
     from pathlib import Path
-    from scriptorium_win.ui import trackmap
-    monkeypatch.setattr(trackmap.TileCache, "get", lambda self, z, x, y: None)  # no network in tests
     note = window.store.import_activity(Path(__file__).parent / "data" / "synthetic.fit", "Sortie vélo", None)
     window.refresh()
     assert "Sortie vélo" in window.list_screen.activities_button.text()
@@ -268,6 +266,12 @@ def test_activities_screen_lists_and_opens_an_activity(window, tmp_path, monkeyp
     assert len(window.activities.activities) == 1
     window.activities.open_activity(window.activities.activities[0])
     assert window.activities.current.path == note.path
+    panel = window.activities.map_panel
+    assert panel is not None and panel.isVisible()
+    assert len(panel.view.state["setTrack"][0]["coords"]) > 1
+    window.activities.open_activity(window.activities.activities[0])
+    QApplication.processEvents()  # a widget added to a shown layout is shown on the next event loop pass
+    assert window.activities.map_panel is panel and panel.isVisible()  # one map, reused: the page is not reloaded
     assert window.list_screen.notes == []  # activities stay out of the regular list
     window._escape()
     assert window.activities.current is None
