@@ -173,6 +173,10 @@ jobs:
     needs: [apk, windows]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # two pushes close together: their releases replace "latest" one after the other, never at the same time
+    concurrency:
+      group: release-latest
+      cancel-in-progress: false
     permissions:
       contents: write # needed to publish the release
     env:
