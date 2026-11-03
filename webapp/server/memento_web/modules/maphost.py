@@ -29,6 +29,7 @@ from memento_win.core import buildings  # noqa: E402 (..core put memento_win on 
 from ..errors import not_found
 
 PURGE_EVERY = 20 * 1024 * 1024
+TOUCH_AFTER = 3600  # s: the LRU order is kept to the hour (as mapcache.purge says), so a hit is a read, not a write
 
 
 class Offline(Exception):
@@ -74,6 +75,14 @@ def _log(text: str) -> None:
     print(f"memento-web maphost: {text}", flush=True)
 
 
+def _touch(path: Path) -> None:
+    try:
+        if time.time() - path.stat().st_mtime > TOUCH_AFTER:
+            os.utime(path)
+    except OSError:
+        pass
+
+
 class TileStore:
     """Thread-safe: concurrent requests for one tile wait for a single fetch."""
 
@@ -105,10 +114,7 @@ class TileStore:
             except OSError as error:  # being purged right now: fetched again
                 _log(f"{path}: {error}")
                 continue
-            try:
-                os.utime(path)  # LRU: the purge removes the least recently read
-            except OSError:
-                pass
+            _touch(path)  # LRU: the purge removes the least recently read
             return cached.mime, data
         return None
 
@@ -221,7 +227,7 @@ class TileStore:
         with self._lock_for(f"buildings/{req.x}/{req.y}"):
             try:
                 data = path.read_bytes()
-                os.utime(path)
+                _touch(path)
                 return data
             except FileNotFoundError:
                 pass
@@ -241,6 +247,11 @@ class TileStore:
             self.backoff.succeeded()
             self._store(path, data)
             return data
+
+
+def _matches(if_none_match: str, etag: str) -> bool:
+    """If-None-Match holds `etag` (compared weakly, as RFC 9110 asks for a GET) or `*`."""
+    return any(tag.strip().removeprefix("W/") in (etag, "*") for tag in if_none_match.split(",") if tag.strip())
 
 
 def default_map_dir(here: Path | None = None) -> Path:
@@ -268,16 +279,38 @@ class MapHost:
         ]
 
     async def page(self, request: Request) -> Response:
+        """The file, or its .gz sibling (built with the image) to a browser that accepts gzip; an ETag lets a
+        browser whose copy expired get a 304 instead of the 800 kB of maplibre again."""
         req = mapcache.parse_request(request.url.path)
-        if not isinstance(req, mapcache.FileRequest):
+        if not isinstance(req, mapcache.FileRequest) or req.path.endswith(".gz"):
             raise not_found()
         path = self.web / req.path
         try:
-            data = path.read_bytes()
+            st = path.stat()
         except OSError:
             raise not_found() from None
+        try:
+            gz_st = path.with_name(path.name + ".gz").stat()
+        except OSError:
+            gz_st = None
+        headers = {"Cache-Control": "private, max-age=3600"}
+        sent, sent_st = path, st
+        # an older sibling is stale (edited checkout); whole seconds, as a copy may not keep gzip's nanoseconds
+        if gz_st is not None and gz_st.st_mtime_ns // 10**9 >= st.st_mtime_ns // 10**9:
+            headers["Vary"] = "Accept-Encoding"
+            if "gzip" in request.headers.get("accept-encoding", "").lower():
+                sent, sent_st = path.with_name(path.name + ".gz"), gz_st
+        headers["ETag"] = f'"{sent_st.st_size:x}-{sent_st.st_mtime_ns:x}"'
+        if _matches(request.headers.get("if-none-match", ""), headers["ETag"]):
+            return Response(status_code=304, headers=headers)
+        try:
+            data = sent.read_bytes()
+        except OSError:
+            raise not_found() from None
+        if sent is not path:
+            headers["Content-Encoding"] = "gzip"
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        return Response(data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+        return Response(data, media_type=mime, headers=headers)
 
     async def tile(self, request: Request) -> Response:
         req = mapcache.parse_request(request.url.path)

@@ -1,7 +1,7 @@
 """Activités module: the list (frontmatter `activity:` summaries only), one activity's analysis (track parsed and
 analysed only when it is opened, then cached), edits, delete with undo, FIT/GPX import and the optional altitude
 completion from the terrain model. Formats and algorithms are the Windows core's (activity, analysis, fit, gpx,
-track, mapdata, elevation, settings, store); this file only shapes them for the UI.
+track, mapdata, elevation, settings, store); this file and shapes.py (the analysis JSON) only shape them for the UI.
 
 An activity is addressed by its note id (the agenda links `#/activities/<id>`), or by its file name
 (`sortie-a1b2c3.md`) for a sync conflict copy, which shares its original's id.
@@ -23,14 +23,12 @@ from __future__ import annotations
 import asyncio
 import gzip
 import hashlib
-import json
 import os
 import secrets
 import threading
 import time
 import uuid
 from collections import OrderedDict
-from dataclasses import asdict
 from pathlib import Path
 
 from starlette.requests import Request
@@ -44,17 +42,16 @@ from ..data import _malloc_trim
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import gunzip, owned, read_versioned, require_version, unlink_quiet, write_stream
 from ..memo import Answers, json_response
+# the analysis JSON lives apart so the analysis child can build it without this module's imports
+from ..shapes import CHART_POINTS, MAP_POINTS, _bucket_means, _pos, _r, _thin, analysis_json, dumps  # noqa: F401
 
 from memento_win.core import activity as act  # noqa: E402  (..core put memento_win on the path)
-from memento_win.core import elevation, mapdata  # noqa: E402
-from memento_win.core.analysis import Analysis  # noqa: E402
+from memento_win.core import elevation  # noqa: E402
 from memento_win.core.store import default_title  # noqa: E402
 from memento_win.core.track import TrackPoint  # noqa: E402
 
 # Bump when the analysis JSON changes shape: cached files of another version are never read.
 ANALYSIS_VERSION = 3
-CHART_POINTS = 400   # charts: enough for a smooth curve and a precise hover on a wide screen
-MAP_POINTS = 5000    # the map: as the Android and Windows hosts send it
 GPS_SPORTS = [Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS]
 UPLOAD_TTL = 3600
 # Above this size a track file is read in a child process (trackwork.py); 1 MB is ~5000 GPX points.
@@ -97,101 +94,12 @@ def detail(note: fmt.Note, version: str, analysis_key: str | None) -> dict:
             "version": version}
 
 
-def _r(values, digits):
-    return [None if v is None else round(v, digits) for v in values]
-
-
-def _thin(n: int, limit: int) -> list[int]:
-    return mapdata.thin_indices(n, limit)
-
-
-def _bucket_means(values: list, idx: list[int]) -> list:
-    """For each kept index, the mean of the values (None skipped) from halfway to the previous kept index to
-    halfway to the next: every sample counts once. Kept as is when nothing was thinned."""
-    total, count = [0.0], [0]
-    for v in values:
-        total.append(total[-1] + (v or 0.0))
-        count.append(count[-1] + (v is not None))
-    out = []
-    for k, i in enumerate(idx):
-        lo = 0 if k == 0 else (idx[k - 1] + i) // 2 + 1
-        hi = len(values) if k == len(idx) - 1 else (i + idx[k + 1]) // 2 + 1
-        n = count[hi] - count[lo]
-        out.append((total[hi] - total[lo]) / n if n else None)
-    return out
-
-
-def dumps(value) -> bytes:
-    return json.dumps(value, separators=(",", ":")).encode()
-
-
 def gzipped_response(request: Request, gz: bytes) -> Response:
     """Gzipped JSON as is to a browser that accepts it (all do), decompressed for anything else."""
     headers = {"Cache-Control": "no-store", "Vary": "Accept-Encoding"}
     if "gzip" in request.headers.get("accept-encoding", "").lower():
         return Response(gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
     return Response(gzip.decompress(gz), media_type="application/json", headers=headers)
-
-
-def _pos(v: float) -> float:
-    return round(v, 6)  # 0.1 m: the core's floats carry 17 digits nobody draws
-
-
-def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
-    """What the detail page draws: stats, stops, ski runs and climbs, charts and the map's data."""
-    s = a.samples
-    st = a.stats
-    stats = {**asdict(st), "avg_speed": st.avg_speed}
-    quality = {**asdict(a.quality), "alt_source": alt_source}
-    stops = [{"start": x.start, "end": x.end, "duration": x.duration_ms // 1000, "manual": x.manual,
-              "lat": _pos(x.lat), "lon": _pos(x.lon)} for x in sorted(a.pauses + a.stops, key=lambda x: x.start)]
-    runs = [{"start": s[r.first].time, "end": s[r.last].time, "distance": round(r.distance, 1), "drop": round(r.drop),
-             "max_speed": round(r.max_speed, 2), "avg_speed": round(r.avg_speed, 2), "duration": r.duration_ms // 1000,
-             "lat": _pos(s[r.first].lat), "lon": _pos(s[r.first].lon)} for r in a.runs]
-    climbs = [{"start": s[c.first].time, "end": s[c.last].time, "distance": round(c.distance, 1), "gain": round(c.gain),
-               "duration": c.duration_ms // 1000, "lat": _pos(s[c.first].lat), "lon": _pos(s[c.first].lon)} for c in a.climbs]
-    out = {"sport": sport.key, "stats": stats, "quality": quality, "stops": stops, "runs": runs, "climbs": climbs,
-           "chart": None, "map": None,
-           # a GPX without any <time>: its points have stand-in times, the analysis keeps no duration
-           "untimed": len(s) >= 2 and st.elapsed_ms == 0}
-    if len(s) < 2:
-        return out
-    idx = _thin(len(s), CHART_POINTS)
-    pts = [s[i] for i in idx]
-    walk = sport == Sport.WALK
-    # speed and heart rate: the mean around each drawn point. One sample in 500 (a 60-hour race) caught whatever
-    # instant it fell on, a stop or a sprint, and drew a comb instead of a curve.
-    speeds = _bucket_means([p.speed for p in s], idx)
-    hrs = _bucket_means([p.hr for p in s], idx)
-    out["chart"] = {
-        "dist": _r((p.dist for p in pts), 1),
-        "lon": _r((p.lon for p in pts), 6), "lat": _r((p.lat for p in pts), 6),
-        "alt": _r((p.alt for p in pts), 1) if a.quality.has_altitude and all(p.alt is not None for p in pts) else None,
-        "speed": _r(speeds, 2) if st.max_speed > 0 else None,
-        # walking: pace in s/km, capped (core activity.chart_pace) so a stop does not flatten the curve
-        "pace": _r((act.chart_pace(v) for v in speeds), 1) if walk and st.max_speed > 0 else None,
-        "hr": [None if v is None else round(v) for v in hrs]
-        if a.quality.has_hr and sum(v is not None for v in hrs) >= 2 else None,
-    }
-    idx = _thin(len(s), MAP_POINTS)
-    pts = [s[i] for i in idx]
-    ski = sport == Sport.SKI
-    m = {"lon": _r((p.lon for p in pts), 6), "lat": _r((p.lat for p in pts), 6),
-         "dots": [{"lon": _pos(s[0].lon), "lat": _pos(s[0].lat), "color": "#00C853"},
-                  {"lon": _pos(s[-1].lon), "lat": _pos(s[-1].lat), "color": "#FF1744"}]}
-    if ski:
-        # coloured lines are built in the page from these (descents by speed, climbs in blue), as Windows' map_lines
-        lats, lons = [p.lat for p in s], [p.lon for p in s]
-        m.update({"square": [round(v, 7) for v in mapdata.square_of(min(lons), min(lats), max(lons), max(lats))],
-                  "t": [(p.time - pts[0].time) // 1000 for p in pts], "speed": _r((p.speed for p in pts), 2),
-                  "kind": "".join("d" if p.down else "u" if p.up else "o" for p in pts),
-                  "max_gap": max(a.quality.median_interval_sec * 6, 30.0)})
-    else:
-        speeds, avg = mapdata.track_speeds([p.time for p in pts], [p.lat for p in pts], [p.lon for p in pts],
-                                           [p.speed for p in pts])
-        m.update({"speeds": _r(speeds, 2) if speeds else None, "avg": avg})
-    out["map"] = m
-    return out
 
 
 # ---------------------------------------------------------------- analysis cache
@@ -505,14 +413,15 @@ class Activities:
         wanted = self._locked(recent)
         self.cache.pin(key for _info, key in wanted)
         done = 0
-        for info, key in wanted:
-            if stop():
-                break
-            try:
-                self.cache.get(key, lambda: self._compute(info))
-                done += 1
-            except ApiError:  # a missing or unreadable track: the page says so when it is opened
-                pass
+        with trackwork.background():  # an activity opened meanwhile gets the next child before these
+            for info, key in wanted:
+                if stop():
+                    break
+                try:
+                    self.cache.get(key, lambda: self._compute(info))
+                    done += 1
+                except ApiError:  # a missing or unreadable track: the page says so when it is opened
+                    pass
         return done
 
     # ---- edits ----

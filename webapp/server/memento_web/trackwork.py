@@ -10,20 +10,62 @@ the body. A failure is a TrackError: `missing` (the file is not there, 404) or n
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .core import Sport
+if TYPE_CHECKING:
+    from memento_win.core.track import Sport
 
 PACKAGE_PARENT = Path(__file__).resolve().parents[1]
 EXIT_UNREADABLE, EXIT_MISSING = 3, 4
-# One child at a time: each peaks near 170 MB on a 200 000-point race, and the warm-up, an import and an opened
-# activity may all want one at once on a NAS with little RAM.
-CHILDREN = threading.BoundedSemaphore(1)
+
+
+class Children:
+    """One child at a time: each peaks near 170 MB on a 200 000-point race, and the warm-up, an import and an opened
+    activity may all want one at once on a NAS with little RAM. A background caller (the warm-up) also waits while
+    another caller waits, so an opened activity does not queue behind the ten recent ones."""
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._busy = False
+        self._waiting = 0  # callers other than the background ones
+
+    @contextlib.contextmanager
+    def slot(self, background: bool):
+        with self._cond:
+            self._waiting += not background
+            try:
+                while self._busy or (background and self._waiting):
+                    self._cond.wait()
+            finally:
+                self._waiting -= not background
+            self._busy = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._busy = False
+                self._cond.notify_all()
+
+
+CHILDREN = Children()
+_local = threading.local()
+
+
+@contextlib.contextmanager
+def background():
+    """The children this thread starts inside the block give way to the others (warm.py's prepare_recent)."""
+    _local.background = True
+    try:
+        yield
+    finally:
+        _local.background = False
 
 
 class TrackError(Exception):
@@ -33,6 +75,7 @@ class TrackError(Exception):
 
 
 def _sport(key: str) -> Sport:
+    from memento_win.core.track import Sport
     found = next((s for s in Sport if s.key == key), None)
     if found is None:
         raise TrackError(f"Sport inconnu : {key}")
@@ -48,7 +91,7 @@ def _info(raw: str):
 
 
 def _read_source(path: Path):
-    from .core import Store
+    from memento_win.core.store import Store
     try:
         return Store(path.parent).read_source(path)
     except OSError as error:
@@ -58,7 +101,7 @@ def _read_source(path: Path):
 
 
 def _read_track(root: Path, info):
-    from .core import Store
+    from memento_win.core.store import Store
     try:
         return Store(root).read_track(info)
     except OSError:  # its message holds the server's path: not for the page
@@ -84,7 +127,7 @@ def prepare(source: str, sport: str) -> tuple[dict, bytes]:
     from memento_win.core import elevation
     from memento_win.core.activity import ActivityInfo
     from memento_win.core.analysis import analyze
-    from .modules.activities import analysis_json, dumps
+    from .shapes import analysis_json, dumps
     track, ext = _read_source(Path(source))
     if not track.points and track.session_distance is None:
         raise TrackError("Aucune position dans ce fichier")
@@ -98,7 +141,7 @@ def prepare(source: str, sport: str) -> tuple[dict, bytes]:
 def analyse(root: str, info: str) -> tuple[dict, bytes]:
     """The analysis JSON of an activity as it is."""
     from memento_win.core.analysis import analyze
-    from .modules.activities import analysis_json, dumps
+    from .shapes import analysis_json, dumps
     i = _info(info)
     return {}, dumps(analysis_json(analyze(_read_track(Path(root), i), i.sport), i.sport, i.alt))
 
@@ -107,7 +150,7 @@ def resummarise(root: str, info: str, sport: str, alt: str) -> tuple[dict, bytes
     """The summary and analysis an activity gets with another sport or a new altitude file ('' = none)."""
     from memento_win.core.activity import ActivityInfo
     from memento_win.core.analysis import analyze
-    from .modules.activities import analysis_json, dumps
+    from .shapes import analysis_json, dumps
     i = _info(info)
     s = _sport(sport)
     i = ActivityInfo(**{**i.__dict__, "alt": alt or None})
@@ -140,9 +183,13 @@ def run(operation: str, *args: str, apart: bool, timeout: float) -> tuple[dict, 
     """The operation in this thread, or in a child process when `apart` (a long track)."""
     if not apart:
         return OPERATIONS[operation](*args)
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(PACKAGE_PARENT), os.environ.get("PYTHONPATH")]))}
+    from . import core  # noqa: F401 (puts memento_win on the path from a checkout; the child skips the web module)
+    import memento_win
+    core_parent = str(Path(memento_win.__file__).resolve().parents[1])
+    paths = filter(None, [str(PACKAGE_PARENT), core_parent, os.environ.get("PYTHONPATH")])
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
     try:
-        with CHILDREN:
+        with CHILDREN.slot(getattr(_local, "background", False)):
             done = subprocess.run([sys.executable, "-m", "memento_web.analyse", operation, *args],
                                   capture_output=True, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:

@@ -30,6 +30,9 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt
 COPY windows/memento_win/__init__.py memento_win/__init__.py
 COPY windows/memento_win/core/ memento_win/core/
 COPY web/map/ web/map/
+# .gz siblings for MapHost.page (maplibre-gl.js: 800 kB, 210 kB gzipped); gzip keeps each file's mtime on its .gz
+RUN find web/map -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.html' -o -name '*.json' \) \
+    -exec gzip -9 -k {} +
 COPY webapp/server/memento_web/ memento_web/
 COPY --from=ui /src/webapp/ui/dist/ static/
 # bytecode compiled now, so a read-only root filesystem costs nothing at run time
