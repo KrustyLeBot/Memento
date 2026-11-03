@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtPositioning import QGeoPositionInfo, QGeoPositionInfoSource
@@ -68,7 +69,8 @@ class MapView(QWebEngineView):
             self._run(name, args)
 
     def _run(self, name: str, args: tuple) -> None:
-        self.page().runJavaScript(f"window.SMap && window.SMap.{name}({', '.join(json.dumps(a) for a in args)})")
+        text = ", ".join(getattr(a, "page_json", None) or json.dumps(a) for a in args)
+        self.page().runJavaScript(f"window.SMap && window.SMap.{name}({text})")
 
     def _load_finished(self, ok: bool) -> None:
         self.loaded = ok
@@ -89,6 +91,34 @@ class MapView(QWebEngineView):
 
 def _theme() -> str:
     return "dark" if theme.is_dark() else "light"
+
+
+class _EncodedDict(dict):
+    page_json = ""
+
+
+class _EncodedList(list):
+    page_json = ""
+
+
+def pre_encoded(value: dict | list) -> dict | list:
+    """The same value, carrying its JSON for the page: encoded on the worker that prepares it, since a long race's
+    track or ski lines take 15 to 110 ms to encode on the window's thread."""
+    if threading.current_thread() is threading.main_thread():
+        return value  # one json.dumps in MapView._run is faster, and this thread waits for it either way
+    out = _EncodedDict(value) if isinstance(value, dict) else _EncodedList(value)
+    out.page_json = _encode(value)
+    return out
+
+
+def _encode(value) -> str:
+    """json.dumps(value), byte for byte, one element at a time: one call holds the GIL for all of it, the window's thread
+    included (100 ms for a day of ski lines)."""
+    if isinstance(value, list):
+        return "[" + ", ".join(json.dumps(x) for x in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{json.dumps(k)}: {_encode(v)}" for k, v in value.items()) + "}"
+    return json.dumps(value)
 
 
 class LiveLocation(QObject):

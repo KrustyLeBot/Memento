@@ -21,8 +21,9 @@ from ..core.analysis import Analysis
 from ..core.note import Note
 from ..core.store import Store
 from ..core.track import Sport
+from ..services.async_util import responsive_worker
 from . import icons, theme
-from .mapview import MapPanel
+from .mapview import MapPanel, pre_encoded
 from .scroll_memory import ScrollMemory, restore_area
 
 EMOJI = {Sport.WALK: "🚶", Sport.BIKE: "🚴", Sport.EBIKE: "⚡", Sport.SKI: "⛷️", Sport.GPS: "📍", Sport.PLAIN: "⏱️"}
@@ -306,9 +307,9 @@ def detail_data(analysis: Analysis, sport: Sport) -> DetailData:
             # the square is the whole day's, whichever lines the selector shows
             lats, lons = [p.lat for p in samples], [p.lon for p in samples]
             square = list(mapdata.square_of(min(lons), min(lats), max(lons), max(lats)))
-            lines = page_lines(map_lines(analysis, True))
+            lines = pre_encoded(page_lines(map_lines(analysis, True)))
         else:
-            track = page_track(analysis)
+            track = pre_encoded(page_track(analysis))
     stops = [("Pause" if stop.manual else "Arrêt détecté", f"{act.fmt_duration(stop.duration_ms // 1000)} · {fmt_hour(stop.start)}")
              for stop in sorted(analysis.pauses + analysis.stops, key=lambda x: x.start)]
     charts = []
@@ -794,8 +795,9 @@ class ActivitiesScreen(QWidget):
         source = Path(self._imports.pop(0))
 
         def read(progress):
-            parsed = self.store.read_source(source)
-            return parsed, elevation.missing(parsed[0])
+            with responsive_worker():
+                parsed = self.store.read_source(source)
+                return parsed, elevation.missing(parsed[0])
         if not self._run(f"Lecture de {source.name}…", read, lambda result, error: self._import_ask(source, result, error)):
             self._imports = []
 
@@ -820,16 +822,18 @@ class ActivitiesScreen(QWidget):
         relief = dialog.relief.isVisible() and dialog.relief.isChecked()
 
         def work(progress):
-            note = self.store.import_activity(source, title, sport, existing, parsed=parsed)
+            with responsive_worker():
+                note = self.store.import_activity(source, title, sport, existing, parsed=parsed)
             altitude_error = None
-            if relief:
+            if relief:  # mostly waiting on the network: the collector stays on
                 try:
                     note = self.store.fetch_altitude(note, progress=lambda n, total: progress(
                         f"Altitude de {source.name} : relief {n + 1}/{total}…", n, total))
                 except Exception as failure:  # noqa: BLE001 — the activity stays, imported without altitude
                     altitude_error = failure
-            analysis = self.store.cached_analysis(note.activity) if note.activity and note.activity.file else None
-            data = detail_data(analysis, note.activity.sport) if analysis is not None else None
+            with responsive_worker():
+                analysis = self.store.cached_analysis(note.activity) if note.activity and note.activity.file else None
+                data = detail_data(analysis, note.activity.sport) if analysis is not None else None
             return note, altitude_error, analysis, data
 
         def done(result, failure) -> None:
@@ -891,8 +895,9 @@ class ActivitiesScreen(QWidget):
 
     def _load_track(self, note: Note) -> None:
         try:
-            analysis = self.store.analysis(note.activity)
-            loaded = analysis, detail_data(analysis, note.activity.sport)
+            with responsive_worker():
+                analysis = self.store.analysis(note.activity)
+                loaded = analysis, detail_data(analysis, note.activity.sport)
             self._track_loaded.emit(note.path, note.activity, loaded, None)
         except Exception as error:  # noqa: BLE001 (shown on the page, as before)
             self._track_loaded.emit(note.path, note.activity, None, str(error))

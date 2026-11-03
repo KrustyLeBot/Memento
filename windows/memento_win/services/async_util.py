@@ -1,8 +1,41 @@
 from __future__ import annotations
 
+import gc
+import sys
+import threading
+from contextlib import contextmanager
 from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+
+_responsive_lock = threading.Lock()
+_responsive_depth = 0
+_responsive_saved: tuple[float, bool] = (0.005, True)  # the switch interval and gc state before the first entry
+
+
+@contextmanager
+def responsive_worker():
+    """Around pure-Python work on a worker (reading and analysing a long race): the window's thread keeps getting the
+    GIL. A 1 ms switch interval (5 ms by default) hands it back sooner, and no collection runs while hundreds of
+    thousands of samples are being built (each collection holds the GIL for tens of ms). Nesting and concurrent workers are
+    fine: the last one out restores both."""
+    global _responsive_depth, _responsive_saved
+    with _responsive_lock:
+        _responsive_depth += 1
+        if _responsive_depth == 1:
+            _responsive_saved = (sys.getswitchinterval(), gc.isenabled())
+            sys.setswitchinterval(0.001)
+            gc.disable()
+    try:
+        yield
+    finally:
+        with _responsive_lock:
+            _responsive_depth -= 1
+            if _responsive_depth == 0:
+                interval, enabled = _responsive_saved
+                if enabled:
+                    gc.enable()
+                sys.setswitchinterval(interval)
 
 
 class _Dispatcher(QObject):
