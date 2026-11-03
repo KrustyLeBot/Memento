@@ -10,17 +10,18 @@
   const FOLLOW_PITCH = 55;
   const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
   const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
-  // Buildings (3D only): IGN BD TOPO footprints extruded, walls a light stone, roofs coloured from the aerial photo.
+  // Buildings (3D only): IGN BD TOPO footprints extruded in one light stone colour, walls and roofs alike: one
+  // extrusion layer, nothing computed per building (colouring roofs from the photo cost seconds of main thread a cell).
   const BLD_Z = 15;            // the host serves one z15 cell (850 m wide in the Alps) per request
-  const BLD_SAMPLE_Z = 17;     // the photo zoom roofs are sampled at (1.2 m a pixel)
-  const BLD_CELLS = 16;        // drawn at most, the nearest to the camera's centre
-  const BLD_KEEP = 40;         // kept in memory (least recently used out)
-  const BLD_MAX = 15000;       // buildings drawn at most: a phone stays fluid
+  // a PC with 4 cores or 4 GB or less (Chromium caps deviceMemory at 8): fewer buildings and cached tiles, so the
+  // worker's tessellation and the memory stay within what it has; a recent phone is far above
+  const LOW_END = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
+  const BLD_CELLS = LOW_END ? 9 : 16;      // drawn at most, the nearest to the camera's centre
+  const BLD_KEEP = LOW_END ? 20 : 40;      // kept in memory (least recently used out)
+  const BLD_MAX = LOW_END ? 8000 : 15000;  // buildings drawn at most: a phone stays fluid
   const BLD_MIN_ZOOM = 14.5;   // shown from this zoom, or once the screen's width spans BLD_SPAN_M or less
   const BLD_SPAN_M = 2000;
-  const BLD_WALL = '#efe5d3', BLD_ROOF = '#9f978c', ROOF_CAP = 0.4;
-  // MapLibre's extrusion lighting washes colours out: the photo's roof colour is pre-saturated, then darkened
-  const ROOF_SATURATION = 1.7, ROOF_BRIGHTNESS = 0.85;
+  const BLD_COLOUR = '#e6dccb';
   // The theme only dresses what surrounds the photo; the photo itself is never filtered, in any theme. Lines on it
   // are sandwiched (white halo, dark casing, colour) so they read on snow, forest, rock and roofs alike.
   const THEMES = {
@@ -278,18 +279,87 @@
     }
     return p;
   }
+  /** The tile as the map draws it: decoded off the main thread, its sea gaps filled from the parent. */
+  async function photoTile(z, x, y, signal) {
+    // MapLibre 4.7 takes an ImageBitmap as it is: the tile is decoded once, never re-encoded
+    const bmp = await createImageBitmap(new Blob([await photoBytes(z, x, y, signal)]));
+    const c = await composed(z, x, y, bmp, signal);
+    if (!c) return bmp;
+    bmp.close();
+    return createImageBitmap(c);
+  }
+  // Zooming out keeps what was seen sharp, as Google Maps and Géoportail do: a tile whose children were drawn at the
+  // next zoom is made at 512 px from them, over its own photo, instead of IGN's coarser level and its slightly
+  // different colours flickering in. Tiles drawn are kept (least recently used out past SEEN_BYTES), so one shown
+  // again costs no request nor decoding; composites are kept too, so the detail climbs back one zoom at a time.
+  // A 256 px tile is 256 KB decoded, a composite 1 MB: the budget follows the machine's memory.
+  const SEEN_BYTES = Math.min(64, Math.max(16, 8 * (navigator.deviceMemory || 4))) * 2 ** 20;
+  const seen = new Map();  // "z/x/y" -> ImageBitmap, least recently used first
+  const coarse = new Set();  // tiles drawn without any child: the ones a zoom out can sharpen
+  let seenBytes = 0;
+  const bitmapBytes = (b) => b.width * b.height * 4;
+  function keepSeen(key, bmp) {
+    const old = seen.get(key);
+    if (old) { seen.delete(key); seenBytes -= bitmapBytes(old); }
+    seen.set(key, bmp);
+    seenBytes += bitmapBytes(bmp);
+    // never close() an evicted bitmap: MapLibre may not have uploaded it yet; dropping it lets the collector free it
+    for (const [k, b] of seen) {
+      if (seenBytes <= SEEN_BYTES) break;
+      seen.delete(k);
+      coarse.delete(k);
+      seenBytes -= bitmapBytes(b);
+    }
+  }
+  function seenTile(key) {
+    const b = seen.get(key);
+    if (b) { seen.delete(key); seen.set(key, b); }
+    return b;
+  }
+  function seenChildren(z, x, y) {
+    const out = [];
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const b = seen.get(`${z + 1}/${2 * x + dx}/${2 * y + dy}`);
+      if (b) out.push([dx, dy, b]);
+    }
+    return out;
+  }
   maplibregl.addProtocol('ortho', async (req, abort) => {
     const m = /^ortho:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
-    const z = +m[1], x = +m[2], y = +m[3];
-    const raw = await photoBytes(z, x, y, abort.signal);
-    if (z <= WHITE_MIN_Z) return { data: raw };
-    // MapLibre 4.7 takes an ImageBitmap as it is: the tile is decoded once (off the main thread), never re-encoded
-    const bmp = await createImageBitmap(new Blob([raw]));
-    const c = await composed(z, x, y, bmp, abort.signal);
-    if (!c) return { data: bmp };
-    bmp.close();
-    return { data: await createImageBitmap(c) };
+    const z = +m[1], x = +m[2], y = +m[3], key = `${z}/${x}/${y}`;
+    const children = z < ORTHO.maxzoom ? seenChildren(z, x, y) : [];
+    const kept = seenTile(key);
+    if (!children.length) {
+      const bmp = kept || await photoTile(z, x, y, abort.signal);
+      if (!kept) { keepSeen(key, bmp); coarse.add(key); }
+      return { data: bmp };
+    }
+    const own = children.length === 4 ? null : kept || await photoTile(z, x, y, abort.signal).catch(() => null);
+    const out = canvasOf(512, 512), g = out.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    if (own) g.drawImage(own, 0, 0, 512, 512);
+    for (const [dx, dy, b] of children) g.drawImage(b, dx * 256, dy * 256, 256, 256);
+    const bmp = await createImageBitmap(out);
+    keepSeen(key, bmp);
+    if (children.length === 4) coarse.delete(key); else coarse.add(key);
+    return { data: bmp };
   });
+  /** After a zoom out, the tiles MapLibre kept from the way in are drawn again from the finer ones seen since. */
+  let lastTileZoom = null;
+  function sharpenAfterZoomOut() {
+    const tz = Math.round(map.getZoom());
+    const out = lastTileZoom !== null && tz < lastTileZoom;
+    lastTileZoom = tz;
+    if (!out || !coarse.size) return;
+    for (const id of ['ortho', 'orthosq']) {
+      const cache = map.style && map.style.sourceCaches[id];
+      if (!cache || !cache._tiles || typeof cache._reloadTile !== 'function') continue;
+      for (const [tileKey, tile] of Object.entries(cache._tiles)) {
+        const c = tile.tileID.canonical;
+        if (coarse.has(`${c.z}/${c.x}/${c.y}`) && seenChildren(c.z, c.x, c.y).length) cache._reloadTile(tileKey, 'reloading');
+      }
+    }
+  }
   maplibregl.addProtocol('dem', async (req, abort) => {
     const m = /^dem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
     const z = +m[1], x = +m[2], y = +m[3];
@@ -377,13 +447,9 @@
         // with two runs or more MapLibre 4.7 re-renders every tile every frame: no symbol layer between draped layers
         arrows('route-arrows', 'route'), arrows('lines-arrows', 'lines'), arrows('track-arrows', 'track'),
         // after every layer draped on the terrain (one render-to-texture pass for all of them), before the dots
-        { id: 'bld-walls', type: 'fill-extrusion', source: 'bld', layout: { visibility: 'none' }, paint: {
-          'fill-extrusion-color': BLD_WALL, 'fill-extrusion-height': ['-', ['get', 'h'], ROOF_CAP],
+        { id: 'bld', type: 'fill-extrusion', source: 'bld', layout: { visibility: 'none' }, paint: {
+          'fill-extrusion-color': BLD_COLOUR, 'fill-extrusion-height': ['get', 'h'],
           'fill-extrusion-base': 0, 'fill-extrusion-vertical-gradient': true } },
-        { id: 'bld-roofs', type: 'fill-extrusion', source: 'bld', layout: { visibility: 'none' }, paint: {
-          'fill-extrusion-color': ['to-color', ['coalesce', ['feature-state', 'r'], ['get', 'r'], BLD_ROOF]],
-          'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['-', ['get', 'h'], ROOF_CAP],
-          'fill-extrusion-vertical-gradient': false } },
         // a dark ring outside the white one: the dots stand out on snow as on forest
         // drawn by MapLibre, not as DOM markers: collisions resolved in the renderer (the most important kept), and no
         // per-marker "hidden behind the relief?" check, which reads the GPU's depth buffer back and stalls each frame
@@ -414,7 +480,7 @@
     // fadeDuration 0 makes MapLibre place every symbol again on each frame, on the relief: a third of the frame rate in 3D
     map = new maplibregl.Map({
       container: 'map', style: style(), center: [2.5, 46.5], zoom: 5, pitch: 0,
-      maxPitch: 80, fadeDuration: 300, maxTileCacheSize: 120, antialias: false, refreshExpiredTiles: false,
+      maxPitch: 80, fadeDuration: 300, maxTileCacheSize: LOW_END ? 60 : 120, antialias: false, refreshExpiredTiles: false,
       pixelRatio: ratio, renderWorldCopies: false, validateStyle: false,
       interactive, attributionControl: { compact: true, customAttribution: ATTRIBUTION },
     });
@@ -599,7 +665,7 @@
     schedulePeaks();
     return true;
   }
-  map.on('zoomend', () => { if (mode === '3d') updateFrame(); });
+  map.on('zoomend', () => { if (mode === '3d') updateFrame(); sharpenAfterZoomOut(); });
 
   // ---------------------------------------------------------------- camera
 
@@ -1077,17 +1143,11 @@
   // ---------------------------------------------------------------- buildings
 
   // In 3D, close up: the cells (<base>buildings/15/x/y, README) nearest the camera's centre, merged into one source,
-  // only the buildings wholly inside the block. Each roof gets the colour of the aerial photo under it: the z17 photo
-  // tiles of a cell (same origin, so readable) are drawn once into a canvas, then sampled building by building in idle
-  // time; until then a roof is neutral. Colours stay in memory per cell, so a cell coming back is coloured at once.
+  // only the buildings wholly inside the block.
   const bld = {
     cells: new Map(),     // "x/y" -> { x, y, state: 'loading'|'ready'|'failed', items }, least recently used first
-    colours: new Map(),   // "x/y" -> Uint32Array of 0xRRGGBB + 1 per building (0: not computed yet)
     wanted: [], drawnKey: '', timer: 0, mergeTimer: 0, loading: 0, nextId: 1,
-    queue: [], colouring: null,
-    stats: { cells: 0, ms: 0, buildings: 0 },  // read by the dev tools: time to colour a cell
   };
-  window.__bldStats = bld.stats;
   function bldMinZoom() {
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     const width = map.getContainer().clientWidth || 1;
@@ -1096,7 +1156,7 @@
   const bldOn = () => mode === '3d' && shown && !!SQ && !!map.getTerrain() && map.getZoom() >= bldMinZoom();
   function bldVisibility() {
     const on = bldOn();
-    vis('bld-walls', on); vis('bld-roofs', on);
+    vis('bld', on);
     return on;
   }
   function scheduleBuildings() {
@@ -1130,14 +1190,13 @@
       if (cell.state !== 'loading' && !bld.wanted.includes(key)) bld.cells.delete(key);
     }
     mergeBuildings();
-    if (!bld.colouring && bld.queue.length) nextColouring();
   }
   async function loadCell(key, x, y) {
     const cell = bld.cells.get(key);
     try {
       const res = await fetch(`${BASE}buildings/${BLD_Z}/${x}/${y}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      cell.items = decodeCell(await res.json(), key);
+      cell.items = decodeCell(await res.json());
       cell.state = 'ready';
     } catch (e) {
       // offline with nothing cached, outside France: no buildings there, the block stays as it is
@@ -1146,10 +1205,9 @@
       return;
     }
     mergeSoon();
-    enqueueColouring(key);
   }
   /** The host's compact cell (README): rings of microdegree deltas from the cell's corner, unclosed. */
-  function decodeCell(doc, key) {
+  function decodeCell(doc) {
     const [ox, oy] = doc.o, items = [];
     for (const b of doc.b || []) {
       const rings = [];
@@ -1174,14 +1232,11 @@
       const geom = area < 30 && rings[0].length > 5 ? [ring([w, s, e, n])] : rings;
       items.push({ id: bld.nextId++, h: b[0], rings: geom, box: [w, s, e, n] });
     }
-    const known = bld.colours.get(key);
-    if (!known || known.length !== items.length) bld.colours.set(key, new Uint32Array(items.length));
     return items;
   }
   function mergeSoon() {
     if (!bld.mergeTimer) bld.mergeTimer = setTimeout(() => { bld.mergeTimer = 0; mergeBuildings(); }, 300);
   }
-  const hex = (v) => '#' + (v - 1).toString(16).padStart(6, '0');
   /** One source for the cells drawn: inside the block only, the nearest cells first, BLD_MAX buildings at most. */
   function mergeBuildings() {
     const sq = SQ, ready = bld.wanted.filter((k) => bld.cells.get(k) && bld.cells.get(k).state === 'ready');
@@ -1191,134 +1246,15 @@
     const features = [];
     if (sq) {
       for (const key of ready) {
-        const items = bld.cells.get(key).items, colours = bld.colours.get(key);
+        const items = bld.cells.get(key).items;
         for (let i = 0; i < items.length && features.length < BLD_MAX; i++) {
           const it = items[i], b = it.box;
           if (b[0] < sq[0] || b[2] > sq[2] || b[1] < sq[1] || b[3] > sq[3]) continue;  // would hang over the wall
-          const props = { h: it.h };
-          if (colours[i]) props.r = hex(colours[i]);
-          features.push({ type: 'Feature', id: it.id, properties: props, geometry: { type: 'Polygon', coordinates: it.rings } });
+          features.push({ type: 'Feature', id: it.id, properties: { h: it.h }, geometry: { type: 'Polygon', coordinates: it.rings } });
         }
       }
     }
     src('bld').setData({ type: 'FeatureCollection', features });
-  }
-
-  // ---- roof colours ----
-
-  function enqueueColouring(key) {
-    const colours = bld.colours.get(key);
-    if (!colours || colours.every((v) => v !== 0) || bld.queue.includes(key)) return;
-    bld.queue.push(key);
-    if (!bld.colouring) nextColouring();
-  }
-  const idle = typeof requestIdleCallback === 'function'
-    ? (f) => requestIdleCallback(f, { timeout: 300 })
-    : (f) => setTimeout(() => { const t0 = performance.now(); f({ timeRemaining: () => Math.max(0, 8 - (performance.now() - t0)) }); }, 16);
-  /** The nearest wanted cell first; cells no longer wanted wait until they are again. */
-  function nextColouring() {
-    bld.queue.sort((a, b) => (bld.wanted.indexOf(a) + 1 || 1e9) - (bld.wanted.indexOf(b) + 1 || 1e9));
-    const key = bld.queue.find((k) => bld.wanted.includes(k) && bld.cells.get(k) && bld.cells.get(k).state === 'ready');
-    if (!key) { bld.colouring = null; return; }
-    bld.queue.splice(bld.queue.indexOf(key), 1);
-    bld.colouring = key;
-    colourCell(key).catch((e) => console.warn(`smap: roof colours of ${key}`, e)).then(nextColouring);
-  }
-  async function colourCell(key) {
-    const t0 = performance.now(), cell = bld.cells.get(key), items = cell.items, colours = bld.colours.get(key);
-    if (!items.length) return;
-    // the photo tiles under the cell's buildings (a building can stick out of its cell by a few metres)
-    const N = 2 ** BLD_SAMPLE_Z * 256;
-    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
-    for (const it of items) { w = Math.min(w, it.box[0]); s = Math.min(s, it.box[1]); e = Math.max(e, it.box[2]); n = Math.max(n, it.box[3]); }
-    const tx0 = Math.floor(mercX(w) * N / 256), tx1 = Math.floor(mercX(e) * N / 256);
-    const ty0 = Math.floor(mercY(n) * N / 256), ty1 = Math.floor(mercY(s) * N / 256);
-    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 36) throw new Error('cell larger than expected');
-    const W = (tx1 - tx0 + 1) * 256, H = (ty1 - ty0 + 1) * 256;
-    const canvas = canvasOf(W, H), ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const jobs = [];
-    for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
-      jobs.push(fetch(`${BASE}t/ortho/${BLD_SAMPLE_Z}/${tx}/${ty}`)
-        // only the photo: where IGN has none, the host answers OpenStreetMap's drawn map (a PNG), no roof colour
-        .then((r) => (r.ok && /jpeg/.test(r.headers.get('content-type') || '') ? r.blob() : null))
-        .then((b) => (b ? createImageBitmap(b) : null))
-        .then((bmp) => { if (bmp) { ctx.drawImage(bmp, (tx - tx0) * 256, (ty - ty0) * 256, 256, 256); bmp.close(); } })
-        .catch(() => {}));  // a missing tile leaves its roofs neutral
-    }
-    await Promise.all(jobs);
-    const img = ctx.getImageData(0, 0, W, H), ox = tx0 * 256, oy = ty0 * 256;
-    let i = 0;
-    await new Promise((resolve) => {
-      const step = (deadline) => {
-        if (bld.cells.get(key) !== cell) { resolve(); return; }  // evicted meanwhile
-        const shown = !!map.getSource('bld');
-        do {
-          if (!colours[i]) {
-            const c = roofColour(items[i], img, ox, oy, N);
-            if (c != null) {
-              colours[i] = c + 1;
-              if (shown) map.setFeatureState({ source: 'bld', id: items[i].id }, { r: hex(c + 1) });
-            }
-          }
-          i++;
-        } while (i < items.length && deadline.timeRemaining() > 1);
-        if (i < items.length) idle(step); else resolve();
-      };
-      idle(step);
-    });
-    bld.stats.cells++; bld.stats.ms += performance.now() - t0; bld.stats.buildings += items.length;
-    bld.stats.last = { key, ms: Math.round(performance.now() - t0), buildings: items.length, tiles: jobs.length };
-  }
-  /** Median colour of the sunlit half of points sampled inside the footprint, shrunk by a pixel (the edges catch walls,
-   *  shadows and pavement); the shaded slope would drag a roof towards mauve. 0xRRGGBB, or null without a pixel. */
-  function roofColour(it, img, ox, oy, N) {
-    const rings = it.rings.map((r) => r.map((p) => [mercX(p[0]) * N - ox, mercY(p[1]) * N - oy]));
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const p of rings[0]) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
-    const stepPx = Math.max(1, Math.sqrt((x1 - x0) * (y1 - y0) / 64));
-    const W = img.width, H = img.height, d = img.data;
-    const pick = (margin) => {
-      const out = [];
-      for (let y = y0 + stepPx / 2; y < y1; y += stepPx) for (let x = x0 + stepPx / 2; x < x1; x += stepPx) {
-        if (!inside(rings, x, y) || (margin && edgeDistance(rings, x, y) < margin)) continue;
-        const px = Math.floor(x), py = Math.floor(y);
-        if (px < 0 || py < 0 || px >= W || py >= H) continue;
-        const k = (py * W + px) * 4;
-        if (d[k + 3] === 0) continue;  // no photo tile there
-        out.push([d[k], d[k + 1], d[k + 2]]);
-      }
-      return out;
-    };
-    let px = pick(1);
-    if (px.length < 3) px = pick(0);
-    if (!px.length) return null;
-    const lum = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-    px.sort((a, b) => lum(a) - lum(b));
-    const lit = px.slice(Math.floor(px.length / 2));
-    const med = [0, 1, 2].map((ch) => { const v = lit.map((c) => c[ch]).sort((a, b) => a - b); return v[v.length >> 1]; });
-    const g = (med[0] + med[1] + med[2]) / 3;
-    const out = med.map((v) => Math.round(Math.max(0, Math.min(255, (g + (v - g) * ROOF_SATURATION) * ROOF_BRIGHTNESS))));
-    return (out[0] << 16) | (out[1] << 8) | out[2];
-  }
-  function inside(rings, x, y) {
-    let odd = false;
-    for (const r of rings) {
-      for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
-        if ((r[i][1] > y) !== (r[j][1] > y) && x < (r[j][0] - r[i][0]) * (y - r[i][1]) / (r[j][1] - r[i][1]) + r[i][0]) odd = !odd;
-      }
-    }
-    return odd;
-  }
-  function edgeDistance(rings, x, y) {
-    let best = Infinity;
-    for (const r of rings) {
-      for (let i = 1; i < r.length; i++) {
-        const ax = r[i - 1][0], ay = r[i - 1][1], dx = r[i][0] - ax, dy = r[i][1] - ay, len = dx * dx + dy * dy;
-        const t = len ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len)) : 0;
-        best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
-      }
-    }
-    return best;
   }
 
   // ---------------------------------------------------------------- API

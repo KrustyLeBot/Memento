@@ -47,10 +47,8 @@ class MapPageContractTest {
         assertNotNull(Regex("""fetch\(`\$\{BASE}buildings/\$\{BLD_Z}/\$\{x}/\$\{y}`\)""").find(page))
         assertEquals(Buildings.Z, 15)
         assertEquals(TileKey("buildings", 15, 16941, 11670), TileKey.parseBuildings("/buildings/15/16941/11670"))
-        // the roofs are sampled on the photo the page asks for like MapLibre does
-        assertTrue(page.contains("const BLD_SAMPLE_Z = 17;"))
-        assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${BLD_SAMPLE_Z}/\${tx}/\${ty}`)"))
-        assertEquals(TileKey("ortho", 17, 68012, 46818), TileKey.parse("/t/ortho/17/68012/46818"))
+        // one colour for every building: nothing sampled on the photo
+        assertTrue(!page.contains("BLD_SAMPLE_Z"))
         // the compact cell format the page decodes
         for (field in listOf("doc.o", "doc.b")) assertTrue(field, page.contains(field))
     }

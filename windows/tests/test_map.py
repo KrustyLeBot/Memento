@@ -509,8 +509,8 @@ def test_urls_the_page_requests_are_served():
     assert mapcache.parse_request("/t/ortho/14/8501/5850") == mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.parse_request("/t/dem/13/4253/2915") == mapcache.TileRequest("dem", 13, 4253, 2915)
     assert mapcache.parse_request("/peaks", "w=6.80000&s=45.90000&e=6.90000&n=46.00000") == mapcache.PeaksRequest(6.8, 45.9, 6.9, 46.0)
-    # buildings: the cells and the photo the roofs are sampled on
+    # buildings: the cells, in one colour (nothing sampled on the photo)
     assert "const BLD_Z = 15;" in page and "fetch(`${BASE}buildings/${BLD_Z}/${x}/${y}`)" in page
-    assert "const BLD_SAMPLE_Z = 17;" in page and "fetch(`${BASE}t/ortho/${BLD_SAMPLE_Z}/${tx}/${ty}`)" in page
+    assert "BLD_SAMPLE_Z" not in page
     assert mapcache.parse_request("/buildings/15/16941/11670") == mapcache.BuildingsRequest(16941, 11670)
     assert mapcache.parse_request("/t/ortho/17/68012/46818") == mapcache.TileRequest("ortho", 17, 68012, 46818)
