@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -82,12 +83,16 @@ fun MapSourceSettings(settings: Settings) {
                 "vide, de l'IGN, d'OpenStreetMap et d'AWS directement.",
         )
         val field = Modifier.fillMaxWidth()
+        // a keyboard's automatic capital or correction changed the login ("krusty" sent as "Krusty"): refused by the server
+        val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii)
         OutlinedTextField(url, { url = it }, label = { Text("Adresse") }, placeholder = { Text("https://tuileries.example.org/") },
-            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = field)
-        OutlinedTextField(user, { user = it }, label = { Text("Identifiant") }, singleLine = true, modifier = field)
+            singleLine = true, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Uri), modifier = field)
+        OutlinedTextField(user, { user = it }, label = { Text("Identifiant") }, singleLine = true, keyboardOptions = plain, modifier = field)
         OutlinedTextField(password, { password = it }, label = { Text("Mot de passe") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = field)
-        OutlinedTextField(cfId, { cfId = it }, label = { Text("Cloudflare Access : identifiant client") }, singleLine = true, modifier = field)
+            visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password), modifier = field)
+        OutlinedTextField(cfId, { cfId = it }, label = { Text("Cloudflare Access : identifiant client") }, singleLine = true,
+            keyboardOptions = plain, modifier = field)
         OutlinedTextField(cfSecret, { cfSecret = it }, label = { Text("Cloudflare Access : secret client") }, singleLine = true,
             visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = field)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

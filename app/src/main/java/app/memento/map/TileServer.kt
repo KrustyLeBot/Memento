@@ -463,6 +463,10 @@ object TileServer {
         } catch (e: IOException) {
             throw TuileriesException("Serveur injoignable (${e.message})")
         }
+        if (r.code == 401) {
+            // what was sent, so a capital or a space added by the keyboard shows (never the password)
+            throw TuileriesException("${Tuileries.statusMessage(401)} (identifiant envoyé : « ${t.user} »)")
+        }
         if (r.code != 200) throw TuileriesException(Tuileries.statusMessage(r.code))
         return Tuileries.parseInfo(String(r.body, Charsets.UTF_8))
     }
