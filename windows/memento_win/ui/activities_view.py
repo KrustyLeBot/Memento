@@ -1,18 +1,22 @@
 """The "Activités" folder: figures and the list, then one activity with its map, figures and charts."""
 from __future__ import annotations
 
+import bisect
 import threading
+import weakref
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QStackedWidget,
-                               QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QPointF, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+                               QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from ..core import activity as act
-from ..core import mapdata
+from ..core import elevation, mapdata
 from ..core.analysis import Analysis
 from ..core.note import Note
 from ..core.store import Store
@@ -152,29 +156,60 @@ class _ChartCanvas(QWidget):
         self.chart = chart
         self.setFixedHeight(110)
         self.setMouseTracking(chart.coords is not None)
+        self._picture: QPixmap | None = None  # the drawn curve, redrawn only when the size changes
+        self._hovered = -1  # the point last sent to the map: moving within it sends nothing
+
+    def nearest(self, x_pos: float) -> int:
+        """The point under the mouse (the first of equal distances, as a scan would find): xs ascend along the
+        track, so it is a bisection, not a pass over every point on each mouse move."""
+        xs = self.chart.xs
+        x = xs[0] + max(0.0, min(1.0, x_pos / self.width())) * (xs[-1] - xs[0])
+        i = bisect.bisect_left(xs, x)
+        if i >= len(xs):
+            i = len(xs) - 1
+        if i > 0 and x - xs[i - 1] <= xs[i] - x:
+            i = bisect.bisect_left(xs, xs[i - 1])
+        return i
 
     def mouseMoveEvent(self, event) -> None:
         xs, coords = self.chart.xs, self.chart.coords
         if not coords or len(xs) < 2 or self.width() <= 0:
             return
-        x = xs[0] + max(0.0, min(1.0, event.position().x() / self.width())) * (xs[-1] - xs[0])
-        i = min(range(len(xs)), key=lambda k: abs(xs[k] - x))
-        self.chart.hovered.emit(coords[i])
+        i = self.nearest(event.position().x())
+        if i != self._hovered:
+            self._hovered = i
+            self.chart.hovered.emit(coords[i])
 
     def leaveEvent(self, event) -> None:
+        self._hovered = -1
         if self.chart.coords:
             self.chart.hovered.emit(None)
 
+    def resizeEvent(self, event) -> None:
+        self._picture = None
+        super().resizeEvent(event)
+
     def paintEvent(self, event) -> None:
-        xs, ys = self.chart.xs, self.chart.ys
-        if len(xs) < 2:
+        if len(self.chart.xs) < 2:
             return
-        p = QPainter(self)
+        ratio = self.devicePixelRatioF()
+        if self._picture is None or self._picture.devicePixelRatio() != ratio:
+            self._picture = self._draw(ratio)
+        QPainter(self).drawPixmap(0, 0, self._picture)
+
+    def _draw(self, ratio: float) -> QPixmap:
+        """The antialiased curve and its gradient: tens of milliseconds, once per size instead of on every repaint
+        (scrolling the page, the map cursor moving over it)."""
+        xs, ys = self.chart.xs, self.chart.ys
+        w, h = self.width(), self.height()
+        picture = QPixmap(max(1, round(w * ratio)), max(1, round(h * ratio)))
+        picture.setDevicePixelRatio(ratio)
+        picture.fill(Qt.GlobalColor.transparent)
+        p = QPainter(picture)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         lo, hi = min(ys), max(ys)
         span_y, min_x = max(hi - lo, 1e-6), xs[0]
         span_x = max(xs[-1] - min_x, 1e-6)
-        w, h = self.width(), self.height()
         path = QPainterPath()
         for i, (x, y) in enumerate(zip(xs, ys)):
             pt = QPointF((x - min_x) / span_x * w, h - (y - lo) / span_y * h * 0.9 - h * 0.05)
@@ -193,6 +228,111 @@ class _ChartCanvas(QWidget):
         p.fillPath(fill, gradient)
         p.setPen(QPen(self.chart.color, 2))
         p.drawPath(path)
+        p.end()
+        return picture
+
+
+class StopList(QWidget):
+    """The pauses and stops, one painted line each: a 60-hour race has hundreds, and a row of labels for each
+    took about a second to build and lay out."""
+    GAP = 8  # the card's spacing between the rows it used to hold
+
+    def __init__(self, rows: list[tuple[str, str]]):
+        super().__init__()
+        self.rows = rows
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._fit()
+
+    def _pitch(self) -> int:
+        return self.fontMetrics().height() + self.GAP
+
+    def _fit(self) -> None:
+        self.setFixedHeight(max(0, self._pitch() * len(self.rows) - self.GAP))
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.Type.FontChange:
+            self._fit()
+        super().changeEvent(event)
+
+    def paintEvent(self, event) -> None:
+        s = theme.scheme()
+        p = QPainter(self)
+        pitch, line = self._pitch(), self.fontMetrics().height()
+        area = event.rect()
+        first = max(0, area.top() // pitch)
+        last = min(len(self.rows), area.bottom() // pitch + 1)
+        left, right = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        for k in range(first, last):
+            r = QRect(0, k * pitch, self.width(), line)
+            p.setPen(QColor(s.on_surface))
+            p.drawText(r, left, self.rows[k][0])
+            p.setPen(QColor(s.on_surface_variant))
+            p.drawText(r, right, self.rows[k][1])
+
+
+@dataclass
+class ChartData:
+    title: str
+    xs: list[float]
+    ys: list[float]
+    low: str
+    high: str
+    color: str | None  # None: the theme's primary colour, read when the chart is built
+    coords: list[tuple[float, float]]
+    prefixes: tuple[str, str] = ("min", "max")
+
+
+@dataclass
+class DetailData:
+    """What the detail page draws from an analysis, computed once (off the window's thread when it loads): every
+    figure here is a pass over all the samples, and a 60-hour race has 200 000."""
+    track: dict | None
+    lines: list | None
+    square: list | None
+    dots: list
+    stops: list[tuple[str, str]]
+    charts: list[ChartData]
+
+
+def detail_data(analysis: Analysis, sport: Sport) -> DetailData:
+    samples = analysis.samples
+    ski = sport == Sport.SKI
+    track = lines = square = None
+    dots = []
+    if len(samples) >= 2:
+        dots = [{"lon": samples[0].lon, "lat": samples[0].lat, "color": "#00C853"},
+                {"lon": samples[-1].lon, "lat": samples[-1].lat, "color": "#FF1744"}]
+        if ski:
+            # the square is the whole day's, whichever lines the selector shows
+            lats, lons = [p.lat for p in samples], [p.lon for p in samples]
+            square = list(mapdata.square_of(min(lons), min(lats), max(lons), max(lats)))
+            lines = page_lines(map_lines(analysis, True))
+        else:
+            track = page_track(analysis)
+    stops = [("Pause" if stop.manual else "Arrêt détecté", f"{act.fmt_duration(stop.duration_ms // 1000)} · {fmt_hour(stop.start)}")
+             for stop in sorted(analysis.pauses + analysis.stops, key=lambda x: x.start)]
+    charts = []
+    idx = thin(len(samples))
+    at = lambda ids: [(samples[i].lon, samples[i].lat) for i in ids]  # noqa: E731
+    if analysis.quality.has_altitude and len(idx) >= 2 and all(samples[i].alt is not None for i in idx):
+        charts.append(ChartData("Altitude", [samples[i].dist for i in idx], [samples[i].alt for i in idx],
+                                f"{round(analysis.stats.min_alt or 0)} m", f"{round(analysis.stats.max_alt or 0)} m", None, at(idx)))
+    if len(idx) >= 2 and analysis.stats.max_speed > 0:
+        xs = [samples[i].dist for i in idx]
+        if sport == Sport.WALK:
+            # pace drawn upside down (minus seconds per km): faster stays higher, like a speed curve
+            pace = [-act.chart_pace(samples[i].speed) for i in idx]
+            charts.append(ChartData("Allure", xs, pace, act.fmt_pace(1000 / -min(pace)), act.fmt_pace(1000 / -max(pace)),
+                                    "#2E7DF6", at(idx), ("plus lente", "plus rapide")))
+        else:
+            charts.append(ChartData("Vitesse", xs, [samples[i].speed * 3.6 for i in idx], "0 km/h",
+                                    act.fmt_speed(analysis.stats.max_speed), "#2E7DF6", at(idx)))
+    hr_idx = [i for i in idx if samples[i].hr is not None]
+    if analysis.quality.has_hr and len(hr_idx) >= 2:
+        hr_min = min([x.hr for x in samples if x.hr is not None])
+        charts.append(ChartData("Fréquence cardiaque", [samples[i].dist for i in hr_idx], [float(samples[i].hr) for i in hr_idx],
+                                f"{hr_min} bpm", f"{analysis.stats.hr_max or 0} bpm", "#E5484D", at(hr_idx)))
+    return DetailData(track, lines, square, dots, stops, charts)
 
 
 def thin(n: int, limit: int = 300) -> list[int]:
@@ -286,7 +426,18 @@ class EditDialog(QDialog):
         form.addRow(buttons)
 
 
+def rows_style() -> str:
+    """The look of every ActivityRow, set once on the list that holds them: a style sheet on each row and label
+    was most of the time it took to build hundreds of rows."""
+    s = theme.scheme()
+    return (f"#row {{ background: {s.surface_container}; border-radius: 14px; }} "
+            f"#row:hover {{ background: {s.surface_high}; }} #row QLabel {{ background: transparent; }} "
+            "#row QLabel#rowEmoji { font-size: 20pt; } #row QLabel#rowTitle { font-weight: 600; font-size: 11pt; } "
+            f"#row QLabel#rowWhen {{ color: {s.on_surface_variant}; font-size: 9pt; }}")
+
+
 class ActivityRow(QFrame):
+    """One activity in the list, styled by rows_style() on its parent."""
     clicked = Signal(object)
     toggled = Signal(object, bool)
 
@@ -294,11 +445,8 @@ class ActivityRow(QFrame):
         super().__init__()
         self.note = note
         self.selecting = selecting
-        s = theme.scheme()
         self.setObjectName("row")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(f"#row {{ background: {s.surface_container}; border-radius: 14px; }} "
-                           f"#row:hover {{ background: {s.surface_high}; }} #row QLabel {{ background: transparent; }}")
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 10, 14, 10)
         if selecting:
@@ -307,14 +455,14 @@ class ActivityRow(QFrame):
             box.toggled.connect(lambda on: self.toggled.emit(self.note, on))
             row.addWidget(box)
         emoji = QLabel(EMOJI.get(note.activity.sport, "📍"))
-        emoji.setStyleSheet("font-size: 20pt;")
+        emoji.setObjectName("rowEmoji")
         row.addWidget(emoji)
         col = QVBoxLayout()
         col.setSpacing(0)
         title = QLabel(note.title)
-        title.setStyleSheet("font-weight: 600; font-size: 11pt;")
+        title.setObjectName("rowTitle")
         when = QLabel(fmt_date(note.activity.start))
-        when.setStyleSheet(f"color: {s.on_surface_variant}; font-size: 9pt;")
+        when.setObjectName("rowWhen")
         col.addWidget(title)
         col.addWidget(when)
         col.addWidget(QLabel(summary_line(note.activity)))
@@ -333,7 +481,9 @@ class ActivitiesScreen(QWidget):
     changed = Signal()  # something was written: the window rescans
     open_file = Signal(str)
     reveal_file = Signal(str)
-    _track_loaded = Signal(str, object, object)  # note path, analysis or None, error message or None (from the worker)
+    _track_loaded = Signal(str, object, object)  # note path, (analysis, DetailData) or None, error message or None (from the worker)
+    _job_progress = Signal(str, int, int)  # text, step, steps (0: no count), from a worker
+    _job_done = Signal(object, object, object)  # continuation, result, error, from a worker
 
     def __init__(self):
         super().__init__()
@@ -348,10 +498,27 @@ class ActivitiesScreen(QWidget):
         self.row_widgets: dict[str, ActivityRow] = {}  # by note id
         self.config = None  # set by the window: remembers the map's 3D/2D choice
         self.map_panel: MapPanel | None = None
+        self.prepared: OrderedDict[tuple, tuple] = OrderedDict()  # (id(analysis), sport) -> (weakref, DetailData)
+        self.busy = False  # an import, an altitude lookup or a new analysis runs on a worker
+        self._imports: list[str] = []
+        self._imported: Note | None = None
         self.stack = QStackedWidget()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.stack)
+        # long work runs off the window's thread; this line says what it is doing, on the list and on an activity
+        self.footer = QWidget()
+        foot = QHBoxLayout(self.footer)
+        foot.setContentsMargins(14, 4, 14, 8)
+        self.status = QLabel()
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedWidth(180)
+        self.progress.setFixedHeight(8)
+        foot.addWidget(self.status, 1)
+        foot.addWidget(self.progress)
+        self.footer.hide()
+        outer.addWidget(self.footer)
         self.list_page = QWidget()
         self.detail_page = QWidget()
         self.stack.addWidget(self.list_page)
@@ -360,6 +527,8 @@ class ActivitiesScreen(QWidget):
         self.detail_layout = QVBoxLayout(self.detail_page)
         self.detail_layout.setContentsMargins(0, 0, 0, 0)
         self._track_loaded.connect(self._on_track_loaded)
+        self._job_progress.connect(self._show_progress)
+        self._job_done.connect(lambda then, result, error: then(result, error))
 
     def set_store(self, store: Store) -> None:
         self.store = store
@@ -381,7 +550,6 @@ class ActivitiesScreen(QWidget):
         self.select_button.toggled.connect(self._select_mode)
         self.relief_button = QPushButton("Compléter l'altitude (relief)")
         self.relief_button.clicked.connect(self.complete_altitudes)
-        self.status = QLabel()
         head.addWidget(self.back)
         head.addWidget(title)
         head.addStretch()
@@ -389,7 +557,6 @@ class ActivitiesScreen(QWidget):
         head.addWidget(self.relief_button)
         head.addWidget(self.import_button)
         layout.addLayout(head)
-        layout.addWidget(self.status)
         self.totals = QHBoxLayout()
         layout.addLayout(self.totals)
         self.filter = QComboBox()
@@ -476,19 +643,60 @@ class ActivitiesScreen(QWidget):
             "Celles qui ont déjà une altitude (enregistrées avec le baromètre, ou déjà complétées) sont ignorées.")
         if answer != QMessageBox.StandardButton.Yes:
             return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            def progress(text: str) -> None:
-                self.status.setText(text)
-                QApplication.processEvents()
-            done, skipped, failure = self.store.fill_altitudes(targets, progress)
-        finally:
-            QApplication.restoreOverrideCursor()
-        self.status.setText("")
-        self.selected.clear()
-        self.select_button.setChecked(False)
-        QMessageBox.information(self, "Altitude", f"{done} complétée(s), {skipped} ignorée(s)." + (f"\nArrêté : {failure}" if failure else ""))
-        self.changed.emit()
+
+        def finished(result, error) -> None:
+            self.selected.clear()
+            self.select_button.setChecked(False)
+            if error is not None:
+                QMessageBox.warning(self, "Altitude", str(error))
+            else:
+                done, skipped, failure = result
+                QMessageBox.information(self, "Altitude", f"{done} complétée(s), {skipped} ignorée(s)." + (f"\nArrêté : {failure}" if failure else ""))
+            self.changed.emit()
+        self._run("Compléter l'altitude…", lambda progress: self.store.fill_altitudes(targets, progress), finished)
+
+    # ---- work off the window's thread ----
+
+    def _run(self, text: str, work, then) -> bool:
+        """work(progress) on a worker thread (reading and analysing a long race takes seconds), then(result, error)
+        back on the window's thread. One at a time: False, with a word to the user, while another runs."""
+        if self.busy:
+            QMessageBox.information(self, "Patiente", "Une opération est déjà en cours sur les activités.")
+            return False
+        self.busy = True
+        self.import_button.setEnabled(False)
+        self.relief_button.setEnabled(False)
+        self._show_progress(text, 0, 0)
+
+        def progress(text: str, step: int = 0, steps: int = 0) -> None:
+            self._job_progress.emit(text, step, steps)
+
+        def run() -> None:
+            try:
+                result, error = work(progress), None
+            except Exception as failure:  # noqa: BLE001 — handed to `then`, which tells the user
+                result, error = None, failure
+            try:
+                self._job_done.emit(lambda r, e: self._finish(then, r, e), result, error)
+            except RuntimeError:
+                pass  # the window is already gone
+        threading.Thread(target=run, daemon=True).start()
+        return True
+
+    def _finish(self, then, result, error) -> None:
+        self.busy = False
+        self.import_button.setEnabled(True)
+        self.relief_button.setEnabled(True)
+        self.footer.hide()
+        then(result, error)
+
+    def _show_progress(self, text: str, step: int, steps: int) -> None:
+        if not self.busy:
+            return
+        self.status.setText(text)
+        self.progress.setRange(0, steps)  # 0..0: moving without a count
+        self.progress.setValue(step)
+        self.footer.show()
 
     def _filter_changed(self) -> None:
         self.sport_filter = self.filter.currentData()
@@ -517,66 +725,123 @@ class ActivitiesScreen(QWidget):
             if ski:
                 lay.addWidget(QLabel(f"⛷️ {sum(i.runs for i in ski)} desc. · {sum(i.drop for i in ski)} m"))
             self.totals.addWidget(frame)
+        # a row whose note is the very same object is kept: an import or a sync tick builds one row, not hundreds
+        reusable: dict[str, ActivityRow] = {}
         while self.rows.count():
-            item = self.rows.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = self.rows.takeAt(0).widget()
+            if widget is None:
+                continue
+            if isinstance(widget, ActivityRow) and not widget.selecting and not self.selecting:
+                reusable[widget.note.path] = widget
+            else:
+                widget.deleteLater()
         shown = [n for n in self.activities if self.sport_filter is None or n.activity.sport == self.sport_filter]
         self.row_widgets = {}
+        style = rows_style()
+        if self.rows_host.styleSheet() != style:
+            self.rows_host.setStyleSheet(style)
         if not shown:
             hint = QLabel("Aucune activité. Importe un fichier FIT ou GPX (montre, Strava).")
             hint.setStyleSheet(f"color: {s.on_surface_variant};")
             self.rows.addWidget(hint)
         for n in shown:
-            row = ActivityRow(n, self.selecting, n.path in self.selected)
-            row.clicked.connect(self._row_clicked)
-            row.toggled.connect(self._toggle)
+            row = reusable.pop(n.path, None)
+            if row is None or row.note is not n:
+                if row is not None:
+                    row.deleteLater()
+                row = ActivityRow(n, self.selecting, n.path in self.selected)
+                row.clicked.connect(self._row_clicked)
+                row.toggled.connect(self._toggle)
             self.rows.addWidget(row)
             self.row_widgets[n.id] = row
+        for row in reusable.values():
+            row.deleteLater()
 
     # ---- import ----
 
     def import_files(self) -> None:
         if self.store is None:
             return
+        if self.busy:
+            QMessageBox.information(self, "Patiente", "Une opération est déjà en cours sur les activités.")
+            return
         paths, _ = QFileDialog.getOpenFileNames(self, "Importer des activités", str(Path.home()),
                                                 "Activités (*.fit *.gpx);;Tous les fichiers (*)")
-        last = None
-        for path in paths:
-            try:
-                from ..core import elevation
-                from ..core.store import default_title
-                source = Path(path)
-                track, _ext = self.store.read_source(source)
-                existing = self.store.find_activity(track.start_time)
-                sport = Sport.guess(track.fit_sport)
-                if existing is not None and sport == Sport.GPS and existing.activity:
-                    sport = existing.activity.sport
-                title = existing.title if existing else default_title(sport, track.start_time or 0, track.name)
-                dialog = ImportDialog(self, source.name, title, sport, existing, elevation.missing(track))
-                if dialog.exec() != QDialog.DialogCode.Accepted:
-                    continue
-                last = self.store.import_activity(source, dialog.title.text(), dialog.sport.currentData(), existing)
-                if dialog.relief.isVisible() and dialog.relief.isChecked():
-                    last = self._fetch_altitude(last, quiet=False)
-            except Exception as error:  # noqa: BLE001 — the message goes to the user
-                QMessageBox.warning(self, "Import impossible", f"{Path(path).name} : {error}")
-        if last is not None:
-            self.changed.emit()
-            self.open_activity(last)
+        if paths:
+            self._imports, self._imported = list(paths), None
+            self._import_next()
 
-    def _fetch_altitude(self, note: Note, quiet: bool = True) -> Note:
-        """Looks the altitude up (a few seconds: the service allows one request per second)."""
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            return self.store.fetch_altitude(note)
-        except Exception as error:  # noqa: BLE001
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "Altitude indisponible", f"{error}\nL'activité est importée sans altitude.")
-            return note
-        finally:
-            while QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
+    def _import_next(self) -> None:
+        """One file after the other: read it (worker), ask its name and sport, then copy and analyse it (worker)."""
+        if not self._imports:
+            if self._imported is not None:
+                self.changed.emit()
+                self.open_activity(self._imported)
+            return
+        source = Path(self._imports.pop(0))
+
+        def read(progress):
+            parsed = self.store.read_source(source)
+            return parsed, elevation.missing(parsed[0])
+        if not self._run(f"Lecture de {source.name}…", read, lambda result, error: self._import_ask(source, result, error)):
+            self._imports = []
+
+    def _import_ask(self, source: Path, result, error) -> None:
+        if error is not None:
+            QMessageBox.warning(self, "Import impossible", f"{source.name} : {error}")
+            self._import_next()
+            return
+        from ..core.store import default_title
+        parsed, needs_altitude = result
+        track = parsed[0]
+        existing = self.store.find_activity(track.start_time)
+        sport = Sport.guess(track.fit_sport)
+        if existing is not None and sport == Sport.GPS and existing.activity:
+            sport = existing.activity.sport
+        title = existing.title if existing else default_title(sport, track.start_time or 0, track.name)
+        dialog = ImportDialog(self, source.name, title, sport, existing, needs_altitude)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._import_next()
+            return
+        title, sport = dialog.title.text(), dialog.sport.currentData()
+        relief = dialog.relief.isVisible() and dialog.relief.isChecked()
+
+        def work(progress):
+            note = self.store.import_activity(source, title, sport, existing, parsed=parsed)
+            altitude_error = None
+            if relief:
+                try:
+                    note = self.store.fetch_altitude(note, progress=lambda n, total: progress(
+                        f"Altitude de {source.name} : relief {n + 1}/{total}…", n, total))
+                except Exception as failure:  # noqa: BLE001 — the activity stays, imported without altitude
+                    altitude_error = failure
+            analysis = self.store.cached_analysis(note.activity) if note.activity and note.activity.file else None
+            data = detail_data(analysis, note.activity.sport) if analysis is not None else None
+            return note, altitude_error, analysis, data
+
+        def done(result, failure) -> None:
+            if failure is not None:
+                QMessageBox.warning(self, "Import impossible", f"{source.name} : {failure}")
+            else:
+                note, altitude_error, analysis, data = result
+                if data is not None:
+                    self._keep_prepared(analysis, note.activity.sport, data)
+                self._imported = note
+                if altitude_error is not None:
+                    QMessageBox.warning(self, "Altitude indisponible", f"{altitude_error}\nL'activité est importée sans altitude.")
+            self._import_next()
+        if not self._run(f"Import de {source.name} : copie et analyse du tracé…", work, done):
+            self._imports = []
+
+    def _fetch_altitude(self, note: Note) -> None:
+        """Looks the altitude up (a few seconds: the service allows one request per second), then reopens."""
+        def done(result, error) -> None:
+            if error is not None:
+                QMessageBox.warning(self, "Altitude indisponible", f"{error}\nL'activité reste sans altitude.")
+            else:
+                self._reopen(result)
+        self._run("Altitude : relief…", lambda progress: self.store.fetch_altitude(
+            note, progress=lambda n, total: progress(f"Altitude : relief {n + 1}/{total}…", n, total)), done)
 
     # ---- detail ----
 
@@ -599,7 +864,8 @@ class ActivitiesScreen(QWidget):
         info = note.activity
         cached = self.store.cached_analysis(info) if info.file else None
         if not info.file or cached is not None:
-            self._show_detail(note, cached)
+            # the figures of an analysis just made (an import) take a tenth of a second for a long race: here
+            self._show_detail(note, cached, self._prepared_for(cached, info.sport) if cached is not None else None)
         else:
             # reading and analysing a long track takes seconds: off the window's thread, the detail fills in after
             self._show_detail(note, None, loading=True)
@@ -608,24 +874,47 @@ class ActivitiesScreen(QWidget):
 
     def _load_track(self, note: Note) -> None:
         try:
-            _track, analysis = self.store.track_and_analysis(note.activity)
-            self._track_loaded.emit(note.path, analysis, None)
+            analysis = self.store.analysis(note.activity)
+            loaded = analysis, detail_data(analysis, note.activity.sport)
+            self._track_loaded.emit(note.path, loaded, None)
         except Exception as error:  # noqa: BLE001 (shown on the page, as before)
             self._track_loaded.emit(note.path, None, str(error))
 
-    def _on_track_loaded(self, path: str, analysis: Analysis | None, error: str | None) -> None:
+    def _on_track_loaded(self, path: str, loaded: tuple | None, error: str | None) -> None:
+        analysis, data = loaded or (None, None)
+        if analysis is not None and self.current is not None:
+            self._keep_prepared(analysis, self.current.activity.sport, data)
         if self.current is not None and self.current.path == path and self.stack.currentWidget() is self.detail_page:
-            self._show_detail(self.current, analysis, error=error)
+            self._show_detail(self.current, analysis, data, error=error)
 
-    def _show_detail(self, note: Note, analysis: Analysis | None, loading: bool = False, error: str | None = None) -> None:
+    def _prepared_for(self, analysis: Analysis, sport: Sport) -> DetailData | None:
+        hit = self.prepared.get((id(analysis), sport))
+        return hit[1] if hit is not None and hit[0]() is analysis else None
+
+    def _keep_prepared(self, analysis: Analysis, sport: Sport, data: DetailData) -> None:
+        """Remembered as long as the store keeps the analysis: reopening a long race rebuilds no figure."""
+        key = (id(analysis), sport)
+        self.prepared[key] = (weakref.ref(analysis), data)
+        self.prepared.move_to_end(key)
+        for stale in [k for k, (ref, _d) in self.prepared.items() if ref() is None]:
+            del self.prepared[stale]
+        while len(self.prepared) > 4:
+            self.prepared.popitem(last=False)
+
+    def _show_detail(self, note: Note, analysis: Analysis | None, data: DetailData | None = None, loading: bool = False,
+                     error: str | None = None) -> None:
         self._park_map()
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.detail_layout.addWidget(self._detail(note, analysis, loading, error))
+        if analysis is not None and data is None:
+            data = detail_data(analysis, note.activity.sport)
+            self._keep_prepared(analysis, note.activity.sport, data)
+        self.detail_layout.addWidget(self._detail(note, analysis, data, loading, error))
 
-    def _detail(self, note: Note, analysis: Analysis | None, loading: bool = False, error: str | None = None) -> QWidget:
+    def _detail(self, note: Note, analysis: Analysis | None, data: DetailData | None = None, loading: bool = False,
+                error: str | None = None) -> QWidget:
         s = theme.scheme()
         info = note.activity
         host = QWidget()
@@ -675,17 +964,11 @@ class ActivitiesScreen(QWidget):
         ski = info.sport == Sport.SKI
         panel = None
         if analysis is not None and len(analysis.samples) >= 2:
-            samples = analysis.samples
             panel = self._map()
-            dots = [{"lon": samples[0].lon, "lat": samples[0].lat, "color": "#00C853"},
-                    {"lon": samples[-1].lon, "lat": samples[-1].lat, "color": "#FF1744"}]
             if ski:
-                # the square is the whole day's, whichever lines the selector shows
-                lats, lons = [p.lat for p in samples], [p.lon for p in samples]
-                square = list(mapdata.square_of(min(lons), min(lats), max(lons), max(lats)))
-                panel.show_activity(lines=page_lines(map_lines(analysis, True)), dots=dots, square=square)
+                panel.show_activity(lines=data.lines, dots=data.dots, square=data.square)
             else:
-                panel.show_activity(track=page_track(analysis), dots=dots)
+                panel.show_activity(track=data.track, dots=data.dots)
             col.addWidget(panel)
             panel.show()
             if ski:
@@ -743,50 +1026,16 @@ class ActivitiesScreen(QWidget):
             col.addWidget(frame)
 
         if analysis is not None:
-            stops = sorted(analysis.pauses + analysis.stops, key=lambda x: x.start)
-            if stops:
+            if data.stops:
                 frame, lay = card("Pauses et arrêts")
-                for stop in stops:
-                    row = QHBoxLayout()
-                    row.addWidget(QLabel("Pause" if stop.manual else "Arrêt détecté"))
-                    row.addStretch()
-                    right = QLabel(f"{act.fmt_duration(stop.duration_ms // 1000)} · {fmt_hour(stop.start)}")
-                    right.setStyleSheet(f"color: {s.on_surface_variant};")
-                    row.addWidget(right)
-                    lay.addLayout(row)
+                lay.addWidget(StopList(data.stops))
                 col.addWidget(frame)
-            idx = thin(len(analysis.samples))
-            samples = analysis.samples
-
-            def linked(chart: Chart) -> Chart:
+            for spec in data.charts:
+                frame, lay = card()
+                chart = Chart(spec.title, spec.xs, spec.ys, spec.low, spec.high, spec.color or s.primary, spec.coords, spec.prefixes)
                 if panel is not None:
                     chart.hovered.connect(lambda c, p=panel: p.set_cursor(*(c if c else (None, None))))
-                return chart
-            at = lambda ids: [(samples[i].lon, samples[i].lat) for i in ids]  # noqa: E731
-            if analysis.quality.has_altitude and len(idx) >= 2 and all(samples[i].alt is not None for i in idx):
-                frame, lay = card()
-                lay.addWidget(linked(Chart("Altitude", [samples[i].dist for i in idx], [samples[i].alt for i in idx],
-                                           f"{round(analysis.stats.min_alt or 0)} m", f"{round(analysis.stats.max_alt or 0)} m", s.primary, at(idx))))
-                col.addWidget(frame)
-            if len(idx) >= 2 and analysis.stats.max_speed > 0:
-                frame, lay = card()
-                xs = [samples[i].dist for i in idx]
-                if info.sport == Sport.WALK:
-                    # pace drawn upside down (minus seconds per km): faster stays higher, like a speed curve
-                    pace = [-act.chart_pace(samples[i].speed) for i in idx]
-                    lay.addWidget(linked(Chart("Allure", xs, pace, act.fmt_pace(1000 / -min(pace)),
-                                               act.fmt_pace(1000 / -max(pace)), "#2E7DF6", at(idx),
-                                               prefixes=("plus lente", "plus rapide"))))
-                else:
-                    lay.addWidget(linked(Chart("Vitesse", xs, [samples[i].speed * 3.6 for i in idx], "0 km/h",
-                                               act.fmt_speed(analysis.stats.max_speed), "#2E7DF6", at(idx))))
-                col.addWidget(frame)
-            hr_idx = [i for i in idx if samples[i].hr is not None]
-            if analysis.quality.has_hr and len(hr_idx) >= 2:
-                frame, lay = card()
-                lay.addWidget(linked(Chart("Fréquence cardiaque", [samples[i].dist for i in hr_idx], [float(samples[i].hr) for i in hr_idx],
-                                           f"{min(x.hr for x in samples if x.hr is not None)} bpm", f"{analysis.stats.hr_max or 0} bpm", "#E5484D",
-                                           at(hr_idx))))
+                lay.addWidget(chart)
                 col.addWidget(frame)
 
         frame, lay = card("Photos")
@@ -812,7 +1061,7 @@ class ActivitiesScreen(QWidget):
         if analysis is not None and not analysis.quality.has_altitude and info.sport.has_gps and not info.alt:
             relief = QPushButton("Compléter l'altitude avec le relief (en ligne)")
             relief.setToolTip("Envoie les positions à opentopodata.org et garde le résultat dans un petit fichier .alt")
-            relief.clicked.connect(lambda: self._reopen(self._fetch_altitude(note)))
+            relief.clicked.connect(lambda: self._fetch_altitude(note))
             col.addWidget(relief)
 
         if analysis is not None:
@@ -839,12 +1088,25 @@ class ActivitiesScreen(QWidget):
 
     def _edit(self, note: Note) -> None:
         dialog = EditDialog(self, note, note.activity.file is not None)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            try:
-                saved = self.store.update_activity(note, dialog.title.text(), dialog.description.toPlainText(), dialog.sport.currentData())
-                self._reopen(saved)
-            except Exception as error:  # noqa: BLE001
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        title, description, sport = dialog.title.text(), dialog.description.toPlainText(), dialog.sport.currentData()
+
+        def done(saved, error) -> None:
+            if error is not None:
                 QMessageBox.warning(self, "Modification impossible", str(error))
+            else:
+                self._reopen(saved)
+        if note.activity.file and sport != note.activity.sport:
+            # another sport is another analysis of the whole track: seconds for a long race
+            self._run("Nouvelle analyse du tracé…", lambda progress: self.store.update_activity(note, title, description, sport), done)
+            return
+        try:
+            saved = self.store.update_activity(note, title, description, sport)
+        except Exception as error:  # noqa: BLE001
+            done(None, error)
+            return
+        done(saved, None)
 
     def _delete(self, note: Note) -> None:
         answer = QMessageBox.question(self, "Supprimer cette activité ?",
