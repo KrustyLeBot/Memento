@@ -60,7 +60,12 @@ class MapView(QWebEngineView):
         page.loadFinished.connect(self._load_finished)
         page.renderProcessTerminated.connect(self._crashed)
         self.setMinimumHeight(260)
-        self.load(QUrl(f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={_theme()}&interactive=1"))
+        self.load(QUrl(page_url(mode, _theme())))
+
+    def reload_page(self) -> None:
+        """Loads the page again with the current map settings; the kept state is replayed once it is loaded."""
+        self.loaded = False
+        self.load(QUrl(page_url(self.state["setMode"][0], self.state["setTheme"][0])))
 
     def call(self, name: str, *args) -> None:
         if name in STATE_ORDER:
@@ -87,6 +92,12 @@ class MapView(QWebEngineView):
         print(f"map: renderer ended ({status}, {code}), reloading", file=sys.stderr)
         self.loaded = False
         QTimer.singleShot(500, self, self.reload)
+
+
+def page_url(mode: str, theme_name: str) -> str:
+    # photomax: the photo source's maxzoom (a setting); the page enlarges that level beyond it
+    return (f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={theme_name}&interactive=1"
+            f"&photomax={maphost.photo_max_zoom()}")
 
 
 def _theme() -> str:

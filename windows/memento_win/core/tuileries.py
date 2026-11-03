@@ -1,0 +1,191 @@
+"""The optional Tuileries tile server (the owner's own, self-hosted): when it is configured, every tile, buildings
+cell and summits list the map page asks for comes from it instead of IGN / OpenStreetMap / AWS, with HTTP Basic auth
+and the optional Cloudflare Access service-token headers added by the host (the page never sees them). Pure Python
+(URLs, headers, answer rules) plus a blocking `fetch_info` for the settings' "Tester la connexion"; shared by the
+Windows host and the web server."""
+from __future__ import annotations
+
+import base64
+import json
+import math
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+from . import mapcache
+
+PHOTO_MAX_ZOOM_DEFAULT = 17
+PHOTO_MAX_ZOOM_RANGE = (14, 19)  # 19: IGN's top level, also the page's former fixed maxzoom
+INFO_TIMEOUT = 10
+
+
+class TuileriesError(Exception):
+    """The connection test failed; the message is shown to the user as is (French)."""
+
+
+@dataclass(frozen=True)
+class Tuileries:
+    url: str
+    user: str = ""
+    password: str = ""
+    cf_id: str = ""
+    cf_secret: str = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(normalize_url(self.url))
+
+    @property
+    def base(self) -> str:
+        return normalize_url(self.url)
+
+    def headers(self) -> dict[str, str]:
+        """Only ever sent to `base`: the credentials never reach IGN, OpenStreetMap or AWS."""
+        out = {"User-Agent": mapcache.USER_AGENT}
+        if self.user or self.password:
+            token = base64.b64encode(f"{self.user}:{self.password}".encode()).decode("ascii")
+            out["Authorization"] = f"Basic {token}"
+        if self.cf_id:
+            out["CF-Access-Client-Id"] = self.cf_id
+        if self.cf_secret:
+            out["CF-Access-Client-Secret"] = self.cf_secret
+        return out
+
+    def tile_url(self, tile: mapcache.TileRequest) -> str:
+        return f"{self.base}t/{tile.kind}/{tile.z}/{tile.x}/{tile.y}"
+
+    def buildings_url(self, x: int, y: int) -> str:
+        return f"{self.base}buildings/{mapcache.BUILDINGS_Z}/{x}/{y}"
+
+    def peaks_url(self, w: float, s: float, e: float, n: float) -> str:
+        return f"{self.base}peaks?w={w:.5f}&s={s:.5f}&e={e:.5f}&n={n:.5f}"
+
+    @property
+    def info_url(self) -> str:
+        return f"{self.base}api/info"
+
+
+def normalize_url(url: str) -> str:
+    """`https://host/path/` with its trailing slash, or "" when it is not an http(s) URL with a host."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.query or parts.fragment:
+        return ""
+    return url if url.endswith("/") else url + "/"
+
+
+def clamp_photo_max_zoom(value) -> int:
+    try:
+        z = int(value)
+    except (TypeError, ValueError):
+        return PHOTO_MAX_ZOOM_DEFAULT
+    return min(max(z, PHOTO_MAX_ZOOM_RANGE[0]), PHOTO_MAX_ZOOM_RANGE[1])
+
+
+# ---- answers ----
+
+def tile_answer(tile: mapcache.TileRequest, status: int, content_type: str, data: bytes) -> mapcache.TileRequest | None:
+    """Where an answer of Tuileries is cached (its type decides: a WebP photo, a JPEG one, the PNG OpenStreetMap
+    stand-in), or None when it is not a tile: a 404 (no source has one), an error, an unexpected type."""
+    if status != 200 or not data:
+        return None
+    return tile.typed(content_type)
+
+
+def valid_cell(data: bytes, x: int, y: int) -> bool:
+    """A buildings cell as core/buildings.py encodes it, for that cell (anything else is never cached)."""
+    try:
+        doc = json.loads(data)
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and doc.get("v") == 1 and doc.get("x") == x and doc.get("y") == y and isinstance(doc.get("b"), list)
+
+
+def parse_peaks(data: bytes) -> list[dict]:
+    """Tuileries' `/peaks` answer, the list core/peaks.py `select` makes; ValueError when it is anything else."""
+    items = json.loads(data)
+    if not isinstance(items, list):
+        raise ValueError("summits: not a list")
+    out = []
+    for p in items:
+        if not isinstance(p, dict) or not isinstance(p.get("name"), str):
+            raise ValueError("summits: not a summit")
+        lon, lat = float(p["lon"]), float(p["lat"])
+        if not (math.isfinite(lon) and math.isfinite(lat)):
+            raise ValueError("summits: bad position")
+        ele = p.get("ele")
+        out.append({"name": p["name"], "ele": ele if isinstance(ele, (int, float)) else None, "lon": lon, "lat": lat,
+                    "importance": int(p.get("importance", 9))})
+    return out
+
+
+@dataclass(frozen=True)
+class Info:
+    name: str
+    version: str
+    max_zoom: int | None
+    layers: tuple[str, ...]
+
+    def summary(self) -> str:
+        zoom = f", zoom max {self.max_zoom}" if self.max_zoom is not None else ""
+        return f"{self.name} {self.version}{zoom}".strip()
+
+
+def parse_info(data: bytes) -> Info:
+    try:
+        doc = json.loads(data)
+    except ValueError:
+        raise TuileriesError("Réponse inattendue : ce n'est pas un serveur Tuileries ?") from None
+    if not isinstance(doc, dict) or not isinstance(doc.get("version"), str):
+        raise TuileriesError("Réponse inattendue : ce n'est pas un serveur Tuileries ?")
+    zoom = doc.get("max_zoom")
+    layers = doc.get("layers") if isinstance(doc.get("layers"), list) else []
+    return Info(str(doc.get("name") or "Tuileries"), doc["version"],
+                zoom if isinstance(zoom, int) and not isinstance(zoom, bool) else None,
+                tuple(str(v) for v in layers))
+
+
+def info_answer(status: int, data: bytes) -> Info:
+    """`/api/info` fetched by the caller's own HTTP code (the web server's)."""
+    if status != 200:
+        raise TuileriesError(status_message(status))
+    return parse_info(data)
+
+
+def status_message(status: int) -> str:
+    """What a refusal of Tuileries (or of Cloudflare in front of it) means to the user."""
+    if status == 401:
+        return "Identifiant ou mot de passe refusé"
+    if status == 403 or 300 <= status < 400:  # Cloudflare Access refuses, or sends to its login page
+        return "Accès refusé (Cloudflare Access : vérifier l'identifiant client et le secret)"
+    if status == 429:
+        return "Trop d'essais refusés : réessayer plus tard"
+    if status in (502, 503, 504):
+        return f"Serveur injoignable derrière le tunnel (HTTP {status})"
+    return f"Erreur HTTP {status}"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Cloudflare Access sends a request without a valid service token to its login page: said as a refusal, and the
+    credentials are never carried to another address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(newurl, 403, "redirect refused", headers, fp)
+
+
+def fetch_info(t: Tuileries, timeout: float = INFO_TIMEOUT) -> Info:
+    """`GET /api/info` (blocking: run it off the UI thread). TuileriesError with a French message on any failure."""
+    if not t.configured:
+        raise TuileriesError("Adresse invalide : https://… attendu")
+    request = urllib.request.Request(t.info_url, headers=t.headers())
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as reply:
+            return parse_info(reply.read(1_000_000))
+    except urllib.error.HTTPError as error:
+        raise TuileriesError(status_message(error.code)) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        raise TuileriesError(f"Serveur injoignable ({reason})") from None

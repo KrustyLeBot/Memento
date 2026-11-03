@@ -28,7 +28,9 @@
     dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1' },
   };
   const HALO = 'rgba(255,255,255,0.85)', CASING = 'rgba(0,0,0,0.75)';
-  const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19 };
+  // the host's "zoom maximal de la photo" setting (14..19, default 17): MapLibre enlarges that level beyond it
+  const PHOTO_MAX_Z = Math.min(19, Math.max(14, Math.round(+params.get('photomax')) || 17));
+  const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: PHOTO_MAX_Z };
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
   let mode = params.get('mode') === '2d' ? '2d' : '3d';

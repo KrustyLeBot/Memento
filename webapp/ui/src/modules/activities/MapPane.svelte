@@ -7,6 +7,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { dark, prefs, setPref } from '../../lib/ui.js';
   import Glyph from './Glyph.svelte';
+  import { photoMaxZoom } from '../settings/map.js';
 
   /** Off screen, kept loaded (the list, an activity without track). */
   export let parked = true;
@@ -48,7 +49,14 @@
   function start() {
     const theme = $dark ? 'dark' : 'light';
     state.set('setTheme', [theme]);
-    src = `/map/index.html?mode=${mode}&theme=${theme}&interactive=1`;
+    src = `/map/index.html?mode=${mode}&theme=${theme}&interactive=1&photomax=${photomax}`;
+  }
+
+  // the page reads the photo's top zoom when it loads: a new value reloads it, and onLoad replays the state
+  $: photomax = photoMaxZoom($prefs['map.photoMaxZoom']);
+  $: if (src && !src.endsWith(`&photomax=${photomax}`)) {
+    loaded = false;
+    start();
   }
 
   function onLoad() {

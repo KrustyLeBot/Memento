@@ -76,7 +76,7 @@ def create_app(config: Config, fetch=None) -> Starlette:
     data = Data(config)
     auth = Auth(config)
     activities = Activities(data)
-    maphost = MapHost(config.tiles_dir, config.map_dir, **({"fetch": fetch} if fetch else {}))
+    maphost = MapHost(config.tiles_dir, config.map_dir, source=config.tiles, **({"fetch": fetch} if fetch else {}))
 
     async def healthz(request: Request) -> Response:
         return JSONResponse({"ok": True})
