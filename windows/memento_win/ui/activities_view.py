@@ -481,7 +481,7 @@ class ActivitiesScreen(QWidget):
     changed = Signal()  # something was written: the window rescans
     open_file = Signal(str)
     reveal_file = Signal(str)
-    _track_loaded = Signal(str, object, object)  # note path, (analysis, DetailData) or None, error message or None (from the worker)
+    _track_loaded = Signal(str, object, object, object)  # note path, its ActivityInfo, (analysis, DetailData) or None, error message or None (from the worker)
     _job_progress = Signal(str, int, int)  # text, step, steps (0: no count), from a worker
     _job_done = Signal(object, object, object)  # continuation, result, error, from a worker
 
@@ -502,6 +502,8 @@ class ActivitiesScreen(QWidget):
         self.busy = False  # an import, an altitude lookup or a new analysis runs on a worker
         self._imports: list[str] = []
         self._imported: Note | None = None
+        self._loading: dict[str, act.ActivityInfo] = {}  # track loads running, by note path: one per activity
+        self._loading_shown: str | None = None  # the activity whose detail page waits for its track
         self.stack = QStackedWidget()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -532,6 +534,9 @@ class ActivitiesScreen(QWidget):
 
     def set_store(self, store: Store) -> None:
         self.store = store
+        self._loading.clear()
+        if self.current is not None:
+            self.show_list()  # the page open belongs to the old folder
 
     # ---- list ----
 
@@ -652,7 +657,11 @@ class ActivitiesScreen(QWidget):
             else:
                 done, skipped, failure = result
                 QMessageBox.information(self, "Altitude", f"{done} complétée(s), {skipped} ignorée(s)." + (f"\nArrêté : {failure}" if failure else ""))
-            self.changed.emit()
+            fresh = self.store.current(self.current) if self.current is not None else None
+            if fresh is not None and fresh != self.current:
+                self._reopen_if_shown(fresh)  # the open activity was one of those completed: shown with its altitude
+            else:
+                self.changed.emit()
         self._run("Compléter l'altitude…", lambda progress: self.store.fill_altitudes(targets, progress), finished)
 
     # ---- work off the window's thread ----
@@ -667,6 +676,7 @@ class ActivitiesScreen(QWidget):
         self.import_button.setEnabled(False)
         self.relief_button.setEnabled(False)
         self._show_progress(text, 0, 0)
+        store = self.store
 
         def progress(text: str, step: int = 0, steps: int = 0) -> None:
             self._job_progress.emit(text, step, steps)
@@ -677,17 +687,20 @@ class ActivitiesScreen(QWidget):
             except Exception as failure:  # noqa: BLE001 — handed to `then`, which tells the user
                 result, error = None, failure
             try:
-                self._job_done.emit(lambda r, e: self._finish(then, r, e), result, error)
+                self._job_done.emit(lambda r, e: self._finish(store, then, r, e), result, error)
             except RuntimeError:
                 pass  # the window is already gone
         threading.Thread(target=run, daemon=True).start()
         return True
 
-    def _finish(self, then, result, error) -> None:
+    def _finish(self, store: Store, then, result, error) -> None:
         self.busy = False
         self.import_button.setEnabled(True)
         self.relief_button.setEnabled(True)
         self.footer.hide()
+        if self.store is not store:
+            self._imports, self._imported = [], None  # the folder changed meanwhile: the result belongs to the old one
+            return
         then(result, error)
 
     def _show_progress(self, text: str, step: int, steps: int) -> None:
@@ -839,7 +852,7 @@ class ActivitiesScreen(QWidget):
             if error is not None:
                 QMessageBox.warning(self, "Altitude indisponible", f"{error}\nL'activité reste sans altitude.")
             else:
-                self._reopen(result)
+                self._reopen_if_shown(result)
         self._run("Altitude : relief…", lambda progress: self.store.fetch_altitude(
             note, progress=lambda n, total: progress(f"Altitude : relief {n + 1}/{total}…", n, total)), done)
 
@@ -847,6 +860,7 @@ class ActivitiesScreen(QWidget):
 
     def show_list(self) -> None:
         self.current = None
+        self._loading_shown = None
         self._park_map()
         self.stack.setCurrentWidget(self.list_page)
         if self.memory.pending:
@@ -869,23 +883,31 @@ class ActivitiesScreen(QWidget):
         else:
             # reading and analysing a long track takes seconds: off the window's thread, the detail fills in after
             self._show_detail(note, None, loading=True)
-            threading.Thread(target=self._load_track, args=(note,), daemon=True).start()
+            self._loading_shown = note.path
+            if self._loading.get(note.path) != info:  # reopened while it loads: the same load fills it, once
+                self._loading[note.path] = info
+                threading.Thread(target=self._load_track, args=(note,), daemon=True).start()
         self.stack.setCurrentWidget(self.detail_page)
 
     def _load_track(self, note: Note) -> None:
         try:
             analysis = self.store.analysis(note.activity)
             loaded = analysis, detail_data(analysis, note.activity.sport)
-            self._track_loaded.emit(note.path, loaded, None)
+            self._track_loaded.emit(note.path, note.activity, loaded, None)
         except Exception as error:  # noqa: BLE001 (shown on the page, as before)
-            self._track_loaded.emit(note.path, None, str(error))
+            self._track_loaded.emit(note.path, note.activity, None, str(error))
 
-    def _on_track_loaded(self, path: str, loaded: tuple | None, error: str | None) -> None:
+    def _on_track_loaded(self, path: str, info: act.ActivityInfo, loaded: tuple | None, error: str | None) -> None:
+        if self._loading.get(path) == info:
+            del self._loading[path]
         analysis, data = loaded or (None, None)
-        if analysis is not None and self.current is not None:
-            self._keep_prepared(analysis, self.current.activity.sport, data)
-        if self.current is not None and self.current.path == path and self.stack.currentWidget() is self.detail_page:
-            self._show_detail(self.current, analysis, data, error=error)
+        if analysis is not None:
+            self._keep_prepared(analysis, info.sport, data)
+        # only the page still waiting for this very version: after an edit (another sport) it is another analysis
+        cur = self.current
+        if self._loading_shown == path and cur is not None and cur.path == path and cur.activity == info \
+                and self.stack.currentWidget() is self.detail_page:
+            self._show_detail(cur, analysis, data, error=error)
 
     def _prepared_for(self, analysis: Analysis, sport: Sport) -> DetailData | None:
         hit = self.prepared.get((id(analysis), sport))
@@ -903,6 +925,7 @@ class ActivitiesScreen(QWidget):
 
     def _show_detail(self, note: Note, analysis: Analysis | None, data: DetailData | None = None, loading: bool = False,
                      error: str | None = None) -> None:
+        self._loading_shown = None
         self._park_map()
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
@@ -1086,21 +1109,44 @@ class ActivitiesScreen(QWidget):
         fresh = next((n for n in self.store.scan_activities() if n.path == note.path), note)
         self.open_activity(fresh)
 
+    def _reopen_if_shown(self, note: Note) -> None:
+        """After a job: the page is rebuilt only if it still shows that activity, nobody is pulled back to it."""
+        if self.current is not None and self.current.path == note.path and self.stack.currentWidget() is self.detail_page:
+            self._reopen(note)
+        else:
+            self.changed.emit()
+
+    def _on_disk(self, note: Note) -> Note | None:
+        """The page's note as it is now: a job or a sync may have saved it since the page was built."""
+        fresh = self.store.current(note)
+        if fresh is None:
+            QMessageBox.warning(self, "Activité introuvable", "Cette activité a été supprimée.")
+            self.changed.emit()
+            self.detail_back.emit()
+        return fresh
+
     def _edit(self, note: Note) -> None:
+        if (note := self._on_disk(note)) is None:
+            return
         dialog = EditDialog(self, note, note.activity.file is not None)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         title, description, sport = dialog.title.text(), dialog.description.toPlainText(), dialog.sport.currentData()
+        if (note := self._on_disk(note)) is None:  # a job may have saved it while the dialog was open
+            return
 
         def done(saved, error) -> None:
             if error is not None:
                 QMessageBox.warning(self, "Modification impossible", str(error))
             else:
-                self._reopen(saved)
+                self._reopen_if_shown(saved)
         if note.activity.file and sport != note.activity.sport:
             # another sport is another analysis of the whole track: seconds for a long race
-            self._run("Nouvelle analyse du tracé…", lambda progress: self.store.update_activity(note, title, description, sport), done)
-            return
+            if self._run("Nouvelle analyse du tracé…", lambda progress: self.store.update_activity(note, title, description, sport), done):
+                return
+            QMessageBox.information(self, "Sport inchangé", "Le titre et la description sont enregistrés ; "
+                                    "le sport pourra être changé une fois l'opération en cours terminée.")
+            sport = note.activity.sport  # refused while another job runs: what was typed is still saved
         try:
             saved = self.store.update_activity(note, title, description, sport)
         except Exception as error:  # noqa: BLE001
@@ -1109,6 +1155,8 @@ class ActivitiesScreen(QWidget):
         done(saved, None)
 
     def _delete(self, note: Note) -> None:
+        if (note := self._on_disk(note)) is None:
+            return
         answer = QMessageBox.question(self, "Supprimer cette activité ?",
                                       "Le fichier du tracé et les photos sont supprimés aussi.")
         if answer == QMessageBox.StandardButton.Yes:
@@ -1118,7 +1166,7 @@ class ActivitiesScreen(QWidget):
 
     def _add_photo(self, note: Note) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Ajouter une photo", str(Path.home()), "Images (*.jpg *.jpeg *.png *.gif *.webp *.bmp)")
-        if path:
+        if path and (note := self._on_disk(note)) is not None:
             try:
                 relative = self.store.add_attachment(Path(path))
                 self._reopen(self.store.save(note.copy(attachments=note.attachments + [relative], updated=_now())))
@@ -1126,6 +1174,8 @@ class ActivitiesScreen(QWidget):
                 QMessageBox.warning(self, "Photo impossible", str(error))
 
     def _remove_photo(self, note: Note, path: str) -> None:
+        if (note := self._on_disk(note)) is None:
+            return
         try:
             self.store.file_path(path).unlink()
         except OSError:
@@ -1135,7 +1185,7 @@ class ActivitiesScreen(QWidget):
     def _set_distance(self, note: Note) -> None:
         from PySide6.QtWidgets import QInputDialog
         km, ok = QInputDialog.getDouble(self, "Distance", "Distance (km)", note.activity.distance / 1000, 0, 100000, 2)
-        if ok:
+        if ok and (note := self._on_disk(note)) is not None:
             info = act.ActivityInfo(**{**note.activity.__dict__, "distance": km * 1000})
             self._reopen(self.store.save(note.copy(activity=info, updated=_now())))
 

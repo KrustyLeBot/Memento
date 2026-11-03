@@ -282,3 +282,43 @@ def test_scanning_the_notes_keeps_the_activities_cache(tmp_path):
     store.scan()
     again = store.scan_activities()
     assert len(again) == 1 and again[0] is first[0]
+
+
+def _untimed_walk(tmp_path, name="walk.gpx"):
+    pts = "".join(f'<trkpt lat="{45 + i * 3 / 111320:.7f}" lon="6.0"><time>2024-01-01T10:{i // 60:02d}:{i % 60:02d}Z</time></trkpt>'
+                  for i in range(120))
+    gpx = tmp_path / name
+    gpx.write_text(f'<?xml version="1.0"?><gpx><trk><trkseg>{pts}</trkseg></trk></gpx>', encoding="utf-8")
+    return gpx
+
+
+def test_an_altitude_file_synced_after_the_first_analysis_is_used_on_the_next(tmp_path):
+    from memento_win.core import elevation
+    from memento_win.core.activity import ActivityInfo
+    store = Store(tmp_path / "notes")
+    note = store.import_activity(_untimed_walk(tmp_path), None, None)
+    alt = note.activity.file.rsplit(".", 1)[0] + ".alt"
+    info = ActivityInfo(**{**note.activity.__dict__, "alt": alt})  # listed by the note, not synced yet
+    assert not store.analysis(info).quality.has_altitude
+    track = store.read_track(info)
+    (store.root / alt).write_text(elevation.encode([(track.points[0].time, 100.0), (track.points[-1].time, 160.0)]))
+    assert store.cached_analysis(info) is None
+    assert store.analysis(info).quality.has_altitude
+
+
+def test_a_slow_job_keeps_what_was_edited_meanwhile_and_never_brings_a_deleted_activity_back(tmp_path, monkeypatch):
+    from memento_win.core import elevation
+    from memento_win.core.track import Sport
+    store = Store(tmp_path / "notes")
+    note = store.import_activity(_untimed_walk(tmp_path), None, None)
+    photo = store.add_attachment(_untimed_walk(tmp_path, "photo.gpx"))  # any file stands for a photo
+    store.save(note.copy(attachments=note.attachments + [photo]))  # added while the job ran on `note`
+    monkeypatch.setattr(elevation, "query", lambda samples, progress=None: [(p.time, 100.0 + i) for i, p in enumerate(samples)])
+    saved = store.fetch_altitude(note)
+    assert saved.activity.alt and photo in saved.attachments and saved.activity.alt in saved.attachments
+    changed = store.update_activity(note, "Autre", "", Sport.BIKE)  # `note` is the copy from before both saves
+    assert photo in changed.attachments and changed.activity.sport == Sport.BIKE
+    store.delete(changed)
+    with pytest.raises(OSError):
+        store.fetch_altitude(note)
+    assert store.scan_activities() == [] and not (store.root / saved.activity.alt).exists()

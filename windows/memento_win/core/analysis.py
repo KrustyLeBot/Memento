@@ -178,6 +178,7 @@ def analyze(track: Track, sport: Sport) -> Analysis:
     lon_r = [math.radians(p.lon) for p in kept]
     cos_lat = [math.cos(v) for v in lat_r]
     r2 = (STOP_RADIUS / EARTH_RADIUS) ** 2
+    pi, two_pi = math.pi, 2 * math.pi
     i = 0
     m = 0
     while i < n:
@@ -187,13 +188,22 @@ def analyze(track: Track, sport: Sport) -> Analysis:
             m = i
         while m < n and times[m] - times[i] < STOP_MIN_MS:
             m += 1
-        if m == n or seg[m] != seg[i] or \
-                ((lon_r[m] - lon_r[i]) * cos_lat[i]) ** 2 + (lat_r[m] - lat_r[i]) ** 2 > r2:
+        if m == n or seg[m] != seg[i]:
+            i += 1
+            continue
+        dlon = lon_r[m] - lon_r[i]
+        if dlon > pi or dlon < -pi:  # across the antimeridian: 179.9999 and -179.9999 are 0.0002 degree apart
+            dlon -= two_pi if dlon > 0 else -two_pi
+        if (dlon * cos_lat[i]) ** 2 + (lat_r[m] - lat_r[i]) ** 2 > r2:
             i += 1
             continue
         j = i
-        while j + 1 < n and seg[j + 1] == seg[i] and \
-                ((lon_r[j + 1] - lon_r[i]) * cos_lat[i]) ** 2 + (lat_r[j + 1] - lat_r[i]) ** 2 <= r2:
+        while j + 1 < n and seg[j + 1] == seg[i]:
+            dlon = lon_r[j + 1] - lon_r[i]
+            if dlon > pi or dlon < -pi:
+                dlon -= two_pi if dlon > 0 else -two_pi
+            if (dlon * cos_lat[i]) ** 2 + (lat_r[j + 1] - lat_r[i]) ** 2 > r2:
+                break
             j += 1
         if j > i and times[j] - times[i] >= STOP_MIN_MS:
             for k in range(i, j + 1):

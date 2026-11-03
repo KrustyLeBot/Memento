@@ -134,6 +134,20 @@ class Store:
                 self._cache.pop(stale, None)
         return notes
 
+    def current(self, note: Note) -> Note | None:
+        """The note as it is on disk now (None: deleted): a slow job or a page opened earlier may hold an older copy."""
+        path = self.root / note.path
+        try:
+            mtime = path.stat().st_mtime_ns
+            cached = self._cache.get(note.path)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            fresh = fmt.parse(note.path, path.read_text(encoding="utf-8"), mtime // 1_000_000)
+        except FileNotFoundError:
+            return None
+        self._cache[note.path] = (mtime, fresh)
+        return fresh
+
     def cached(self) -> dict[str, tuple[int, Note]]:
         """The parsed notes and activities kept by scan()/scan_activities(): path -> (mtime_ns, note)."""
         return dict(self._cache)
@@ -251,7 +265,14 @@ class Store:
 
     def _analysis_key(self, info: ActivityInfo) -> tuple:
         st = self.file_path(info.file).stat()
-        return info.file, info.alt, info.sport, st.st_size, st.st_mtime_ns
+        alt = None
+        if info.alt:
+            try:
+                a = self.file_path(info.alt).stat()
+                alt = (a.st_size, a.st_mtime_ns)
+            except OSError:
+                alt = "missing"  # analysed without it: a new key once the .alt file arrives by sync
+        return info.file, info.alt, info.sport, st.st_size, st.st_mtime_ns, alt
 
     def cached_analysis(self, info: ActivityInfo) -> Analysis | None:
         """The analysis when it is in the cache, without computing anything (None also when the file is missing)."""
@@ -354,8 +375,13 @@ class Store:
         filled = elevation.apply(track, alts)
         new_info = ActivityInfo.from_analysis(info.sport, analyze(filled, info.sport), filled, info.file, relative,
                                               untimed_start=info.start)
-        attachments = note.attachments if relative in note.attachments else note.attachments + [relative]
-        return self.save(note.copy(activity=new_info, attachments=attachments, updated=now_ms()))
+        # the lookup takes minutes: what was edited meanwhile (a photo) is kept, a deleted activity is not brought back
+        fresh = self.current(note)
+        if fresh is None:
+            self.file_path(relative).unlink(missing_ok=True)
+            raise OSError("L'activité a été supprimée pendant la recherche")
+        attachments = fresh.attachments if relative in fresh.attachments else fresh.attachments + [relative]
+        return self.save(fresh.copy(activity=new_info, attachments=attachments, updated=now_ms()))
 
     def fill_altitudes(self, notes: list[Note], progress=lambda text: None) -> tuple[int, int, str | None]:
         """Completes the altitude of several activities, one after the other: (done, skipped, failure).
@@ -363,7 +389,8 @@ class Store:
         the first service failure (quota, offline) stops the run."""
         done = skipped = 0
         for i, note in enumerate(notes):
-            info = note.activity
+            note = self.current(note)  # the list was taken minutes ago: edited or deleted since
+            info = note.activity if note is not None else None
             if info is None or not info.file or info.alt or not info.sport.has_gps:
                 skipped += 1
                 continue
@@ -391,7 +418,11 @@ class Store:
                 self._remember_analysis(self._analysis_key(info), analysis)  # the window reopens it right after
             else:
                 info = ActivityInfo(**{**info.__dict__, "sport": sport})
-        return self.save(note.copy(title=title.strip() or note.title, body=description.strip(), activity=info, updated=now_ms()))
+        fresh = self.current(note)  # a new analysis takes seconds: photos added meanwhile stay, a deleted one stays gone
+        if fresh is None:
+            raise OSError("L'activité a été supprimée")
+        return self.save(note.copy(title=title.strip() or note.title, body=description.strip(), activity=info,
+                                   attachments=fresh.attachments, updated=now_ms()))
 
     def referenced_elsewhere(self, note: Note) -> set[str]:
         """Files (scans, attachments) another note still lists: a sync conflict copy shares its original's."""

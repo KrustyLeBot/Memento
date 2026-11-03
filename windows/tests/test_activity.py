@@ -215,3 +215,32 @@ class SportAndElevationTest(unittest.TestCase):
         from memento_win.core import elevation
         with self.assertRaises(elevation.ElevationError):
             elevation.query(leg(None, 100, 5.0)[:3], get=lambda url: '{"error": "quota"}', pause=lambda: None)
+
+
+class ReviewFixesTest(unittest.TestCase):
+    def test_a_stop_across_the_antimeridian_is_found_as_anywhere_else(self):
+        def walk(around: float) -> Track:
+            pts, lon = [], 0.0
+            for s in range(240):
+                if not 60 <= s < 120:  # standing still for a minute, jittering across the meridian
+                    lon += 1.4 / M
+                jitter = 0.000001 if s % 2 else -0.000001
+                pts.append(TrackPoint(T0 + s * 1000, 10.0, (around + lon - 60 * 1.4 / M + jitter + 180) % 360 - 180))
+            return Track(pts)
+        here, wrapped = analysis.analyze(walk(0.0), Sport.WALK), analysis.analyze(walk(180.0), Sport.WALK)
+        self.assertEqual(1, len(here.stops))
+        self.assertEqual(len(here.stops), len(wrapped.stops))
+        self.assertAlmostEqual(here.stats.distance, wrapped.stats.distance, delta=0.01)
+
+    def test_a_session_timestamp_anchors_the_compressed_ones_after_it(self):
+        import struct
+        session_def = bytes([0x40, 0, 0]) + struct.pack("<H", 18) + bytes([2, 253, 4, 0x86, 2, 4, 0x86])
+        session = bytes([0x00]) + struct.pack("<II", 1000, 1000)  # 1000 & 0x1F == 8
+        record_def = bytes([0x41, 0, 0]) + struct.pack("<H", 20) + bytes([2, 0, 4, 0x85, 1, 4, 0x85])
+        records = b"".join(bytes([0x80 | (1 << 5) | offset]) + struct.pack("<ii", 536870912 + offset * 1000, 0)
+                           for offset in (9, 10, 11))
+        body = session_def + session + record_def + records
+        data = bytes([14, 0x10]) + struct.pack("<HI", 2100, len(body)) + b".FIT" + b"\0\0" + body + b"\0\0"
+        epoch = 631_065_600
+        self.assertEqual([(1001 + epoch) * 1000, (1002 + epoch) * 1000, (1003 + epoch) * 1000],
+                         [p.time for p in fit.read(data).points])
