@@ -74,6 +74,8 @@ object TileServer {
         cache = TileCache(root, BROWSING_MAX)
         // inside the browsing cache: the answers count in its 300 MB and go least recently used first
         peaksDir = File(root, PEAKS)
+        MapConfig.demMemory = File(app.filesDir, "tuileries-relief.txt")
+        MapConfig.recallDemMax()
     }
 
     /** A browsing cache in [root] without a Context (tests). */
@@ -360,7 +362,7 @@ object TileServer {
     /** The configured Tuileries' /api/info taken in, for the next page load; a new relief version deletes the cached one (blocking: off the main thread). */
     fun applyInfo(info: TuileriesInfo) {
         MapConfig.attribution = info.attribution
-        MapConfig.demMaxZoom = info.demMaxZoom
+        MapConfig.rememberDemMax(info.demMaxZoom)
         if (!::cache.isInitialized) return
         try {
             if (cache.dropStaleDem(info.demVersion)) Log.i(TAG, "relief version ${info.demVersion}: the cached relief tiles were deleted")

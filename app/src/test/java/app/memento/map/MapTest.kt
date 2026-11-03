@@ -96,6 +96,25 @@ class TilePlanTest {
     }
 
     @Test
+    fun fineReliefFollowsTheCorridorAndComesLast() {
+        val small = MapSquare.of(LON0, LAT0, LON0 + 10_000 / K_LON, LAT0 + 3000 / MapSquare.M_PER_DEG_LAT)
+        val square = TilePlans.squareOnly(small)!!
+        assertEquals(square, square.withFineRelief(13))  // no Tuileries relief beyond z13: nothing more
+        val line = Corridor(listOf(LON0, LON0 + 5_000 / K_LON), listOf(LAT0, LAT0), 1000.0, 15..17)
+        val p = square.copy(corridor = line).withFineRelief(15)
+        assertEquals(14..15, p.demFineZooms)
+        val all = p.groups()
+        val fine = all.filter { it.kind == TileKey.KIND_DEM && it.inCorridor }
+        assertEquals(listOf(14, 15), fine.map { it.z })
+        assertEquals(all.takeLast(2), fine)  // dropped first when over the budget, never the photo
+        // along a 5 km line, far fewer than over the whole square
+        assertTrue(fine.last().count < TilePlans.range(p.square, 15).count)
+        assertTrue(p.estimatedBytes > square.copy(corridor = line).estimatedBytes)
+        // without a corridor (a square small enough for z17), the whole square
+        assertEquals(TilePlans.range(square.square, 14).count, square.withFineRelief(15).demFineTiles(14).size.toLong())
+    }
+
+    @Test
     fun continentSizedRouteIsRefused() {
         assertNull(TilePlans.squareOnly(Bbox(-10.0, 35.0, 30.0, 60.0)))
     }

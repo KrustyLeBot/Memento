@@ -1,5 +1,6 @@
 package app.memento.map
 
+import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.Base64
@@ -194,11 +195,36 @@ object MapConfig {
     @Volatile
     var demMaxZoom: Int = Tuileries.DEM_MAX_ZOOM_DEFAULT
 
+    /**
+     * Where the last relief top zoom is kept, per server (set by [TileServer.init]): offline, /api/info cannot be read,
+     * and the page would fall back to z13 and never draw the finer relief the offline packs hold.
+     */
+    @Volatile
+    var demMemory: File? = null
+
+    fun rememberDemMax(zoom: Int) {
+        demMaxZoom = zoom
+        val t = tuileries ?: return
+        try {
+            demMemory?.writeText("${t.url}\n$zoom")
+        } catch (e: IOException) {
+            // only a convenience for offline use: the next /api/info read sets it again
+        }
+    }
+
+    fun recallDemMax() {
+        val t = tuileries ?: return
+        val lines = try { demMemory?.takeIf { it.isFile }?.readLines() } catch (e: IOException) { null } ?: return
+        if (lines.size >= 2 && lines[0] == t.url) lines[1].toIntOrNull()?.let { demMaxZoom = it.coerceIn(Tuileries.DEM_MAX_ZOOM_RANGE) }
+    }
+
     fun set(source: Tuileries?, photoMax: Int) {
         val t = source?.takeIf { it.configured }
         if (t != tuileries) {
             attribution = ""
             demMaxZoom = Tuileries.DEM_MAX_ZOOM_DEFAULT
+            tuileries = t
+            recallDemMax()
         }
         tuileries = t
         photoMaxZoom = Tuileries.clampPhotoMaxZoom(photoMax)

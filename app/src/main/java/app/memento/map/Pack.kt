@@ -39,6 +39,7 @@ data class Pack(
     /** The tiles this pack downloads. */
     fun plan(): TilePlan =
         TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor, relief, buildings = KIND_BUILDINGS in kinds)
+            .withFineRelief(MapConfig.demMaxZoom)
 
     fun toJson(): String = buildString {
         append('{')

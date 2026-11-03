@@ -133,7 +133,8 @@ object OfflinePacks {
     /** What [route] would download, for the confirmation shown before it starts. CPU work: call it off the main thread. */
     fun planRoute(route: Route): TilePlan {
         if (route.bbox == null) throw PackException("Parcours vide")
-        return TilePlans.forRoute(route, photoMax = MapConfig.photoMaxZoom) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+        val plan = TilePlans.forRoute(route, photoMax = MapConfig.photoMaxZoom) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+        return plan.withFineRelief(MapConfig.demMaxZoom)  // Tuileries' IGN relief to z15 along the track
     }
 
     /**
@@ -193,7 +194,7 @@ object OfflinePacks {
             start(up)
             return up.id
         }
-        val plan = zone.plan(with3d)
+        val plan = zone.plan(with3d).withFineRelief(MapConfig.demMaxZoom)
         val pack = Pack(
             newId("z"), Zones.name(with3d), now, plan.square, plan.orthoZooms.last,
             if (with3d) Zones.KINDS_3D else setOf(Pack.KIND_ORTHO), 0, complete = false, hasRoute = false,
@@ -342,6 +343,13 @@ object OfflinePacks {
                         }
                     }
                 }
+            }
+            if (over.get() && kind == TileKey.KIND_DEM && group.inCorridor) {
+                // the fine relief along the track did not fit: the pack keeps the z13 relief, nothing else is lost
+                File(pdir, "${TileKey.KIND_DEM}/${group.z}").deleteRecursively()
+                bytes.set(pdir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
+                writeManifest(pack.copy(zmax = zmax, corridor = corridor, bytes = bytes.get()))
+                break
             }
             if (over.get()) {
                 if (kind != TileKey.KIND_ORTHO || (!group.inCorridor && group.z <= TilePlans.ORTHO_MIN_Z)) {
