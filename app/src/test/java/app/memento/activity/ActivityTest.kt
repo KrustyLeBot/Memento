@@ -183,6 +183,17 @@ class AnalysisTest {
     }
 
     @Test
+    fun aStopAcrossTheAntimeridianIsStillAStop() {
+        val a = leg(null, 300, 1.4).map { it.copy(lon = 179.99999) }
+        // standing still for 60 s, the fixes alternating either side of +-180 deg, under 2 m apart
+        val b = (1..60).map { s -> TrackPoint(a.last().time + s * 1000L, a.last().lat, if (s % 2 == 0) 179.99999 else -179.99999, 1000.0) }
+        val c = leg(b.last(), 300, 1.4).map { it.copy(lon = -179.99999) }
+        val res = Analyzer.analyze(Track(a + b + c), Sport.WALK)
+        assertEquals(1, res.stops.size)
+        assertTrue("moving time without the stop", abs(res.stats.movingMs - 600_000L) < 12_000)
+    }
+
+    @Test
     fun aManualPauseIsNotCounted() {
         val a = leg(null, 200, 3.0)
         val gap = leg(a.last(), 1800, 0.0, step = 60) // 30 min, one fix a minute

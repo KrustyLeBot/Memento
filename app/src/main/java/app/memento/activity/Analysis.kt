@@ -124,7 +124,10 @@ object Analyzer {
         val cosLat = DoubleArray(n) { cos(latR[it]) }
         val r2 = (STOP_RADIUS / Geo.EARTH_RADIUS).let { it * it }
         fun near(a: Int, b: Int): Boolean {
-            val dx = (lonR[b] - lonR[a]) * cosLat[a]
+            var dl = lonR[b] - lonR[a]
+            // wrapped into [-pi, pi]: two fixes either side of the antimeridian are metres apart, not a world away
+            if (dl > Math.PI) dl -= 2 * Math.PI else if (dl < -Math.PI) dl += 2 * Math.PI
+            val dx = dl * cosLat[a]
             val dy = latR[b] - latR[a]
             return dx * dx + dy * dy <= r2
         }

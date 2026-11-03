@@ -13,6 +13,9 @@ import app.memento.Snack
 import app.memento.record.Recorder
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -33,6 +36,28 @@ class PendingImport(
 /** An opened activity: its note and what the track file says. */
 class ActivityDetail(val note: Note, val track: Track?, val analysis: Analysis?, val error: String? = null) {
     val sport: Sport get() = note.activity?.sport ?: Sport.GPS
+}
+
+/**
+ * The detail to show once an edit of [captured] is saved as [saved], [analysis] being the figures computed from
+ * [captured]'s track. [now] is the detail shown after the save: open() may have loaded the track meanwhile, and that
+ * load is kept (re-analysed when the edit changed the sport). Blocking when it has to analyse.
+ */
+internal fun afterEdit(saved: Note, captured: ActivityDetail?, now: ActivityDetail, analysis: Analysis?): ActivityDetail {
+    val track = now.track ?: return ActivityDetail(saved, null, null, now.error) // still loading: open() finishes it
+    val sport = saved.activity?.sport ?: Sport.GPS
+    val a = when {
+        track === captured?.track -> analysis
+        now.analysis != null && now.sport == sport -> now.analysis
+        else -> Analyzer.analyze(track, sport)
+    }
+    return ActivityDetail(saved, track, a, now.error)
+}
+
+/** What a recording becomes on disk, and the track every later open will read back from it. */
+internal fun asStored(track: Track, sport: Sport): Pair<ByteArray, Track> {
+    val bytes = Fit.write(track, sport, Analyzer.analyze(track, sport).stats.distance)
+    return bytes to Fit.read(bytes)
 }
 
 /** Everything the "Activités" folder does besides drawing: import, open, edit, delete, save a recording. */
@@ -149,20 +174,21 @@ class ActivityController(
         if (replace == null) while (id in ids) id = NoteFormat.generateId()
         val file = "attachments/" + NoteFormat.slug(title) + "-$id.$extension"
         repo.fs.writeBytes(file, bytes)
-        justSaved = Saved(file, track, a, sport)
+        val cache = Saved(file, track, a, sport)
         val info = ActivityInfo.from(sport, a, track, file, altMarker)
         if (replace != null) {
             // the old track and its altitude file go; photos and the description stay
             val old = listOfNotNull(replace.activity?.file, replace.activity?.alt).filter { SafePath.owned(it) }
             repo.deleteOwned(old.filter { it != file }, replace.path)
             return repo.save(replace.copy(title = title, activity = info, attachments = listOf(file) + replace.attachments.filter { it !in old }, updated = now))
+                .also { justSaved = cache }
         }
         return repo.save(
             Note(
                 path = NoteRepository.ACTIVITIES_DIR + "/" + NoteFormat.fileNameFor(title, id), id = id, title = title,
                 created = now, updated = now, activity = info, attachments = listOf(file),
             ),
-        )
+        ).also { justSaved = cache } // only once saved: a failed save must not pin a whole track in memory
     }
 
     /** A time-only activity (treadmill, gym…), possibly with a distance typed by hand. Blocking. */
@@ -229,9 +255,8 @@ class ActivityController(
                             }
                         }
                         stage = "Analyse du tracé (${track.points.size} points)…"
-                        val analysis = Analyzer.analyze(track, rec.sport)
-                        val bytes = Fit.write(track, rec.sport, analysis.stats.distance)
-                        saveNew(track, rec.sport, name, bytes, "fit", null, marker, analysis)
+                        val (bytes, stored) = asStored(track, rec.sport)
+                        saveNew(stored, rec.sport, name, bytes, "fit", null, marker)
                     } else {
                         val seconds = ((end - rec.start - rec.track.pauses.sumOf { it.end - it.start }) / 1000).coerceAtLeast(0)
                         saveManualNow(name, rec.sport, rec.start, seconds, distance ?: 0.0)
@@ -359,7 +384,14 @@ class ActivityController(
     private class Saved(val file: String, val track: Track, val analysis: Analysis, val sport: Sport)
     @Volatile private var justSaved: Saved? = null
 
+    private var openJob: Job? = null
+    /** Bumped by every open() and close(): only the latest open writes [opening] and [detail]. */
+    @Volatile private var openSeq = 0
+
     fun open(note: Note) {
+        openJob?.cancel()
+        val seq = ++openSeq
+        opening = null
         detail = ActivityDetail(note, null, null)
         onOpen?.invoke()
         val info = note.activity ?: return
@@ -371,23 +403,38 @@ class ActivityController(
             detail = ActivityDetail(note, saved.track, saved.analysis)
             return
         }
-        scope.launch {
+        fun progress(s: String?) { if (seq == openSeq) opening = s }
+        progress("Lecture du tracé…")
+        openJob = scope.launch {
             val loaded = withContext(io) {
                 try {
-                    opening = "Lecture du tracé…"
                     val bytes = repo.fs.readBytes(file) ?: throw java.io.IOException("Fichier introuvable (pas encore synchronisé ?)")
                     var track = if (Fit.looksLikeFit(bytes)) Fit.read(bytes) else Gpx.read(String(bytes, Charsets.UTF_8))
                     info.alt?.takeIf { it.startsWith("attachments/") }?.let { alt ->
                         if (Elevation.missing(track)) repo.fs.readText(alt)?.let { track = Elevation.apply(track, Elevation.parse(it)) }
                     }
-                    opening = "Analyse du tracé (${track.points.size} points)…"
+                    ensureActive() // superseded by another open: skip the expensive part
+                    progress("Analyse du tracé (${track.points.size} points)…")
                     ActivityDetail(note, track, Analyzer.analyze(track, info.sport))
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     ActivityDetail(note, null, null, e.message ?: "Lecture impossible")
                 }
             }
-            opening = null
-            if (detail?.note?.path == note.path) detail = loaded
+            if (seq != openSeq) return@launch
+            // an edit saved while loading wins: keep its note, and its sport's figures
+            val shown = detail?.takeIf { it.note.path == note.path }
+            val sportNow = shown?.note?.activity?.sport ?: info.sport
+            val track = loaded.track
+            val result = if (track != null && sportNow != info.sport) {
+                val a = withContext(io) { Analyzer.analyze(track, sportNow) }
+                ActivityDetail(loaded.note, track, a, loaded.error)
+            } else loaded
+            progress(null)
+            if (seq != openSeq) return@launch
+            val now = detail?.takeIf { it.note.path == note.path } ?: return@launch
+            detail = ActivityDetail(now.note, result.track, result.analysis, result.error)
         }
     }
 
@@ -395,7 +442,12 @@ class ActivityController(
     var opening by mutableStateOf<String?>(null)
         private set
 
-    fun close() { detail = null }
+    fun close() {
+        openJob?.cancel()
+        openSeq++
+        opening = null
+        detail = null
+    }
 
     /** Title, description and sport; a new sport recomputes the figures from the track. */
     fun update(note: Note, title: String, description: String, sport: Sport) {
@@ -413,7 +465,9 @@ class ActivityController(
                 }
                 repo.save(note.copy(title = title.trim().ifEmpty { note.title }, body = description.trim(), activity = info, updated = System.currentTimeMillis())) to analysis
             }
-            detail = ActivityDetail(saved, current?.track, analysis, current?.error)
+            val now = detail?.takeIf { it.note.path == note.path } ?: return@launch
+            val next = withContext(io) { afterEdit(saved, current, now, analysis) }
+            if (detail?.note?.path == note.path) detail = next
         }
     }
 

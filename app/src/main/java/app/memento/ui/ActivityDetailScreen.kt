@@ -111,7 +111,7 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                 ) {
                     CircularProgressIndicator()
                     // a long track takes seconds on a modest phone: say what is going on rather than spin silently
-                    (vm.activities.opening ?: vm.activities.stage)?.let {
+                    vm.activities.opening?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
