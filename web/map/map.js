@@ -1058,10 +1058,12 @@
     mergeSoon();
     enqueueColouring(key);
   }
-  /** The host's compact cell (README): rings of microdegree deltas from the cell's corner, unclosed. */
+  /** The host's compact cell (README): rings of microdegree deltas from the cell's corner, unclosed. A v2 cell
+   *  (Tuileries) also has each roof's colour, `c` (0xRRGGBB + 1, 0 = none), used as is: no photo sampling then. */
   function decodeCell(doc, key) {
-    const [ox, oy] = doc.o, items = [];
-    for (const b of doc.b || []) {
+    const [ox, oy] = doc.o, items = [], pre = doc.v === 2 && Array.isArray(doc.c);
+    for (let j = 0; j < (doc.b || []).length; j++) {
+      const b = doc.b[j];
       const rings = [];
       let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
       for (let r = 1; r < b.length; r++) {
@@ -1082,10 +1084,12 @@
       const kx = 111320 * Math.cos(s * Math.PI / 180), area = (e - w) * kx * (n - s) * 110540;
       if (area < 4) continue;
       const geom = area < 30 && rings[0].length > 5 ? [ring([w, s, e, n])] : rings;
-      items.push({ id: bld.nextId++, h: b[0], rings: geom, box: [w, s, e, n] });
+      items.push({ id: bld.nextId++, h: b[0], rings: geom, box: [w, s, e, n], c: pre ? (doc.c[j] >>> 0) : 0 });
     }
+    bld.cells.get(key).pre = pre;
     const known = bld.colours.get(key);
-    if (!known || known.length !== items.length) bld.colours.set(key, new Uint32Array(items.length));
+    if (pre) bld.colours.set(key, Uint32Array.from(items, (it) => it.c));
+    else if (!known || known.length !== items.length) bld.colours.set(key, new Uint32Array(items.length));
     return items;
   }
   function mergeSoon() {
@@ -1117,8 +1121,8 @@
   // ---- roof colours ----
 
   function enqueueColouring(key) {
-    const colours = bld.colours.get(key);
-    if (!colours || colours.every((v) => v !== 0) || bld.queue.includes(key)) return;
+    const colours = bld.colours.get(key), cell = bld.cells.get(key);
+    if (!colours || (cell && cell.pre) || colours.every((v) => v !== 0) || bld.queue.includes(key)) return;
     bld.queue.push(key);
     if (!bld.colouring) nextColouring();
   }
@@ -1149,8 +1153,9 @@
     const jobs = [];
     for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
       jobs.push(fetch(`${BASE}t/ortho/${BLD_SAMPLE_Z}/${tx}/${ty}`)
-        // only the photo: where IGN has none, the host answers OpenStreetMap's drawn map (a PNG), no roof colour
-        .then((r) => (r.ok && /jpeg/.test(r.headers.get('content-type') || '') ? r.blob() : null))
+        // only the photo (JPEG from IGN, WebP or AVIF from Tuileries): where there is none, the host answers
+        // OpenStreetMap's drawn map (a PNG), no roof colour
+        .then((r) => (r.ok && /jpeg|webp|avif/.test(r.headers.get('content-type') || '') ? r.blob() : null))
         .then((b) => (b ? createImageBitmap(b) : null))
         .then((bmp) => { if (bmp) { ctx.drawImage(bmp, (tx - tx0) * 256, (ty - ty0) * 256, 256, 256); bmp.close(); } })
         .catch(() => {}));  // a missing tile leaves its roofs neutral

@@ -55,7 +55,7 @@ class MapPageContractTest {
         assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${BLD_SAMPLE_Z}/\${tx}/\${ty}`)"))
         assertEquals(TileKey("ortho", 17, 68012, 46818), TileKey.parse("/t/ortho/17/68012/46818"))
         // the compact cell format the page decodes
-        for (field in listOf("doc.o", "doc.b")) assertTrue(field, page.contains(field))
+        for (field in listOf("doc.o", "doc.b", "doc.c", "doc.v === 2")) assertTrue(field, page.contains(field))
     }
 
     @Test
