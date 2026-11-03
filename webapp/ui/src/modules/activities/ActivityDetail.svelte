@@ -31,6 +31,11 @@
   let analysis = null;
   let analysisError = '';
   let analysing = false;
+  /** the server said the analysis takes long (a very long track): say so */
+  let slow = false;
+  // a multi-day race stops hundreds of times: the first ones, the rest on demand
+  const STOPS_SHOWN = 30;
+  let allStops = false;
   let loadedKey = /** @type {string | null | undefined} */ (undefined);
   let editing = false;
   let saving = false;
@@ -76,8 +81,18 @@
     const controller = new AbortController();
     pending = controller;
     analysing = true;
+    slow = false;
+    allStops = false;
     try {
-      analysis = await api.analysis(id, controller.signal);
+      let result = await api.analysis(id, controller.signal);
+      // a very long track on a slow server: the analysis goes on there, asked again until it is ready
+      while (result?.pending) {
+        slow = true;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (controller.signal.aborted) return;
+        result = await api.analysis(id, controller.signal);
+      }
+      analysis = result;
       dispatch('analysis', analysis);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -277,7 +292,9 @@
         <div class="grid">
           {#each items as [label, value]}<div class="stat"><span class="label">{label}</span><span class="value">{value}</span></div>{/each}
         </div>
-        {#if analysing}<p class="muted small">Lecture du tracé…</p>{/if}
+        {#if analysing}<p class="muted small" aria-live="polite">{slow
+          ? 'Analyse du tracé en cours sur le serveur (une très longue activité peut prendre une minute)…'
+          : 'Lecture du tracé…'}</p>{/if}
       </section>
 
       {#if stats && ski}
@@ -353,13 +370,16 @@
         <section class="card">
           <h2>Pauses et arrêts</h2>
           <ul class="list">
-            {#each analysis.stops as s}
+            {#each allStops ? analysis.stops : analysis.stops.slice(0, STOPS_SHOWN) as s}
               <li on:mouseenter={() => point(s)} on:mouseleave={() => point(null)}>
                 <span>{s.manual ? 'Pause' : 'Arrêt détecté'}</span>
                 <span class="muted">{fmtDuration(s.duration)} · {fmtHour(s.start)}</span>
               </li>
             {/each}
           </ul>
+          {#if !allStops && analysis.stops.length > STOPS_SHOWN}
+            <button class="btn tonal more" on:click={() => (allStops = true)}>Afficher les {analysis.stops.length - STOPS_SHOWN} autres</button>
+          {/if}
         </section>
       {/if}
 
@@ -443,6 +463,7 @@
   .files { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-direction: column; gap: 4px; }
   .files li { display: flex; align-items: center; gap: 6px; }
   .wide { align-self: flex-start; }
+  .more { margin-top: 8px; }
   .error { color: var(--error); margin: 0; }
   .badge { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: var(--error-container); color: var(--on-error-container); margin-left: 6px; }
   @media (max-width: 719px) { .wide-only { display: none; } }

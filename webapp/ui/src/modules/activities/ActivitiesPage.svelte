@@ -55,9 +55,19 @@
     else pane.show({ track: { coords: mapData.lon.map((/** @type {number} */ lon, /** @type {number} */ i) => [lon, mapData.lat[i]]), speeds: mapData.speeds, avg: mapData.avg }, dots: mapData.dots });
   }
 
-  /** @param {{ lon: number, lat: number } | null} at */
+  /** @type {{ lon: number, lat: number } | null | undefined} the cursor to send at the next frame */
+  let nextCursor;
+  let cursorFrame = 0;
+  /** At most one move a frame: a fast mouse fires several pointer events per frame, and each one redraws the map,
+   * which shares this page's main thread. @param {{ lon: number, lat: number } | null} at */
   function cursor(at) {
-    if (pane && mapData) pane.call('setCursor', at ? at.lon : null, at ? at.lat : null);
+    nextCursor = at;
+    if (cursorFrame) return;
+    cursorFrame = requestAnimationFrame(() => {
+      cursorFrame = 0;
+      const to = nextCursor;
+      if (pane && mapData) pane.call('setCursor', to ? to.lon : null, to ? to.lat : null);
+    });
   }
 
   function changeSkiMode() {

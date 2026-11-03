@@ -1,7 +1,7 @@
 // @ts-check
 // The Activités endpoints (server: memento_web/modules/activities.py). Photos go through the notes' attachment
 // endpoints: an activity is a note of activities/.
-import { lists, request } from '../../lib/api.js';
+import { lists, request, sendFile } from '../../lib/api.js';
 
 /** @typedef {import('./activities.js').ActivitySummary} ActivitySummary */
 /** @typedef {ActivitySummary & { description: string, file: string | null, alt: string | null, photos: string[],
@@ -31,8 +31,8 @@ export const activities = {
   /** @returns {Promise<{ undo: string }>} */
   remove: (/** @type {string} */ id, /** @type {string} */ version) => request('DELETE', `/api/activities/${key(id)}`, { version }),
   /** @returns {Promise<Staged>} */
-  upload: (/** @type {File} */ file) => request('POST', `/api/activities/uploads?${new URLSearchParams({ name: file.name })}`,
-    { body: file, headers: { 'Content-Type': 'application/octet-stream' } }),
+  upload: (/** @type {File} */ file, /** @type {((fraction: number, stage: 'pack' | 'send' | 'wait') => void) | undefined} */ onProgress = undefined) =>
+    sendFile(`/api/activities/uploads?${new URLSearchParams({ name: file.name })}`, file, { gzip: true, onProgress }),
   /** @returns {Promise<Job>} */
   importStaged: (/** @type {{ token: string, name: string, title: string, sport: string, altitude: boolean }[]} */ items) =>
     request('POST', '/api/activities/imports', { json: { items } }),

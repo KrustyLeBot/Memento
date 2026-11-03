@@ -50,7 +50,11 @@ export async function request(method, path, options = {}) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiError(0, 'Serveur injoignable : vérifiez la connexion.', null);
   }
-  const text = await response.text();
+  return answer(method, path, response.status, await response.text());
+}
+
+/** The common end of `request` and `sendFile`: the parsed body, or the ApiError. */
+function answer(/** @type {string} */ method, /** @type {string} */ path, /** @type {number} */ status, /** @type {string} */ text) {
   let data = null;
   try {
     data = text ? JSON.parse(text) : null;
@@ -58,12 +62,60 @@ export async function request(method, path, options = {}) {
     data = null;
   }
   if (method !== 'GET' && !READ_ONLY.some((p) => path.startsWith(p))) lists.forget();
-  if (!response.ok) {
-    if (response.status === 401 && path !== '/api/login') session.set(null);
-    const message = (data && data.error) || `Erreur ${response.status}${text && !data ? ` : ${text.slice(0, 200)}` : ''}`;
-    throw new ApiError(response.status, message, data);
+  if (status < 200 || status >= 300) {
+    if (status === 401 && path !== '/api/login') session.set(null);
+    const message = (data && data.error) || `Erreur ${status}${text && !data ? ` : ${text.slice(0, 200)}` : ''}`;
+    throw new ApiError(status, message, data);
   }
   return data;
+}
+
+/** gzip in the browser (a FIT shrinks 3 times, a GPX 5 to 8): far less to send over a home connection's upload.
+ * Null when the browser cannot, or the result is no smaller. @param {Blob} file @returns {Promise<Blob | null>} */
+export async function gzipped(file) {
+  if (typeof CompressionStream !== 'function') return null;
+  try {
+    const packed = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    return packed.size < file.size ? packed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POSTs a file as the request body, reporting the upload's progress (fetch cannot), gzipped first when `gzip`
+ * (only for endpoints that accept `Content-Encoding: gzip`).
+ * @param {string} path @param {File} file
+ * @param {{ gzip?: boolean, onProgress?: (fraction: number, stage: 'pack' | 'send' | 'wait') => void }} [options]
+ * @returns {Promise<any>}
+ */
+export async function sendFile(path, file, options = {}) {
+  const progress = options.onProgress || (() => {});
+  /** @type {Blob} */
+  let body = file;
+  /** @type {Record<string, string>} */
+  const headers = { Accept: 'application/json', 'Content-Type': 'application/octet-stream', 'X-Memento': '1' };
+  if (options.gzip) {
+    progress(0, 'pack');
+    const packed = await gzipped(file);
+    if (packed) {
+      body = packed;
+      headers['Content-Encoding'] = 'gzip';
+    }
+  }
+  progress(0, 'send');
+  const { status, text } = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress(e.loaded / e.total, 'send'); };
+    // the bytes are all sent: the server reads the file now (seconds for a long race)
+    xhr.upload.onload = () => progress(1, 'wait');
+    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+    xhr.onerror = () => reject(new ApiError(0, 'Serveur injoignable : vérifiez la connexion.', null));
+    xhr.send(body);
+  });
+  return answer('POST', path, status, text);
 }
 
 /** The root lists' cache: `lists.get(path, area, { signal, onFresh })`, `lists.prefetch(path, area)`. */

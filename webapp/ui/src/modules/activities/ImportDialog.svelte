@@ -19,16 +19,23 @@
   let sent = 0;
   let uploading = true;
   let busy = false;
+  /** the file being sent: its share sent (0..1) and what is happening to it */
+  let current = { name: '', fraction: 0, stage: 'pack' };
+
+  const STAGES = /** @type {Record<string, string>} */ ({ pack: 'Préparation', send: 'Envoi', wait: 'Lecture par le serveur' });
+  $: overall = files.length ? (sent + (current.stage === 'wait' ? 1 : current.fraction * 0.9)) / files.length : 0;
 
   onMount(async () => {
     for (const file of files) {
+      current = { name: file.name, fraction: 0, stage: 'pack' };
       try {
-        const staged = await api.upload(file);
+        const staged = await api.upload(file, (fraction, stage) => { current = { name: file.name, fraction, stage }; });
         items = [...items, { staged, title: staged.title, sport: GPS_SPORTS.includes(staged.sport) ? staged.sport : 'gps', altitude: false }];
       } catch (error) {
         failed = [...failed, { name: file.name, error: error instanceof Error ? error.message : String(error) }];
       }
       sent += 1;
+      current = { name: '', fraction: 0, stage: 'pack' };
     }
     uploading = false;
   });
@@ -50,8 +57,11 @@
 
 <Modal title={files.length > 1 ? `Importer ${files.length} activités` : 'Importer l\'activité'} wide on:close={() => !busy && dispatch('close')}>
   {#if uploading}
-    <p class="muted">Envoi des fichiers… {sent}/{files.length}</p>
-    <div class="track"><div class="fill" style="width: {Math.round((100 * sent) / files.length)}%"></div></div>
+    <p class="muted status" aria-live="polite">
+      {#if files.length > 1}Fichier {Math.min(sent + 1, files.length)}/{files.length} · {/if}{current.name}
+      <br />{STAGES[current.stage]}{current.stage === 'send' ? ` · ${Math.round(current.fraction * 100)} %` : '…'}
+    </p>
+    <div class="track"><div class="fill" style="width: {Math.round(100 * overall)}%"></div></div>
   {/if}
   {#each failed as f}
     <p class="error">{f.error}</p>
@@ -100,6 +110,7 @@
   :global(:root[data-theme="dark"]) .warn { color: #FFC266; }
   .error { color: var(--error); margin: 4px 0; }
   .small { font-size: 13px; }
+  .status { margin: 0 0 8px; word-break: break-all; font-variant-numeric: tabular-nums; }
   .track { height: 4px; border-radius: 2px; background: rgba(128, 128, 128, 0.3); overflow: hidden; margin-bottom: 12px; }
   .fill { height: 100%; background: var(--primary); transition: width 0.3s; }
   @media (max-width: 600px) { .fields { grid-template-columns: 1fr; } }
