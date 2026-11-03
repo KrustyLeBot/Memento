@@ -152,7 +152,7 @@ private val Climb = Color(0xFF00B0FF)
 fun mapLines(a: Analysis, ski: Boolean, mode: SkiMap = SkiMap.BOTH): List<MapLine> {
     val s = a.samples
     if (s.size < 2) return emptyList()
-    val sorted = s.map { it.speed }.sorted()
+    val sorted = DoubleArray(s.size) { s[it].speed }.also { it.sort() }
     val top = sorted[(sorted.size * 0.9).toInt().coerceAtMost(sorted.size - 1)].coerceAtLeast(0.5)
     val maxGap = (a.quality.medianIntervalSec * 6).coerceAtLeast(30.0) * 1000
     // 0 = descent (or any point of a non-ski activity), 1 = climb, 2 = the rest of a ski day

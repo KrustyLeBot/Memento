@@ -52,6 +52,8 @@ data class Stats(
     val runLongest: Double,
     val climbs: Int = 0,
     val climbGain: Double = 0.0,
+    /** Lowest heart rate of the samples (the chart's low label), null without any. */
+    val hrMin: Int? = null,
 ) {
     val avgSpeed: Double get() = if (movingMs > 0) distance / (movingMs / 1000.0) else 0.0
 }
@@ -270,11 +272,13 @@ object Analyzer {
         var hrCount = 0
         var hrSum = 0L
         var hrMax = Int.MIN_VALUE
+        var hrMin = Int.MAX_VALUE
         for (p in kept) {
             val h = p.hr ?: continue
             hrCount++
             hrSum += h
             if (h > hrMax) hrMax = h
+            if (h < hrMin) hrMin = h
         }
         val elapsed = if (n >= 2) t[n - 1] - t[0] else (track.sessionElapsedMs ?: 0L)
         val intervals = DoubleArray(maxOf(n - 1, 0)) { (t[it + 1] - t[it]) / 1000.0 }.also { it.sort() }
@@ -294,6 +298,7 @@ object Analyzer {
             runLongest = runs.maxOfOrNull { it.distance } ?: 0.0,
             climbs = climbs.size,
             climbGain = climbs.sumOf { it.gain },
+            hrMin = if (hrCount > 0) hrMin else null,
         )
         val quality = Quality(
             points = total, dropped = total - n, hasAltitude = hasAlt, hasHr = hrCount > 0 || track.hrAvg != null,

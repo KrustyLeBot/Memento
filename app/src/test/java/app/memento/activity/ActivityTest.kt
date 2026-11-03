@@ -266,6 +266,8 @@ class AnalysisTest {
         assertEquals(5.0, res.quality.medianIntervalSec, 0.01)
         assertTrue(res.quality.hasHr)
         assertEquals(140, res.stats.hrAvg)
+        assertEquals(140, res.stats.hrMin)
+        assertNull(Analyzer.analyze(Track(leg(null, 100, 2.0, step = 5)), Sport.WALK).stats.hrMin)
     }
 }
 

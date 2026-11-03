@@ -54,8 +54,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import app.memento.MainViewModel
 import app.memento.activity.ActivityDetail
+import app.memento.activity.Analysis
 import app.memento.activity.Fmt
 import app.memento.activity.Sport
+import app.memento.activity.Stop
 import app.memento.isImage
 import app.memento.suite.ConfirmDialog
 import app.memento.suite.SuiteTopBar
@@ -104,7 +106,15 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
 
             when {
                 detail.error != null -> Section("Fichier") { Text(detail.error, color = MaterialTheme.colorScheme.error) }
-                info?.file != null && analysis == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                info?.file != null && analysis == null -> Column(
+                    Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator()
+                    // a long track takes seconds on a modest phone: say what is going on rather than spin silently
+                    (vm.activities.opening ?: vm.activities.stage)?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
 
             if (analysis != null && hasMap) {
@@ -173,10 +183,10 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
             }
 
             if (analysis != null) {
-                val stops = (analysis.pauses + analysis.stops).sortedBy { it.start }
-                if (stops.isNotEmpty()) {
+                val series = remember(analysis, detail.sport) { DetailSeries(analysis, detail.sport == Sport.WALK) }
+                if (series.stops.isNotEmpty()) {
                     Section("Pauses et arrêts") {
-                        stops.forEach { s ->
+                        series.stops.forEach { s ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(if (s.manual) "Pause" else "Arrêt détecté")
                                 Text("${Fmt.duration(s.durationMs / 1000)} · ${formatHour(s.start)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -185,42 +195,26 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                     }
                 }
 
-                val idx = remember(analysis) { thin(analysis.samples.size) }
-                if (analysis.quality.hasAltitude && idx.size >= 2) {
-                    val alts = idx.map { analysis.samples[it].alt }
-                    if (alts.all { it != null }) {
-                        ProfileChart(
-                            "Altitude", DoubleArray(idx.size) { analysis.samples[idx[it]].dist }, DoubleArray(idx.size) { alts[it]!! },
-                            "${Math.round(analysis.stats.minAlt ?: 0.0)} m", "${Math.round(analysis.stats.maxAlt ?: 0.0)} m", MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
+                series.alt?.let { (xs, ys) ->
+                    ProfileChart(
+                        "Altitude", xs, ys,
+                        "${Math.round(analysis.stats.minAlt ?: 0.0)} m", "${Math.round(analysis.stats.maxAlt ?: 0.0)} m", MaterialTheme.colorScheme.tertiary,
+                    )
                 }
-                if (idx.size >= 2 && analysis.stats.maxSpeed > 0) {
-                    val xs = DoubleArray(idx.size) { analysis.samples[idx[it]].dist }
+                series.speed?.let { (xs, ys) ->
                     if (detail.sport == Sport.WALK) {
-                        // Pace drawn upside down (minus seconds per km): faster stays higher, like a speed curve.
-                        val pace = DoubleArray(idx.size) { -Fmt.chartPace(analysis.samples[idx[it]].speed) }
-                        val slowest = -(pace.minOrNull() ?: 0.0)
-                        val fastest = -(pace.maxOrNull() ?: 0.0)
+                        val slowest = -(ys.minOrNull() ?: 0.0)
+                        val fastest = -(ys.maxOrNull() ?: 0.0)
                         ProfileChart(
-                            "Allure", xs, pace, Fmt.pace(1000 / slowest), Fmt.pace(1000 / fastest), MaterialTheme.colorScheme.primary,
+                            "Allure", xs, ys, Fmt.pace(1000 / slowest), Fmt.pace(1000 / fastest), MaterialTheme.colorScheme.primary,
                             lowPrefix = "plus lente", highPrefix = "plus rapide",
                         )
                     } else {
-                        ProfileChart(
-                            "Vitesse", xs, DoubleArray(idx.size) { analysis.samples[idx[it]].speed * 3.6 },
-                            "0 km/h", Fmt.speed(analysis.stats.maxSpeed), MaterialTheme.colorScheme.primary,
-                        )
+                        ProfileChart("Vitesse", xs, ys, "0 km/h", Fmt.speed(analysis.stats.maxSpeed), MaterialTheme.colorScheme.primary)
                     }
                 }
-                if (analysis.quality.hasHr) {
-                    val hrIdx = idx.filter { analysis.samples[it].hr != null }
-                    if (hrIdx.size >= 2) {
-                        ProfileChart(
-                            "Fréquence cardiaque", DoubleArray(hrIdx.size) { analysis.samples[hrIdx[it]].dist }, DoubleArray(hrIdx.size) { analysis.samples[hrIdx[it]].hr!!.toDouble() },
-                            "${analysis.samples.mapNotNull { it.hr }.minOrNull() ?: 0} bpm", "${analysis.stats.hrMax ?: 0} bpm", Color(0xFFFF1744),
-                        )
-                    }
+                series.hr?.let { (xs, ys) ->
+                    ProfileChart("Fréquence cardiaque", xs, ys, "${analysis.stats.hrMin ?: 0} bpm", "${analysis.stats.hrMax ?: 0} bpm", Color(0xFFFF1744))
                 }
             }
 
@@ -301,6 +295,31 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
             },
             dismissButton = { TextButton(onClick = { distanceDialog = false }) { Text("Annuler") } },
         )
+    }
+}
+
+/**
+ * What the screen draws from an analysis, built once per analysis: on a 200 000-sample track, rebuilding it at every
+ * recomposition (a dialog, a chip, the relief progress) walked every sample on the main thread.
+ */
+private class DetailSeries(a: Analysis, walk: Boolean) {
+    val stops: List<Stop> = (a.pauses + a.stops).sortedBy { it.start }
+    /** Distance → altitude, null when the track has none (or not everywhere). */
+    val alt: Pair<DoubleArray, DoubleArray>?
+    /** Distance → speed in km/h, or upside-down pace for walking (minus seconds per km: faster stays higher). */
+    val speed: Pair<DoubleArray, DoubleArray>?
+    val hr: Pair<DoubleArray, DoubleArray>?
+
+    init {
+        val s = a.samples
+        val idx = thin(s.size)
+        val xs = DoubleArray(idx.size) { s[idx[it]].dist }
+        alt = if (a.quality.hasAltitude && idx.size >= 2 && idx.all { s[it].alt != null }) xs to DoubleArray(idx.size) { s[idx[it]].alt!! } else null
+        speed = if (idx.size >= 2 && a.stats.maxSpeed > 0) {
+            xs to DoubleArray(idx.size) { if (walk) -Fmt.chartPace(s[idx[it]].speed) else s[idx[it]].speed * 3.6 }
+        } else null
+        val hrIdx = if (a.quality.hasHr) idx.filter { s[it].hr != null } else emptyList()
+        hr = if (hrIdx.size >= 2) DoubleArray(hrIdx.size) { s[hrIdx[it]].dist } to DoubleArray(hrIdx.size) { s[hrIdx[it]].hr!!.toDouble() } else null
     }
 }
 

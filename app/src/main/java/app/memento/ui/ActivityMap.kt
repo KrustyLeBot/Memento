@@ -49,7 +49,9 @@ fun ActivityMapContent(detail: ActivityDetail, skiMap: SkiMap) {
     val analysis = detail.analysis ?: return
     if (analysis.samples.size < 2) return
     val ski = detail.sport == Sport.SKI
-    val key = listOf(detail.note.path, detail.note.updated, ski, skiMap, analysis.samples.size)
+    // what the drawing depends on, not the note's date: a rename or a photo must not resend a 200 000-point track
+    val info = detail.note.activity
+    val key = listOf(detail.note.path, info?.file, info?.alt, ski, skiMap, analysis.samples.size, analysis.stats.avgSpeed)
     LaunchedEffect(key) {
         if (MapHost.session == key) return@LaunchedEffect // recreated screen (rotation): the page already shows it
         val data = withContext(Dispatchers.Default) {
