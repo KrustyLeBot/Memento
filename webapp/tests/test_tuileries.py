@@ -107,12 +107,31 @@ def test_status_line_reads_api_info(tiles_client, net):
                                                             b'{"name":"Tuileries","version":"0.1.0","max_zoom":17,"layers":["ortho"]}')
     assert tiles_client.get("/api/map/tiles").json() == {
         "source": "tuileries", "url": "https://tuileries.example.org/", "name": "Tuileries", "version": "0.1.0", "max_zoom": 17,
-        "attribution": ""}
+        "attribution": "", "dem_version": 1, "dem_max_zoom": 13}
     net.answers["https://tuileries.example.org/api/info"] = (401, "text/plain", b"")
     calls = len(net.calls)
     assert tiles_client.get("/api/map/tiles").json()["version"] == "0.1.0"  # a good answer is kept a while...
     assert len(net.calls) == calls
     assert "mot de passe" in tiles_client.get("/api/map/tiles?fresh=1").json()["error"]  # ...but not for the test
+
+
+def test_a_new_relief_version_drops_the_cached_relief(tiles_client, net, folders):
+    tiles = folders[1] / "tiles"
+    net.answers["https://tuileries.example.org/t/dem/"] = (200, "image/png", b"\x89PNG terrarium")
+    assert tiles_client.get("/t/dem/13/4235/2917").content == b"\x89PNG terrarium"
+    net.answers["https://tuileries.example.org/api/info"] = (200, "application/json", b'{"version":"0.1.0"}')
+    assert tiles_client.get("/api/map/tiles").json()["dem_max_zoom"] == 13
+    assert (tiles / "dem" / "13" / "4235" / "2917.png").is_file()  # an older server: the same relief, kept
+    net.answers["https://tuileries.example.org/api/info"] = (200, "application/json",
+                                                            b'{"version":"0.2.0","dem":{"version":2,"max_zoom":15}}')
+    status = tiles_client.get("/api/map/tiles?fresh=1").json()
+    assert (status["dem_version"], status["dem_max_zoom"]) == (2, 15)
+    assert not (tiles / "dem").exists() and (tiles / "dem-version.txt").read_text() == "2"
+    net.answers["https://tuileries.example.org/t/dem/"] = (200, "image/png", b"\x89PNG lidar")
+    assert tiles_client.get("/t/dem/13/4235/2917").content == b"\x89PNG lidar"  # asked again, from the new relief
+    assert tiles_client.get("/t/dem/15/16941/11670").content == b"\x89PNG lidar"
+    tiles_client.get("/api/map/tiles?fresh=1")
+    assert (tiles / "dem" / "15" / "16941" / "11670.png").is_file()  # same version: kept
 
 
 def test_trails_through_tuileries(tiles_client, net, folders):

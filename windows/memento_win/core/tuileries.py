@@ -19,6 +19,9 @@ from . import buildings, mapcache
 PHOTO_MAX_ZOOM_DEFAULT = 17
 PHOTO_MAX_ZOOM_RANGE = (14, 19)  # 19: IGN's top level, also the page's former fixed maxzoom
 INFO_TIMEOUT = 10
+DEM_VERSION_DEFAULT = 1  # a server without `dem` in its /api/info: the AWS Terrarium relief
+DEM_MAX_ZOOM_DEFAULT = 13
+DEM_MAX_ZOOM_RANGE = (13, 15)  # the map page's own clamp of `demmax`
 
 
 class TuileriesError(Exception):
@@ -149,6 +152,8 @@ class Info:
     max_zoom: int | None
     layers: tuple[str, ...]
     attribution: str = ""  # the server's own credit (the photo abroad), shown on the map
+    dem_version: int = DEM_VERSION_DEFAULT  # a new version replaces the relief: the cached dem tiles are dropped
+    dem_max_zoom: int = DEM_MAX_ZOOM_DEFAULT
 
     def summary(self) -> str:
         zoom = f", zoom max {self.max_zoom}" if self.max_zoom is not None else ""
@@ -166,7 +171,16 @@ def parse_info(data: bytes) -> Info:
     layers = doc.get("layers") if isinstance(doc.get("layers"), list) else []
     return Info(str(doc.get("name") or "Tuileries"), doc["version"],
                 zoom if isinstance(zoom, int) and not isinstance(zoom, bool) else None,
-                tuple(str(v) for v in layers), _attribution(doc))
+                tuple(str(v) for v in layers), _attribution(doc), *_dem(doc))
+
+
+def _dem(doc: dict) -> tuple[int, int]:
+    """(version, top zoom) of the server's relief, `{"version": 1, "max_zoom": 13}` when it does not say."""
+    dem = doc.get("dem") if isinstance(doc.get("dem"), dict) else {}
+    version, zoom = dem.get("version"), dem.get("max_zoom")
+    is_int = lambda v: isinstance(v, int) and not isinstance(v, bool)  # noqa: E731
+    return (version if is_int(version) else DEM_VERSION_DEFAULT,
+            min(max(zoom, DEM_MAX_ZOOM_RANGE[0]), DEM_MAX_ZOOM_RANGE[1]) if is_int(zoom) else DEM_MAX_ZOOM_DEFAULT)
 
 
 def _attribution(doc: dict) -> str:

@@ -102,6 +102,7 @@ class TileStore:
         self._locks_guard = threading.Lock()
         self._written = 0
         self._purge_lock = threading.Lock()
+        self._dem_lock = threading.Lock()
         for kind in mapcache.OLD_KINDS:
             shutil.rmtree(root / kind, ignore_errors=True)
 
@@ -347,7 +348,7 @@ class TileStore:
 
     def info(self, fresh: bool = False) -> dict:
         """The source in use and, for Tuileries, its /api/info or why it failed: the settings' status line, and the
-        map page's trails and attribution."""
+        map page's trails, relief top zoom and attribution. A new relief version first deletes the cached one."""
         if self.source is None:
             return {"source": "direct"}
         cached = self._info
@@ -362,7 +363,14 @@ class TileStore:
         except tuileries.TuileriesError as error:
             out["error"] = str(error)
         else:
-            out.update(name=info.name, version=info.version, max_zoom=info.max_zoom, attribution=info.attribution)
+            out.update(name=info.name, version=info.version, max_zoom=info.max_zoom, attribution=info.attribution,
+                       dem_version=info.dem_version, dem_max_zoom=info.dem_max_zoom)
+            with self._dem_lock:
+                try:
+                    if mapcache.drop_stale_dem(self.root, info.dem_version):
+                        _log(f"relief version {info.dem_version}: the cached relief tiles were deleted")
+                except OSError as error:
+                    _log(f"cannot drop the old relief tiles: {error}")
             self._info = (self.clock(), out)
         return out
 

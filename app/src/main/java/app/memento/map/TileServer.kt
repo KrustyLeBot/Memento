@@ -344,17 +344,29 @@ object TileServer {
 
     private const val TRAILS_MIME = "application/x-protobuf"
 
-    /** Reads Tuileries' /api/info in the background for its credit on the map ([MapConfig.attribution]). */
+    /** Reads Tuileries' /api/info in the background for its credit and relief zoom on the map ([applyInfo]). */
     fun refreshInfo() {
         val t = MapConfig.tuileries ?: return
         Thread {
             try {
                 val info = tuileriesInfo(t)
-                if (MapConfig.tuileries == t) MapConfig.attribution = info.attribution
+                if (MapConfig.tuileries == t) applyInfo(info)
             } catch (e: IOException) {
                 Log.w(TAG, "Tuileries info: ${e.message}")
             }
         }.apply { isDaemon = true }.start()
+    }
+
+    /** The configured Tuileries' /api/info taken in, for the next page load; a new relief version deletes the cached one (blocking: off the main thread). */
+    fun applyInfo(info: TuileriesInfo) {
+        MapConfig.attribution = info.attribution
+        MapConfig.demMaxZoom = info.demMaxZoom
+        if (!::cache.isInitialized) return
+        try {
+            if (cache.dropStaleDem(info.demVersion)) Log.i(TAG, "relief version ${info.demVersion}: the cached relief tiles were deleted")
+        } catch (e: IOException) {
+            Log.w(TAG, "cannot drop the old relief tiles: ${e.message}")
+        }
     }
 
     // ---- peaks ----

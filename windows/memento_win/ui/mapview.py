@@ -95,7 +95,7 @@ class MapView(QWebEngineView):
 
 
 def page_url(mode: str, theme_name: str) -> str:
-    # photomax, trails, attrib: the map settings and the tile server's extras (maphost.page_query)
+    # photomax, trails, demmax, attrib: the map settings and the tile server's extras (maphost.page_query)
     return f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={theme_name}&interactive=1{maphost.page_query()}"
 
 

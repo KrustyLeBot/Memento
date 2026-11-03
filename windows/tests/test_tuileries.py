@@ -272,9 +272,9 @@ def test_configure_reaches_the_live_store_and_the_page_url():
     try:
         maphost.configure(source(), 15, fetch_info=False)
         assert maphost.tile_store().source == source()
-        assert mapview.page_url("2d", "light").endswith("&photomax=15&trails=1")
+        assert mapview.page_url("2d", "light").endswith("&photomax=15&trails=1&demmax=13")  # /api/info not read yet
         maphost.set_attribution("Sentinel-2 cloudless & EOX")
-        assert mapview.page_url("2d", "light").endswith("&trails=1&attrib=Sentinel-2%20cloudless%20%26%20EOX")
+        assert mapview.page_url("2d", "light").endswith("&trails=1&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX")
         maphost.configure(tuileries.Tuileries(""), 99)
         assert maphost.tile_store().source is None and maphost.photo_max_zoom() == 19
         assert mapview.page_url("3d", "dark").endswith("&interactive=1&photomax=19")  # no trails, no credit
@@ -295,6 +295,52 @@ def test_trails_requests_and_answers(tmp_path):
     assert tuileries.trails_answer(502, b"down") is None
     info = tuileries.parse_info(b'{"version":"1","max_zoom":17,"attribution":"Sentinel-2 cloudless by EOX"}')
     assert info.attribution == "Sentinel-2 cloudless by EOX" and tuileries.parse_info(INFO).attribution == ""
+
+
+def test_relief_version_and_top_zoom_from_api_info():
+    old = tuileries.parse_info(INFO)
+    assert (old.dem_version, old.dem_max_zoom) == (1, 13)  # an older server says nothing: AWS Terrarium to z13
+    info = tuileries.parse_info(b'{"version":"2","max_zoom":19,"dem":{"version":2,"max_zoom":15}}')
+    assert (info.dem_version, info.dem_max_zoom) == (2, 15)
+    for dem, expected in (('{"version":3,"max_zoom":18}', (3, 15)), ('{"max_zoom":14}', (1, 14)), ('"v2"', (1, 13)),
+                          ('{"version":"2","max_zoom":true}', (1, 13)), ('{"max_zoom":9}', (1, 13))):
+        got = tuileries.parse_info(b'{"version":"2","dem":' + dem.encode() + b'}')
+        assert (got.dem_version, got.dem_max_zoom) == expected, dem
+
+
+def test_page_query_takes_the_relief_zoom_from_api_info(tmp_path, monkeypatch):
+    monkeypatch.setattr(maphost, "tiles_root", lambda: tmp_path)
+    try:
+        maphost.configure(source(), 17, fetch_info=False)
+        maphost._apply_info(tuileries.parse_info(b'{"version":"2","dem":{"version":2,"max_zoom":15}}'), tmp_path)
+        assert maphost.page_query() == "&photomax=17&trails=1&demmax=15"
+        maphost.configure(None, 17)
+        assert maphost.page_query() == "&photomax=17"  # without Tuileries: the page's own default
+        maphost.configure(source(), 17, fetch_info=False)
+        assert maphost.page_query() == "&photomax=17&trails=1&demmax=13"  # a new server: its info read again
+    finally:
+        maphost.configure(None, tuileries.PHOTO_MAX_ZOOM_DEFAULT)
+
+
+def test_a_new_relief_version_drops_the_cached_relief(tmp_path):
+    from fake_tuileries import build_meta
+    dem = [mapcache.tile_path(tmp_path, mapcache.TileRequest("dem", z, 1, 1)) for z in (9, 13)]
+    photo = mapcache.tile_path(tmp_path, mapcache.TileRequest("ortho", 15, 1, 1))
+    entry = tuileries.parse_meta(build_meta(14, 0, 0, [(1, 14, 2, 2, 0, 2, 0, b"\x89PNG")]))[0]
+    meta_path, _ = tuileries.meta_cache_target(tmp_path, entry)  # a relief tile that came in a metatile
+    for f in (*dem, photo, meta_path):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+    assert not mapcache.drop_stale_dem(tmp_path, 1)  # no marker: a cache of version 1, kept
+    assert all(f.is_file() for f in dem)
+    assert mapcache.drop_stale_dem(tmp_path, 2)
+    assert not (tmp_path / "dem").exists() and photo.is_file() and not meta_path.exists()
+    assert (tmp_path / mapcache.DEM_VERSION_FILE).read_text() == "2"
+    assert not any(p.name.startswith(".") for p in tmp_path.iterdir())  # nothing left behind
+    dem[0].parent.mkdir(parents=True)
+    dem[0].write_bytes(b"v2")
+    assert not mapcache.drop_stale_dem(tmp_path, 2) and dem[0].is_file()  # recorded: the new tiles stay
+    assert mapcache.drop_stale_dem(tmp_path / "empty", 2) and (tmp_path / "empty" / mapcache.DEM_VERSION_FILE).is_file()
 
 
 def test_trails_are_cached_but_not_their_absence(tmp_path, real_store, monkeypatch):

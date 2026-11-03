@@ -35,6 +35,8 @@
   // the host's "zoom maximal de la photo" setting (14..19, default 17): MapLibre enlarges that level beyond it
   const PHOTO_MAX_Z = Math.min(19, Math.max(14, Math.round(+params.get('photomax')) || 17));
   const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: PHOTO_MAX_Z };
+  // the relief's top zoom (13..15, default 13): 15 only from a Tuileries server with the IGN relief, the host says
+  const DEM_MAX_Z = Math.min(15, Math.max(13, Math.round(+params.get('demmax')) || 13));
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
   let mode = params.get('mode') === '2d' ? '2d' : '3d';
@@ -481,7 +483,7 @@
   // ---------------------------------------------------------------- the 3D block
 
   function bandMetres() {
-    const z = Math.min(13, Math.max(0, Math.floor(map.getZoom())));
+    const z = Math.min(DEM_MAX_Z, Math.max(0, Math.floor(map.getZoom())));
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     return 6 * 156543 * Math.cos(lat * Math.PI / 180) / 2 ** z;  // 6 DEM pixels: wider than the cliff, so no white stripes
   }
@@ -533,7 +535,7 @@
       const cache = map.style.sourceCaches.orthosq, update = cache.update;
       cache.update = function (...args) { update.apply(this, args); update.apply(this, args); };
     }
-    map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
+    map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: DEM_MAX_Z, encoding: 'terrarium', bounds });
   }
   let measuring = null;
   function measureForCamera(sq) {

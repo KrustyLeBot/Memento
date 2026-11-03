@@ -1,6 +1,7 @@
 package app.memento.map
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -35,6 +36,10 @@ class MapPageContractTest {
         // what MapLibre and the DEM protocol make of them, as TileServer sees the path
         assertEquals(TileKey("ortho", 19, 272042, 187212), TileKey.parse("/t/ortho/19/272042/187212"))
         assertEquals(TileKey("dem", 12, 2120, 1460), TileKey.parse("/t/dem/12/2120/1460"))
+        // the relief's top zoom: 13 unless the host passes Tuileries' (15 with the IGN relief)
+        assertTrue(page.contains("maxzoom: DEM_MAX_Z, encoding: 'terrarium'") && page.contains("params.get('demmax')"))
+        assertFalse(MapHost.pageUrl(true, false).contains("demmax"))
+        assertEquals(TileKey("dem", 15, 16941, 11670), TileKey.parse("/t/dem/15/16941/11670"))
     }
 
     @Test

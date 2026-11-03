@@ -3,6 +3,8 @@ URLs and when the IGN aerial photo is replaced by the OpenStreetMap tile. Pure P
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -19,6 +21,7 @@ OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer;
 BUILDINGS_Z = 15  # core/buildings.py's cells
 TRAILS_MAX_Z = 15  # Tuileries' trails pyramid; the page overzooms past it
 TRAILS_MIME = "application/x-protobuf"
+DEM_VERSION_FILE = "dem-version.txt"  # next to the tile folders: the relief version the cached dem tiles come from
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
 IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
@@ -126,6 +129,34 @@ def tile_path(root: Path, tile: TileRequest) -> Path:
 
 def trails_path(root: Path, req: TrailsRequest) -> Path:
     return root / "trails" / str(req.z) / str(req.x) / f"{req.y}.pbf"
+
+
+def drop_stale_dem(root: Path, version: int) -> bool:
+    """Deletes every cached relief tile (single and metatile entries share `dem/`) when they come from another relief
+    version than `version`, then records it. Blocking: run it off the UI thread. True when the version changed. A cache
+    without the marker predates it and holds version 1 (AWS Terrarium, directly or through Tuileries)."""
+    marker = root / DEM_VERSION_FILE
+    try:
+        recorded = marker.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        recorded = "1"
+    if recorded == str(version):
+        return False
+    dem = root / "dem"
+    if dem.exists():
+        doomed = root / f".dem-stale-{uuid.uuid4().hex}"
+        try:
+            os.replace(dem, doomed)  # at once: tiles of the new relief written meanwhile land in a fresh dem/
+        except OSError:
+            doomed = dem  # a tile open right now (Windows): deleted in place
+        shutil.rmtree(doomed, ignore_errors=True)
+        if dem.exists() and doomed == dem:
+            return True  # not all gone: the marker is left as it was, so the next check tries again
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / f".{DEM_VERSION_FILE}.{uuid.uuid4().hex}.tmp"
+    tmp.write_text(str(version), encoding="ascii")
+    os.replace(tmp, marker)
+    return True
 
 
 def upstream_url(tile: TileRequest) -> str:

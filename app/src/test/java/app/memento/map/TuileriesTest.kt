@@ -218,9 +218,9 @@ class TuileriesTest {
         MapConfig.set(null, 16)
         assertEquals("&photomax=16", MapConfig.pageQuery())
         MapConfig.set(source(), 16)
-        assertEquals("&photomax=16&trails=1", MapConfig.pageQuery())
+        assertEquals("&photomax=16&trails=1&demmax=13", MapConfig.pageQuery())
         MapConfig.attribution = "Sentinel-2 cloudless & EOX"
-        assertEquals("&photomax=16&trails=1&attrib=Sentinel-2%20cloudless%20%26%20EOX", MapConfig.pageQuery())
+        assertEquals("&photomax=16&trails=1&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX", MapConfig.pageQuery())
         MapConfig.set(null, 16)
         assertEquals("", MapConfig.attribution)
         // the page's side of it
@@ -228,6 +228,59 @@ class TuileriesTest {
         val page = File(root, "web/map/map.js").readText()
         assertTrue(page.contains("tiles: [`\${BASE}trails/{z}/{x}/{y}`]") && page.contains("'source-layer': 'trails'"))
         assertTrue(page.contains("params.get('trails') === '1'") && page.contains("params.get('attrib')"))
+    }
+
+    @Test
+    fun reliefVersionAndTopZoomFromApiInfo() {
+        val old = Tuileries.parseInfo(INFO)
+        assertEquals(1 to 13, old.demVersion to old.demMaxZoom)  // an older server says nothing: AWS Terrarium to z13
+        val info = Tuileries.parseInfo("""{"version":"2","max_zoom":19,"dem":{"version":2,"max_zoom":15}}""")
+        assertEquals(2 to 15, info.demVersion to info.demMaxZoom)
+        for ((dem, expected) in listOf("""{"version":3,"max_zoom":18}""" to (3 to 15), """{"max_zoom":14}""" to (1 to 14),
+                "\"v2\"" to (1 to 13), """{"version":true,"max_zoom":9}""" to (1 to 13))) {
+            val got = Tuileries.parseInfo("""{"version":"2","dem":$dem}""")
+            assertEquals(dem, expected, got.demVersion to got.demMaxZoom)
+        }
+        val dir = Files.createTempDirectory("tuileries-dem").toFile()
+        try {
+            TileServer.initCache(dir)
+            MapConfig.set(source(), 17)
+            TileServer.applyInfo(info)
+            assertEquals("&photomax=17&trails=1&demmax=15", MapConfig.pageQuery())
+            MapConfig.set(null, 17)
+            assertEquals("&photomax=17", MapConfig.pageQuery())  // without Tuileries: the page's own default
+            MapConfig.set(source(), 17)
+            assertEquals("&photomax=17&trails=1&demmax=13", MapConfig.pageQuery())  // a new server: its info read again
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aNewReliefVersionDropsTheCachedRelief() {
+        val dir = Files.createTempDirectory("tuileries-dem").toFile()
+        try {
+            val cache = TileCache(dir, 1_000_000)
+            val dem = listOf(TileKey(TileKey.KIND_DEM, 9, 1, 1), TileKey(TileKey.KIND_DEM, 13, 1, 1)).map { File(dir, it.path) }
+            val photo = File(dir, TileKey(TileKey.KIND_ORTHO, 15, 1, 1).path)
+            // a relief tile that came in a metatile goes where its single request would
+            val meta = File(dir, MetaEntry(TileKey.KIND_DEM, 14, 2, 2, Metatile.OK, "image/png", byteArrayOf(1)).cachePath()!!)
+            for (f in dem + photo + meta) TileCache.writeAtomic(f, byteArrayOf(1))
+            assertFalse(cache.dropStaleDem(1))  // no marker: a cache of version 1, kept
+            assertTrue(dem.all { it.isFile })
+            assertTrue(cache.dropStaleDem(2))
+            assertFalse(File(dir, "dem").exists() || meta.exists())
+            assertTrue(photo.isFile)
+            assertEquals("2", File(dir, TileCache.DEM_VERSION_FILE).readText())
+            assertFalse(dir.listFiles()!!.any { it.name.startsWith(".") })  // nothing left behind
+            TileCache.writeAtomic(dem[0], byteArrayOf(2))
+            assertFalse(cache.dropStaleDem(2))  // recorded: the new tiles stay
+            assertTrue(dem[0].isFile)
+            cache.clear()
+            assertTrue(File(dir, TileCache.DEM_VERSION_FILE).isFile)  // still true of the tiles fetched next
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test

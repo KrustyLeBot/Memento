@@ -210,7 +210,7 @@ object MapHost {
         return w
     }
 
-    // photomax, trails, attrib: the map settings and the tile server extras (MapConfig.pageQuery)
+    // photomax, trails, demmax, attrib: the map settings and the tile server extras (MapConfig.pageQuery)
     internal fun pageUrl(mode3d: Boolean, dark: Boolean) = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") +
         "&theme=" + (if (dark) "dark" else "light") + "&interactive=1" + MapConfig.pageQuery()
 

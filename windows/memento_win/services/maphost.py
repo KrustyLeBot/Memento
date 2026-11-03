@@ -68,6 +68,10 @@ def cache_root() -> Path:
     return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation))
 
 
+def tiles_root() -> Path:
+    return cache_root() / "tiles2"
+
+
 def _request(url: str, source: tuileries.Tuileries | None = None) -> QNetworkRequest:
     """[source]: a request to Tuileries, which alone gets its credentials; a redirect (Cloudflare Access's login page)
     is not followed, so they never travel elsewhere."""
@@ -86,33 +90,35 @@ def _request(url: str, source: tuileries.Tuileries | None = None) -> QNetworkReq
 _source: tuileries.Tuileries | None = None
 _photo_max_zoom = tuileries.PHOTO_MAX_ZOOM_DEFAULT
 _attribution = ""  # Tuileries' own credit, from its /api/info (read in the background)
+_dem_max_zoom = tuileries.DEM_MAX_ZOOM_DEFAULT  # Tuileries' relief top zoom, from the same /api/info
+_dem_lock = threading.Lock()
 
 
 def configure(source: tuileries.Tuileries | None, photo_max_zoom: int, fetch_info: bool = True) -> None:
     """Applies the map settings: to the tile store at once, to the pages on their next load."""
-    global _source, _photo_max_zoom, _attribution
+    global _source, _photo_max_zoom, _attribution, _dem_max_zoom
     source = source if source is not None and source.configured else None
     changed = source != _source
     _source = source
     _photo_max_zoom = tuileries.clamp_photo_max_zoom(photo_max_zoom)
     if changed:
         _attribution = ""
+        _dem_max_zoom = tuileries.DEM_MAX_ZOOM_DEFAULT
     if _profile is not None and shiboken6.isValid(_profile):
         store = _profile.findChild(TileStore)
         if store is not None:
             store.source = _source
     if _source is not None and changed and fetch_info:
-        wanted = _source
+        wanted, root = _source, tiles_root()
 
         def run() -> None:
-            global _attribution
             try:
                 info = tuileries.fetch_info(wanted)
             except tuileries.TuileriesError as error:
                 _log(f"Tuileries: {error}")
                 return
             if _source == wanted:
-                _attribution = info.attribution
+                _apply_info(info, root)
         threading.Thread(target=run, name="tuileries-info", daemon=True).start()
 
 
@@ -122,15 +128,36 @@ def set_attribution(text: str) -> None:
     _attribution = text
 
 
+def set_info(info: tuileries.Info) -> None:
+    """From a successful "Tester la connexion" (GUI thread): the credit and relief zoom for the next page load; the
+    stale relief tiles are dropped in a worker thread."""
+    root = tiles_root()
+    threading.Thread(target=_apply_info, args=(info, root), name="tuileries-dem", daemon=True).start()
+
+
+def _apply_info(info: tuileries.Info, root: Path) -> None:
+    """Worker thread: Tuileries' /api/info taken in; a new relief version deletes the cached one."""
+    global _attribution, _dem_max_zoom
+    _attribution = info.attribution
+    _dem_max_zoom = info.dem_max_zoom
+    with _dem_lock:
+        try:
+            if mapcache.drop_stale_dem(root, info.dem_version):
+                _log(f"relief version {info.dem_version}: the cached relief tiles were deleted")
+        except OSError as error:
+            _log(f"cannot drop the old relief tiles: {error}")
+
+
 def photo_max_zoom() -> int:
     return _photo_max_zoom
 
 
 def page_query() -> str:
-    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its trails and credit."""
+    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its trails, relief top
+    zoom and credit."""
     query = f"&photomax={_photo_max_zoom}"
     if _source is not None:
-        query += "&trails=1" + (f"&attrib={quote(_attribution)}" if _attribution else "")
+        query += f"&trails=1&demmax={_dem_max_zoom}" + (f"&attrib={quote(_attribution)}" if _attribution else "")
     return query
 
 
@@ -687,13 +714,13 @@ def profile() -> QWebEngineProfile:
         root = cache_root()
         _remove_old_cache(root / "tiles")
         for kind in mapcache.OLD_KINDS:  # tiles of a former base layer, never read again
-            _remove_old_cache(root / "tiles2" / kind)
+            _remove_old_cache(tiles_root() / kind)
         prof = QWebEngineProfile("memento-map", QCoreApplication.instance())
         prof.setCachePath(str(root / "webengine"))
         prof.setPersistentStoragePath(str(root / "webengine-data"))
         prof.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
         prof.setHttpCacheMaximumSize(64 * 1024 * 1024)
-        store = TileStore(root / "tiles2", prof)
+        store = TileStore(tiles_root(), prof)
         prof.installUrlSchemeHandler(SCHEME, SchemeHandler(store, prof))
         _profile = prof
     return _profile

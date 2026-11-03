@@ -140,8 +140,10 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   nothing falls back to IGN. With Tuileries the page also draws its hiking trails (`trails/{z}/{x}/{y}`, vector
   tiles z10–15): waymarked routes solid, paths dashed, purple on a white halo, in 2D and on the 3D block. Its credit
   (`/api/info` attributions, e.g. Sentinel-2 by EOX abroad) joins the map's. Roofs come coloured in its v2 buildings
-  cells, so the page skips its own photo sampling there. Android asks it to prepare a route's area
-  (`POST /api/prepare`) when a route is loaded or a pack prepared. Settings:
+  cells, so the page skips its own photo sampling there. Its relief (`/api/info` `dem`: version, top zoom) sets
+  the page's relief zoom (`&demmax=`, 13 to 15; 13 without Tuileries or before a server says), and a new version
+  deletes the cached relief tiles (recorded in `dem-version.txt` beside them; Android's offline packs keep theirs).
+  Android asks it to prepare a route's area (`POST /api/prepare`) when a route is loaded or a pack prepared. Settings:
   - Android: Réglages → Cartes → "Serveur de cartes (Tuileries)": URL, identifiant, mot de passe, Cloudflare Access
     client id and secret, "Enregistrer", "Tester la connexion" (shows the version and the photo zoom the server
     archives, or the error). Kept in the app's private preferences (`tuileries`, no backup).

@@ -54,6 +54,12 @@ data class Tuileries(
 
         fun clampPhotoMaxZoom(z: Int) = z.coerceIn(PHOTO_MAX_ZOOM_RANGE)
 
+        /** A server without `dem` in its /api/info: the AWS Terrarium relief, to z13. */
+        const val DEM_VERSION_DEFAULT = 1
+        const val DEM_MAX_ZOOM_DEFAULT = 13
+        /** The map page's own clamp of `demmax`. */
+        val DEM_MAX_ZOOM_RANGE = 13..15
+
         /** `https://host/path/` with its trailing slash, or "" when it is not an http(s) URL with a host. */
         fun normalize(url: String): String {
             val u = url.trim()
@@ -121,6 +127,8 @@ data class Tuileries(
                 o["max_zoom"].asDouble()?.toInt(),
                 o["layers"].asList().orEmpty().filterIsInstance<String>(),
                 attributionOf(o),
+                o["dem"].asMap()?.get("version").asDouble()?.toInt() ?: DEM_VERSION_DEFAULT,
+                o["dem"].asMap()?.get("max_zoom").asDouble()?.toInt()?.coerceIn(DEM_MAX_ZOOM_RANGE) ?: DEM_MAX_ZOOM_DEFAULT,
             )
         }
 
@@ -149,8 +157,16 @@ data class Tuileries(
     }
 }
 
-/** `GET /api/info`: what the settings' "Tester la connexion" shows. */
-data class TuileriesInfo(val name: String, val version: String, val maxZoom: Int?, val layers: List<String>, val attribution: String = "") {
+/** `GET /api/info`: what the settings' "Tester la connexion" shows; a new [demVersion] replaces the cached relief. */
+data class TuileriesInfo(
+    val name: String,
+    val version: String,
+    val maxZoom: Int?,
+    val layers: List<String>,
+    val attribution: String = "",
+    val demVersion: Int = Tuileries.DEM_VERSION_DEFAULT,
+    val demMaxZoom: Int = Tuileries.DEM_MAX_ZOOM_DEFAULT,
+) {
     fun summary(): String = "Connecté : $name $version" + (maxZoom?.let { " · photos archivées jusqu'au zoom $it" } ?: "")
 }
 
@@ -174,18 +190,25 @@ object MapConfig {
     @Volatile
     var attribution: String = ""
 
+    /** Tuileries' relief top zoom, from the same /api/info. */
+    @Volatile
+    var demMaxZoom: Int = Tuileries.DEM_MAX_ZOOM_DEFAULT
+
     fun set(source: Tuileries?, photoMax: Int) {
         val t = source?.takeIf { it.configured }
-        if (t != tuileries) attribution = ""
+        if (t != tuileries) {
+            attribution = ""
+            demMaxZoom = Tuileries.DEM_MAX_ZOOM_DEFAULT
+        }
         tuileries = t
         photoMaxZoom = Tuileries.clampPhotoMaxZoom(photoMax)
     }
 
-    /** What the page takes from the settings: the photo's top zoom and, with Tuileries, its trails and credit. */
+    /** What the page takes from the settings: the photo's top zoom and, with Tuileries, its trails, relief top zoom and credit. */
     fun pageQuery(): String {
         var q = "&photomax=$photoMaxZoom"
         if (tuileries != null) {
-            q += "&trails=1"
+            q += "&trails=1&demmax=$demMaxZoom"
             if (attribution.isNotEmpty()) q += "&attrib=" + java.net.URLEncoder.encode(attribution, "UTF-8").replace("+", "%20")
         }
         return q

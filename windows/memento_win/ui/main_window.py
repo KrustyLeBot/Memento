@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
         def done(result) -> None:
             self.settings.show_tiles_test(result)
             if isinstance(result, tuileries.Info) and source == self._tuileries():
-                maphost.set_attribution(result.attribution)
+                maphost.set_info(result)
         run_async(lambda: tuileries.fetch_info(source), done, done)
 
     def _contacts_order_changed(self, first_name_first: bool) -> None:

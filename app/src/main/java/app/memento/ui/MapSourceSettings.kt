@@ -110,9 +110,10 @@ fun MapSourceSettings(settings: Settings) {
                 status = "Connexion…"
                 scope.launch {
                     status = try {
-                        val info = withContext(Dispatchers.IO) { TileServer.tuileriesInfo(source) }
+                        val info = withContext(Dispatchers.IO) {
+                            TileServer.tuileriesInfo(source).also { if (source == MapConfig.tuileries) TileServer.applyInfo(it) }
+                        }
                         serverZoom = info.maxZoom
-                        if (source == MapConfig.tuileries) MapConfig.attribution = info.attribution
                         info.summary()
                     } catch (e: java.io.IOException) { // TuileriesException included
                         "Échec : ${e.message}"
