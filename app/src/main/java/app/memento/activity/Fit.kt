@@ -62,7 +62,7 @@ object Fit {
     fun read(bytes: ByteArray): Track {
         if (!looksLikeFit(bytes)) throw FitException("Ce n'est pas un fichier FIT")
         val points = ArrayList<TrackPoint>()
-        val hrs = ArrayList<Int>()
+        val hrs = HeartRates()
         val events = ArrayList<Pair<Long, Int>>() // (time, timer event type)
         var sport: Int? = null
         var start: Long? = null
@@ -78,7 +78,8 @@ object Fit {
             var p = pos + headerSize
             val end = minOf(bytes.size.toLong(), p + dataSize).toInt()
             val defs = arrayOfNulls<Definition>(16)
-            val devNames = HashMap<Pair<Int, Int>, String>()
+            val msg = Msg(bytes)
+            val devNames = DevNames()
             var lastTs = 0L
 
             while (p < end) {
@@ -91,7 +92,7 @@ object Fit {
                     if (offset < (lastTs and 0x1F)) ts += 32
                     lastTs = ts
                     if (p + def.size > end) break
-                    if (def.wanted) handle(def.global, Msg(bytes, p, def, ts), points, hrs, events, devNames)
+                    if (def.wanted) handle(def.global, msg.at(p, def, ts), points, hrs, events, devNames)
                     p += def.size
                     continue
                 }
@@ -121,10 +122,10 @@ object Fit {
                 } else {
                     val def = defs[local] ?: throw FitException("Fichier FIT corrompu")
                     if (p + def.size > end) break
-                    val values = Msg(bytes, p, def, null)
+                    val values = msg.at(p, def, null)
                     p += def.size
                     // a skipped message still has its timestamp read: it anchors the compressed ones that follow
-                    values.num(253)?.let { lastTs = it }
+                    if (values.read(253)) lastTs = values.value
                     if (!def.wanted) continue
                     val summary = handle(def.global, values, points, hrs, events, devNames)
                     if (summary != null) {
@@ -158,32 +159,90 @@ object Fit {
             }
         }
         return Track(
-            points = points.sortedBy { it.time },
+            // a watch writes its records in order: no second list of every point unless they really are not
+            points = if ((1 until points.size).all { points[it - 1].time <= points[it].time }) points else points.sortedBy { it.time },
             pauses = pauses,
             fitSport = sport,
             startTime = start ?: points.minOfOrNull { it.time },
             sessionElapsedMs = elapsed,
             sessionTimerMs = timer,
             sessionDistance = distance,
-            hrAvg = if (hrs.isNotEmpty()) Math.round(hrs.average()).toInt() else null,
-            hrMax = hrs.maxOrNull(),
+            hrAvg = if (hrs.count > 0) Math.round(hrs.sum.toDouble() / hrs.count).toInt() else null,
+            hrMax = if (hrs.count > 0) hrs.max else null,
             manufacturer = manufacturer,
         )
     }
 
-    /** One message, read in place: no map per message (there can be 800 000 of them). */
-    private class Msg(val b: ByteArray, val start: Int, val def: Definition, val ts: Long?) {
-        fun num(n: Int): Long? {
-            if (n == 253 && ts != null) return ts
+    /**
+     * Names of the developer fields by (developer index, field number), both bytes in a record: a table, so looking
+     * one up for every record allocates no key.
+     */
+    private class DevNames {
+        private var names: Array<String?>? = null
+        val any: Boolean get() = names != null
+
+        operator fun get(idx: Int, num: Int): String? =
+            if (idx in 0..255 && num in 0..255) names?.get(idx * 256 + num) else null
+
+        /** A description outside byte range can never match a record's field: it is not kept. */
+        operator fun set(idx: Int, num: Int, name: String) {
+            if (idx !in 0..255 || num !in 0..255) return
+            val table = names ?: arrayOfNulls<String>(256 * 256).also { names = it }
+            table[idx * 256 + num] = name
+        }
+    }
+
+    /** Count, sum and maximum of the heart rates: a list of 200 000 boxed values only ever served these. */
+    private class HeartRates {
+        var count = 0
+        var sum = 0L
+        var max = Int.MIN_VALUE
+
+        fun add(hr: Int) {
+            count++
+            sum += hr
+            if (hr > max) max = hr
+        }
+    }
+
+    /**
+     * One message, read in place: no map per message (there can be 800 000 of them). A single instance is moved from
+     * message to message ([at]) and [read] leaves the value in [value], so reading a record boxes nothing.
+     */
+    private class Msg(val b: ByteArray) {
+        var start = 0
+            private set
+        lateinit var def: Definition
+            private set
+        private var ts = 0L
+        private var hasTs = false
+        /** The value of the last successful [read]. */
+        var value = 0L
+            private set
+
+        fun at(start: Int, def: Definition, ts: Long?): Msg {
+            this.start = start
+            this.def = def
+            hasTs = ts != null
+            this.ts = ts ?: 0L
+            return this
+        }
+
+        /** Reads field [n] into [value]; false when the message lacks it or holds its invalid marker. */
+        fun read(n: Int): Boolean {
+            if (n == 253 && hasTs) { value = ts; return true }
             val o = def.offsets[n]
-            if (o < 0) return null
+            if (o < 0) return false
             val type = def.types[n]
             val size = baseSize(type)
-            if (size !in 1..8 || def.sizes[n] < size) return null
+            if (size !in 1..8 || def.sizes[n] < size) return false
             val raw = u(b, start + o, size, def.bigEndian)
-            if (isInvalid(type, raw, size)) return null
-            return if (isSigned(type)) signed(raw, size) else raw
+            if (isInvalid(type, raw, size)) return false
+            value = if (isSigned(type)) signed(raw, size) else raw
+            return true
         }
+
+        fun num(n: Int): Long? = if (read(n)) value else null
 
         fun str(n: Int): String? {
             val o = def.offsets[n]
@@ -206,29 +265,29 @@ object Fit {
 
     /** Returns non-null for messages that carry summary data handled by the caller. */
     private fun handle(
-        global: Int, v: Msg, points: MutableList<TrackPoint>, hrs: MutableList<Int>,
-        events: MutableList<Pair<Long, Int>>, devNames: MutableMap<Pair<Int, Int>, String>,
+        global: Int, v: Msg, points: MutableList<TrackPoint>, hrs: HeartRates,
+        events: MutableList<Pair<Long, Int>>, devNames: DevNames,
     ): Unit? {
         when (global) {
             MSG_RECORD -> {
-                val ts = v.num(253) ?: return null
-                val time = (ts + EPOCH_OFFSET) * 1000
-                val hr = v.num(3)
-                hr?.let { hrs.add(it.toInt()) }
-                val lat = v.num(0) ?: return null
-                val lon = v.num(1) ?: return null
-                val alt = v.num(78)?.let { it / 5.0 - 500 } ?: v.num(2)?.let { it / 5.0 - 500 }
+                if (!v.read(253)) return null
+                val time = (v.value + EPOCH_OFFSET) * 1000
+                val hr = if (v.read(3)) v.value.toInt() else null
+                if (hr != null) hrs.add(hr)
+                if (!v.read(0)) return null
+                val lat = v.value
+                if (!v.read(1)) return null
+                val lon = v.value
+                val alt = if (v.read(78)) v.value / 5.0 - 500 else if (v.read(2)) v.value / 5.0 - 500 else null
                 var gpsAlt: Double? = null
                 var pressure: Double? = null
-                if (devNames.isNotEmpty()) v.devFloats { idx, num, value ->
-                    when (devNames[idx to num]) {
+                if (devNames.any) v.devFloats { idx, num, value ->
+                    when (devNames[idx, num]) {
                         DEV_GPS_ALT -> if (!value.isNaN()) gpsAlt = value.toDouble()
                         DEV_PRESSURE -> if (!value.isNaN()) pressure = value.toDouble()
                     }
                 }
-                points.add(
-                    TrackPoint(time, lat * SEMICIRCLE, lon * SEMICIRCLE, alt, hr?.toInt(), gpsAlt, pressure),
-                )
+                points.add(TrackPoint(time, lat * SEMICIRCLE, lon * SEMICIRCLE, alt, hr, gpsAlt, pressure))
             }
             MSG_EVENT -> {
                 val ts = v.num(253) ?: return null
@@ -237,7 +296,7 @@ object Fit {
             MSG_FIELD_DESCRIPTION -> {
                 val idx = v.num(0)?.toInt() ?: return null
                 val num = v.num(1)?.toInt() ?: return null
-                v.str(3)?.let { devNames[idx to num] = it }
+                v.str(3)?.let { devNames[idx, num] = it }
             }
             MSG_SESSION, MSG_SPORT, MSG_FILE_ID -> return Unit
         }
