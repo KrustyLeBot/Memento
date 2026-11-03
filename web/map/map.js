@@ -328,11 +328,14 @@
     layout: { 'symbol-placement': 'line', 'symbol-spacing': 140, 'icon-image': 'smap-arrow', 'icon-size': 0.8,
               'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
   });
+  // Images drawn to be read back (getImageData) are drawn on the CPU: reading a GPU canvas waits for every frame the GPU
+  // still has to draw, seconds each for the 3D block on a slow one (the race's peaks took 13 s on a software renderer)
+  const READ_BACK = { willReadFrequently: true };
   // Pointing east: line placement turns the icon along the line, in the line's direction.
   function arrowImage() {
     const n = 48, c = document.createElement('canvas');
     c.width = c.height = n;
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', READ_BACK);
     g.lineCap = 'round'; g.lineJoin = 'round';
     const chevron = () => { g.beginPath(); g.moveTo(15, 12); g.lineTo(33, 24); g.lineTo(15, 36); g.stroke(); };
     g.strokeStyle = '#ffffff'; g.lineWidth = 13; chevron();
@@ -346,7 +349,7 @@
       sources: {
         ortho: ORTHO,
         band: geo(), mask: geo(), frame: geo(), route: geo(), lines: geo(), track: geo({ lineMetrics: true }),
-        live: geo(), acc: geo(), dots: geo(), cursor: geo(),
+        live: geo(), acc: geo(), dots: geo(),
         bld: geo({ maxzoom: 16 }),
         peaks: geo(),
       },
@@ -361,19 +364,19 @@
         // the route to follow: white on a dark casing, under the coloured trail that runs along it
         { id: 'route-case', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 11 } },
         { id: 'route', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 6.5, 'line-opacity': 0.9 } },
-        arrows('route-arrows', 'route'),
         { id: 'lines-halo', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'lines-case', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'lines', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': ['get', 'color'], 'line-width': 5 } },
-        arrows('lines-arrows', 'lines'),
         { id: 'track-halo', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'track', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-width': 5, 'line-gradient': solid('#d7191c') } },
-        arrows('track-arrows', 'track'),
         { id: 'live-halo', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 12 } },
         { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 9.5 } },
         { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
         { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.2, 'fill-outline-color': '#ffffff' } },
+        // with terrain, each run of draped layers (fill, line, raster) is one render-to-texture pass per terrain tile, and
+        // with two runs or more MapLibre 4.7 re-renders every tile every frame: no symbol layer between draped layers
+        arrows('route-arrows', 'route'), arrows('lines-arrows', 'lines'), arrows('track-arrows', 'track'),
         // after every layer draped on the terrain (one render-to-texture pass for all of them), before the dots
         { id: 'bld-walls', type: 'fill-extrusion', source: 'bld', layout: { visibility: 'none' }, paint: {
           'fill-extrusion-color': BLD_WALL, 'fill-extrusion-height': ['-', ['get', 'h'], ROOF_CAP],
@@ -390,8 +393,6 @@
           'icon-padding': 4, 'icon-pitch-alignment': 'viewport', 'icon-rotation-alignment': 'viewport' } },
         { id: 'dots-halo', type: 'circle', source: 'dots', paint: { 'circle-radius': 11.5, 'circle-color': CASING, 'circle-blur': 0.15 } },
         { id: 'dots', type: 'circle', source: 'dots', paint: { 'circle-radius': 7, 'circle-color': ['get', 'color'], 'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff' } },
-        { id: 'cursor-halo', type: 'circle', source: 'cursor', paint: { 'circle-radius': 10, 'circle-color': CASING, 'circle-blur': 0.15 } },
-        { id: 'cursor', type: 'circle', source: 'cursor', paint: { 'circle-radius': 6, 'circle-color': '#111418', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff' } },
       ],
     };
   }
@@ -483,6 +484,11 @@
     if (SQ) {
       map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
       map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
+      // MapLibre 4.7 on terrain: on the first frame at a new tile zoom, the parent standing in for the missing tiles is
+      // taken from the tile cache without being drawn, and the tiles it replaces are hidden: a blank frame at each zoom
+      // step (the whole view when zooming out). A second pass of the same update finds it in place and draws it.
+      const cache = map.style.sourceCaches.orthosq, update = cache.update;
+      cache.update = function (...args) { update.apply(this, args); update.apply(this, args); };
     }
     map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
   }
@@ -774,6 +780,13 @@
   // ---------------------------------------------------------------- position
 
   let posMarker = null, posEl = null, posAdded = false;
+  function domMarker(element) {
+    const marker = new maplibregl.Marker({ element, anchor: 'center', opacityWhenCovered: '1' });
+    // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
+    // buffer back (readPixels), which stalls the frame; these stay fully opaque when covered anyway
+    marker._updateOpacity = () => {};
+    return marker;
+  }
   function ensurePosMarker() {
     if (posMarker) return;
     posEl = document.createElement('div');
@@ -781,10 +794,17 @@
     for (const part of ['halo', 'arrow', 'dot']) {
       const d = document.createElement('div'); d.className = part; posEl.appendChild(d);
     }
-    posMarker = new maplibregl.Marker({ element: posEl, anchor: 'center', opacityWhenCovered: '1' });
-    // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
-    // buffer back (readPixels), which stalls the frame; this one stays fully opaque when covered anyway
-    posMarker._updateOpacity = () => {};
+    posMarker = domMarker(posEl);
+  }
+  // The point hovered on the host's charts: a DOM marker, moved for free. A GeoJSON source would reload all its tiles
+  // at each move, and on terrain every tile load redraws the photo of the terrain tiles under it (50-2500 ms a move
+  // on a software renderer).
+  let cursorMarker = null, cursorAdded = false;
+  function setCursorAt(lon, lat) {
+    if (lon == null || lat == null) { if (cursorMarker) cursorMarker.remove(); cursorAdded = false; return; }
+    if (!cursorMarker) cursorMarker = domMarker(el('div', 'smap-cursor'));
+    cursorMarker.setLngLat([lon, lat]);
+    if (!cursorAdded) { cursorMarker.addTo(map); cursorAdded = true; }
   }
   function orientArrow() {
     if (!posEl || !pos || pos.heading == null) return;
@@ -866,7 +886,7 @@
     const w = chipW + 2 * m, h = m + chipH + stemH;
     const canvas = document.createElement('canvas');
     canvas.width = Math.ceil(w * ratio); canvas.height = Math.ceil(h * ratio);
-    const g = canvas.getContext('2d');
+    const g = canvas.getContext('2d', READ_BACK);
     g.scale(ratio, ratio);
     // stem: white fading down, outlined in black, legible on snow as on forest
     const sx = w / 2 - 1, sy = m + chipH;
@@ -915,10 +935,11 @@
   // off the block or off screen. It is re-placed after such a frame.
   let markerFrame = 0, lastElevation = null;
   function replaceMarkers() {
-    if (markerFrame || !posAdded) return;
+    if (markerFrame || !(posAdded || cursorAdded)) return;
     markerFrame = requestAnimationFrame(() => {
       markerFrame = 0;
       if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
+      if (cursorAdded) cursorMarker.setLngLat(cursorMarker.getLngLat());
     });
   }
   map.on('render', () => {
@@ -1263,9 +1284,7 @@
       map.setPaintProperty('frame', 'line-color', c.frame);
       map.setLayoutProperty('peaks', 'icon-image', peakImageExpr());
     },
-    setCursor(lon, lat) {
-      src('cursor').setData(lon == null ? EMPTY : { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } });
-    },
+    setCursor(lon, lat) { setCursorAt(lon, lat); },
     fit() { fit(300); },
     reset() { reset(); },
   };
