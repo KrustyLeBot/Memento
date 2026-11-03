@@ -61,6 +61,10 @@ class ActivityController(
     var busy by mutableStateOf(false)
         private set
 
+    /** What the import or the opening of a track is doing ("Analyse du tracé…"), null when idle: a long file takes seconds. */
+    var stage by mutableStateOf<String?>(null)
+        private set
+
     /** Called when an activity is opened, so the app can show its screen. */
     var onOpen: (() -> Unit)? = null
 
@@ -73,9 +77,11 @@ class ActivityController(
         scope.launch {
             try {
                 val p = withContext(io) {
+                    stage = "Lecture du fichier…"
                     val bytes = app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw java.io.IOException("Fichier illisible")
                     if (bytes.size > 50_000_000) throw java.io.IOException("Fichier trop gros")
+                    stage = "Lecture du tracé (${sizeLabel(bytes.size)})…"
                     val track: Track
                     val ext: String
                     if (Fit.looksLikeFit(bytes)) {
@@ -99,9 +105,13 @@ class ActivityController(
                 say(Snack("Import impossible : ${e.message}"))
             } finally {
                 busy = false
+                stage = null
             }
         }
     }
+
+    private fun sizeLabel(bytes: Int): String =
+        if (bytes >= 1_000_000) "${(bytes + 500_000) / 1_000_000} Mo" else "${(bytes + 500) / 1000} ko"
 
     fun cancelImport() { pending = null }
 
@@ -112,20 +122,27 @@ class ActivityController(
         busy = true
         scope.launch {
             try {
+                stage = "Analyse du tracé (${p.track.points.size} points)…"
                 var note = withContext(io) { saveNew(p.track, sport, title.trim().ifEmpty { p.title }, p.bytes, p.extension, p.existing) }
+                stage = null
                 if (useRelief && p.needsAltitude) note = lookUpAltitude(note, quiet = false)
                 open(note)
             } catch (e: Exception) {
                 say(Snack("Import impossible : ${e.message}"))
             } finally {
                 busy = false
+                stage = null
             }
         }
     }
 
     /** Writes the track file and the note. Blocking: call from the IO dispatcher. */
-    fun saveNew(track: Track, sport: Sport, title: String, bytes: ByteArray, extension: String, replace: Note? = null, altMarker: String? = null): Note {
-        val a = Analyzer.analyze(track, sport)
+    fun saveNew(
+        track: Track, sport: Sport, title: String, bytes: ByteArray, extension: String, replace: Note? = null, altMarker: String? = null,
+        /** The analysis of [track] for [sport] when the caller already has it. */
+        analysis: Analysis? = null,
+    ): Note {
+        val a = analysis ?: Analyzer.analyze(track, sport)
         val now = System.currentTimeMillis()
         val ids = (repo.notes.value + repo.activities.value).map { it.id }.toSet()
         var id = replace?.id ?: NoteFormat.generateId()
@@ -211,20 +228,23 @@ class ActivityController(
                                 reliefProgress = null
                             }
                         }
+                        stage = "Analyse du tracé (${track.points.size} points)…"
                         val analysis = Analyzer.analyze(track, rec.sport)
                         val bytes = Fit.write(track, rec.sport, analysis.stats.distance)
-                        saveNew(track, rec.sport, name, bytes, "fit", null, marker)
+                        saveNew(track, rec.sport, name, bytes, "fit", null, marker, analysis)
                     } else {
                         val seconds = ((end - rec.start - rec.track.pauses.sumOf { it.end - it.start }) / 1000).coerceAtLeast(0)
                         saveManualNow(name, rec.sport, rec.start, seconds, distance ?: 0.0)
                     }
                 }
+                stage = null
                 Recorder.discard()
                 open(note)
             } catch (e: Exception) {
                 say(Snack("Enregistrement impossible : ${e.message}. L'activité reste à enregistrer."))
             } finally {
                 busy = false
+                stage = null
             }
         }
     }
@@ -354,19 +374,26 @@ class ActivityController(
         scope.launch {
             val loaded = withContext(io) {
                 try {
+                    opening = "Lecture du tracé…"
                     val bytes = repo.fs.readBytes(file) ?: throw java.io.IOException("Fichier introuvable (pas encore synchronisé ?)")
                     var track = if (Fit.looksLikeFit(bytes)) Fit.read(bytes) else Gpx.read(String(bytes, Charsets.UTF_8))
                     info.alt?.takeIf { it.startsWith("attachments/") }?.let { alt ->
                         if (Elevation.missing(track)) repo.fs.readText(alt)?.let { track = Elevation.apply(track, Elevation.parse(it)) }
                     }
+                    opening = "Analyse du tracé (${track.points.size} points)…"
                     ActivityDetail(note, track, Analyzer.analyze(track, info.sport))
                 } catch (e: Exception) {
                     ActivityDetail(note, null, null, e.message ?: "Lecture impossible")
                 }
             }
+            opening = null
             if (detail?.note?.path == note.path) detail = loaded
         }
     }
+
+    /** What the opening of a track file is doing, shown under the detail screen's spinner; null when idle. */
+    var opening by mutableStateOf<String?>(null)
+        private set
 
     fun close() { detail = null }
 
@@ -374,17 +401,19 @@ class ActivityController(
     fun update(note: Note, title: String, description: String, sport: Sport) {
         if (readOnly()) return
         scope.launch {
-            val saved = withContext(io) {
+            val current = detail?.takeIf { it.note.path == note.path }
+            // the analysis is redone off the main thread, and only when the sport changes: a rename keeps the figures
+            val (saved, analysis) = withContext(io) {
                 var info = note.activity
-                val current = detail?.takeIf { it.note.path == note.path }
+                var analysis = current?.analysis
                 if (info != null && info.sport != sport) {
                     val track = current?.track
-                    info = if (track != null) ActivityInfo.from(sport, Analyzer.analyze(track, sport), track, info.file, info.alt, untimedStart = info.start) else info.copy(sport = sport)
+                    analysis = track?.let { Analyzer.analyze(it, sport) }
+                    info = if (track != null) ActivityInfo.from(sport, analysis!!, track, info.file, info.alt, untimedStart = info.start) else info.copy(sport = sport)
                 }
-                repo.save(note.copy(title = title.trim().ifEmpty { note.title }, body = description.trim(), activity = info, updated = System.currentTimeMillis()))
+                repo.save(note.copy(title = title.trim().ifEmpty { note.title }, body = description.trim(), activity = info, updated = System.currentTimeMillis())) to analysis
             }
-            val track = detail?.track
-            detail = ActivityDetail(saved, track, track?.let { Analyzer.analyze(it, saved.activity?.sport ?: sport) }, detail?.error)
+            detail = ActivityDetail(saved, current?.track, analysis, current?.error)
         }
     }
 

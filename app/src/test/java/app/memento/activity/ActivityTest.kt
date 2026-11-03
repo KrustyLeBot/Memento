@@ -81,6 +81,32 @@ class FitTest {
 
 class GpxTest {
     @Test
+    fun theHandReadTimeIsJavaTimes() {
+        val r = java.util.Random(3)
+        fun slow(s: String): Long? = try { java.time.Instant.parse(s).toEpochMilli() } catch (_: Exception) { null }
+        val samples = ArrayList<String>()
+        repeat(50_000) {
+            val ms = (r.nextLong() % 4_000_000_000_000L).let { if (it < 0) -it else it } - 1_000_000_000_000L
+            val text = java.time.Instant.ofEpochMilli(ms).plusNanos(r.nextInt(1_000_000).toLong()).toString()
+            samples.add(text)
+            samples.add(text.substringBefore('.').removeSuffix("Z") + "Z")
+        }
+        samples.addAll(
+            listOf(
+                "2024-02-29T10:00:00Z", "2023-02-29T10:00:00Z", "2000-02-29T00:00:00Z", "1900-02-29T00:00:00Z", "2024-04-31T00:00:00Z",
+                "2024-01-01T24:00:00Z", "2024-01-01T23:60:00Z", "2024-01-01T23:59:60Z", "2024-13-01T00:00:00Z", "2024-00-10T00:00:00Z",
+                "2024-01-01T10:00:00.Z", "2024-01-01T10:00:00.1234567891Z", "2024-01-01T10:00:00.5Z", "2024-01-01T10:00:00+02:00",
+                "2024-01-01t10:00:00Z", "2024-01-01T10:00:0aZ", "1969-12-31T23:59:59.999Z", "0000-01-01T00:00:00Z",
+            ),
+        )
+        for (s in samples) {
+            val fast = Gpx.utcTime(s)
+            if (fast != null) assertEquals(s, slow(s), fast)
+            assertEquals(s, slow(s) ?: runCatching { java.time.OffsetDateTime.parse(s).toInstant().toEpochMilli() }.getOrNull(), Gpx.parseTime(s))
+        }
+    }
+
+    @Test
     fun readsPointsHeartRateAndSegmentsAsPauses() {
         val gpx = """<?xml version="1.0"?>
 <gpx version="1.1" creator="test"><trk><name>Tour du lac</name>
@@ -240,6 +266,8 @@ class AnalysisTest {
         assertEquals(5.0, res.quality.medianIntervalSec, 0.01)
         assertTrue(res.quality.hasHr)
         assertEquals(140, res.stats.hrAvg)
+        assertEquals(140, res.stats.hrMin)
+        assertNull(Analyzer.analyze(Track(leg(null, 100, 2.0, step = 5)), Sport.WALK).stats.hrMin)
     }
 }
 

@@ -137,7 +137,7 @@ fun ActivitiesScreen(vm: MainViewModel) {
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator()
-                        vm.activities.reliefProgress?.let { Text("  $it") }
+                        (vm.activities.reliefProgress ?: vm.activities.stage)?.let { Text("  $it") }
                     }
                 }
             }

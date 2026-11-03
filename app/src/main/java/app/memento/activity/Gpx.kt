@@ -19,16 +19,16 @@ object Gpx {
         val segmentStarts = ArrayList<Int>() // index of the first point of each segment
         val segPositions = GpxScan.openings(text, "<trkseg")
         var segIdx = -1
-        GpxScan.elements(text, "trkpt") { start, attrs, inner ->
+        GpxScan.ranges(text, "trkpt") { start, af, at, inf, int ->
             while (segIdx + 1 < segPositions.size && segPositions[segIdx + 1] < start) {
                 segIdx++
                 segmentStarts.add(points.size)
             }
-            val lat = GpxScan.attr(attrs, "lat")?.toDoubleOrNull() ?: return@elements
-            val lon = GpxScan.attr(attrs, "lon")?.toDoubleOrNull() ?: return@elements
-            val ele = GpxScan.child(inner, "ele")?.toDoubleOrNull()
-            val hr = GpxScan.heartRate(inner)
-            val time = GpxScan.child(inner, "time")?.let { parseTime(it) }
+            val lat = GpxScan.attr(text, af, at, "lat")?.toDoubleOrNull() ?: return@ranges
+            val lon = GpxScan.attr(text, af, at, "lon")?.toDoubleOrNull() ?: return@ranges
+            val ele = GpxScan.child(text, inf, int, "ele")?.toDoubleOrNull()
+            val hr = GpxScan.heartRate(text, inf, int)
+            val time = GpxScan.child(text, inf, int, "time")?.let { parseTime(it) }
             if (time == null) {
                 untimed.add(TrackPoint(untimed.size * UNTIMED_STEP_MS, lat, lon, ele, hr, gpsAlt = ele))
             } else {
@@ -44,7 +44,8 @@ object Gpx {
                 hrAvg = if (hrs.isNotEmpty()) Math.round(hrs.average()).toInt() else null, hrMax = hrs.maxOrNull(),
             )
         }
-        val sorted = points.sortedBy { it.time }
+        // a recorded file is in order: no second list of every point unless it really is not
+        val sorted = if ((1 until points.size).all { points[it - 1].time <= points[it].time }) points else points.sortedBy { it.time }
         val pauses = ArrayList<Pause>()
         for (s in segmentStarts.drop(1)) {
             if (s in 1 until points.size) {
@@ -64,9 +65,49 @@ object Gpx {
         )
     }
 
-    fun parseTime(s: String): Long? = try {
+    fun parseTime(s: String): Long? = utcTime(s) ?: try {
         Instant.parse(s).toEpochMilli()
     } catch (_: Exception) {
         try { OffsetDateTime.parse(s).toInstant().toEpochMilli() } catch (_: Exception) { null }
+    }
+
+    /**
+     * The usual `2024-05-01T08:30:00Z` / `…:00.123Z` read by hand, null for anything else (left to java.time): the
+     * formatter costs microseconds a point, seconds over a 200 000-point file on a weak phone.
+     */
+    internal fun utcTime(s: String): Long? {
+        val n = s.length
+        if (n < 20 || s[n - 1] != 'Z' || s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':') return null
+        fun digits(from: Int, count: Int): Int {
+            var v = 0
+            for (i in from until from + count) {
+                val c = s[i]
+                if (c !in '0'..'9') return -1
+                v = v * 10 + (c - '0')
+            }
+            return v
+        }
+        val year = digits(0, 4)
+        val month = digits(5, 2)
+        val day = digits(8, 2)
+        val hour = digits(11, 2)
+        val minute = digits(14, 2)
+        val second = digits(17, 2)
+        if (year < 0 || month !in 1..12 || day < 1 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) return null
+        var nanos = 0
+        if (n > 20) {
+            val fraction = n - 21 // between the '.' and the 'Z'
+            if (s[19] != '.' || fraction !in 1..9) return null
+            val f = digits(20, fraction)
+            if (f < 0) return null
+            nanos = f
+            repeat(9 - fraction) { nanos *= 10 }
+        }
+        val leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+        val monthDays = when (month) { 2 -> if (leap) 29 else 28; 4, 6, 9, 11 -> 30; else -> 31 }
+        if (day > monthDays) return null
+        val epochDay = java.time.LocalDate.of(year, month, day).toEpochDay()
+        val seconds = epochDay * 86_400 + hour * 3600 + minute * 60 + second
+        return seconds * 1000 + nanos / 1_000_000
     }
 }

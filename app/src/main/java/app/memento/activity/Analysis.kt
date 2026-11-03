@@ -2,6 +2,7 @@ package app.memento.activity
 
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 
 /** One cleaned, smoothed point of an activity. */
 data class Sample(
@@ -51,6 +52,8 @@ data class Stats(
     val runLongest: Double,
     val climbs: Int = 0,
     val climbGain: Double = 0.0,
+    /** Lowest heart rate of the samples (the chart's low label), null without any. */
+    val hrMin: Int? = null,
 ) {
     val avgSpeed: Double get() = if (movingMs > 0) distance / (movingMs / 1000.0) else 0.0
 }
@@ -98,10 +101,16 @@ object Analyzer {
         val total = track.points.size
         val kept = clean(track)
         val n = kept.size
+        // primitive copies: the loops below read each point many times, and a weak phone pays for every indirection
+        val t = LongArray(n) { kept[it].time }
+        val la = DoubleArray(n) { kept[it].lat }
+        val lo = DoubleArray(n) { kept[it].lon }
+        val altOk = BooleanArray(n) { kept[it].alt != null }
+        val altRaw = DoubleArray(n) { kept[it].alt ?: 0.0 }
         val seg = IntArray(n)
+        val pauses = PauseIndex(track.pauses)
         for (i in 1 until n) {
-            val crossesPause = track.pauses.any { it.start < kept[i].time && it.end > kept[i - 1].time }
-            seg[i] = seg[i - 1] + if (crossesPause) 1 else 0
+            seg[i] = seg[i - 1] + if (pauses.overlaps(t[i - 1], t[i])) 1 else 0
         }
 
         // stops: nothing moved more than STOP_RADIUS for at least STOP_MIN_MS
@@ -110,8 +119,8 @@ object Analyzer {
         val stops = ArrayList<Stop>()
         // "within STOP_RADIUS": a flat projection around the first point, exact to the micrometre at 8 m, without the
         // trigonometry of a full distance (a 200 000-point file asks it more than a million times)
-        val latR = DoubleArray(n) { Math.toRadians(kept[it].lat) }
-        val lonR = DoubleArray(n) { Math.toRadians(kept[it].lon) }
+        val latR = DoubleArray(n) { Math.toRadians(la[it]) }
+        val lonR = DoubleArray(n) { Math.toRadians(lo[it]) }
         val cosLat = DoubleArray(n) { cos(latR[it]) }
         val r2 = (STOP_RADIUS / Geo.EARTH_RADIUS).let { it * it }
         fun near(a: Int, b: Int): Boolean {
@@ -123,9 +132,9 @@ object Analyzer {
         while (i < n) {
             var j = i
             while (j + 1 < n && seg[j + 1] == seg[i] && near(i, j + 1)) j++
-            if (j > i && kept[j].time - kept[i].time >= STOP_MIN_MS) {
+            if (j > i && t[j] - t[i] >= STOP_MIN_MS) {
                 for (k in i..j) { stopIdx[k] = true; stopOf[k] = stops.size }
-                stops.add(Stop(kept[i].time, kept[j].time, kept[i].lat, kept[i].lon, manual = false))
+                stops.add(Stop(t[i], t[j], la[i], lo[i], manual = false))
                 i = j + 1
             } else {
                 i++
@@ -140,20 +149,20 @@ object Analyzer {
             cum[k] = cum[k - 1]
             if (seg[k] != seg[k - 1]) {
                 // a pause (watch auto-pause, button): what was walked across it still counts, unless it is a jump
-                val d = Geo.distance(kept[k - 1], kept[k])
+                val d = Geo.distance(la[k - 1], lo[k - 1], la[k], lo[k])
                 if (d <= PAUSE_BRIDGE) cum[k] += d
                 continue
             }
             if (!inStop) {
-                cum[k] += Geo.distance(kept[k - 1], kept[k])
-                moving += kept[k].time - kept[k - 1].time
+                cum[k] += Geo.distance(la[k - 1], lo[k - 1], la[k], lo[k])
+                moving += t[k] - t[k - 1]
             }
         }
 
         // the smoothing window is in time: over stand-in times it would average points kilometres apart on a route
-        val alt = if (track.untimed) kept.map { it.alt } else smoothAltitude(kept)
-        val speed = smoothSpeed(kept, seg, cum)
-        val hasAlt = alt.any { it != null }
+        val alt = if (track.untimed) altRaw else smoothAltitude(t, altRaw, altOk)
+        val speed = smoothSpeed(t, seg, cum)
+        val hasAlt = altOk.any { it }
 
         // ski runs
         val down = BooleanArray(n)
@@ -162,10 +171,10 @@ object Analyzer {
             val stepDown = BooleanArray(n)
             for (k in 1 until n) {
                 if (seg[k] != seg[k - 1]) continue
-                val dt = (kept[k].time - kept[k - 1].time) / 1000.0
+                val dt = (t[k] - t[k - 1]) / 1000.0
                 if (dt <= 0) continue
-                stepDown[k] = if (hasAlt && alt[k] != null && alt[k - 1] != null) {
-                    (alt[k]!! - alt[k - 1]!!) / dt <= DOWN_RATE && speed[k] >= DOWN_MIN_SPEED
+                stepDown[k] = if (hasAlt && altOk[k] && altOk[k - 1]) {
+                    (alt[k] - alt[k - 1]) / dt <= DOWN_RATE && speed[k] >= DOWN_MIN_SPEED
                 } else {
                     speed[k] >= DOWN_NO_ALT_SPEED
                 }
@@ -179,13 +188,13 @@ object Analyzer {
                     if (stepDown[m]) { end = m; m++; continue }
                     // a short flat part inside a descent does not end it
                     var q = m
-                    while (q < n && !stepDown[q] && seg[q] == seg[k] && kept[q].time - kept[end].time <= RUN_MERGE_MS) q++
-                    if (q < n && stepDown[q] && seg[q] == seg[k] && kept[q].time - kept[end].time <= RUN_MERGE_MS) { m = q; continue }
+                    while (q < n && !stepDown[q] && seg[q] == seg[k] && t[q] - t[end] <= RUN_MERGE_MS) q++
+                    if (q < n && stepDown[q] && seg[q] == seg[k] && t[q] - t[end] <= RUN_MERGE_MS) { m = q; continue }
                     break
                 }
                 val first = k - 1
-                val dur = kept[end].time - kept[first].time
-                val drop = if (hasAlt && alt[first] != null && alt[end] != null) alt[first]!! - alt[end]!! else 0.0
+                val dur = t[end] - t[first]
+                val drop = if (hasAlt && altOk[first] && altOk[end]) alt[first] - alt[end] else 0.0
                 val ok = dur >= RUN_MIN_MS && (!hasAlt || drop >= RUN_MIN_DROP)
                 if (ok) {
                     var vmax = 0.0
@@ -203,8 +212,8 @@ object Analyzer {
             val stepUp = BooleanArray(n)
             for (k in 1 until n) {
                 if (seg[k] != seg[k - 1]) continue
-                val dt = (kept[k].time - kept[k - 1].time) / 1000.0
-                if (dt > 0 && alt[k] != null && alt[k - 1] != null) stepUp[k] = (alt[k]!! - alt[k - 1]!!) / dt >= UP_RATE
+                val dt = (t[k] - t[k - 1]) / 1000.0
+                if (dt > 0 && altOk[k] && altOk[k - 1]) stepUp[k] = (alt[k] - alt[k - 1]) / dt >= UP_RATE
             }
             var k = 1
             while (k < n) {
@@ -214,13 +223,13 @@ object Analyzer {
                 while (m < n && seg[m] == seg[k]) {
                     if (stepUp[m]) { end = m; m++; continue }
                     var q = m
-                    while (q < n && !stepUp[q] && seg[q] == seg[k] && kept[q].time - kept[end].time <= CLIMB_MERGE_MS) q++
-                    if (q < n && stepUp[q] && seg[q] == seg[k] && kept[q].time - kept[end].time <= CLIMB_MERGE_MS) { m = q; continue }
+                    while (q < n && !stepUp[q] && seg[q] == seg[k] && t[q] - t[end] <= CLIMB_MERGE_MS) q++
+                    if (q < n && stepUp[q] && seg[q] == seg[k] && t[q] - t[end] <= CLIMB_MERGE_MS) { m = q; continue }
                     break
                 }
                 val first = k - 1
-                val gain = if (alt[first] != null && alt[end] != null) alt[end]!! - alt[first]!! else 0.0
-                val dur = kept[end].time - kept[first].time
+                val gain = if (altOk[first] && altOk[end]) alt[end] - alt[first] else 0.0
+                val dur = t[end] - t[first]
                 if (gain >= CLIMB_MIN_GAIN && dur >= CLIMB_MIN_MS) {
                     for (q in first..end) if (!down[q]) up[q] = true
                     climbs.add(Climb(first, end, cum[end] - cum[first], gain, dur))
@@ -232,36 +241,56 @@ object Analyzer {
         // climb with hysteresis
         var ascent = 0.0
         var descent = 0.0
-        var ref: Double? = null
-        for (a in alt) {
-            if (a == null) continue
-            val r = ref
-            if (r == null) { ref = a; continue }
-            if (a - r >= CLIMB_THRESHOLD) { ascent += a - r; ref = a }
-            else if (r - a >= CLIMB_THRESHOLD) { descent += r - a; ref = a }
+        var hasRef = false
+        var ref = 0.0
+        var minAlt = 0.0
+        var maxAlt = 0.0
+        for (k in 0 until n) {
+            if (!altOk[k]) continue
+            val a = alt[k]
+            if (!hasRef) { hasRef = true; ref = a; minAlt = a; maxAlt = a; continue }
+            minAlt = min(minAlt, a)
+            maxAlt = max(maxAlt, a)
+            if (a - ref >= CLIMB_THRESHOLD) { ascent += a - ref; ref = a }
+            else if (ref - a >= CLIMB_THRESHOLD) { descent += ref - a; ref = a }
         }
 
-        val samples = List(n) { k ->
-            Sample(kept[k].time, kept[k].lat, kept[k].lon, cum[k], alt[k], speed[k], kept[k].hr, down[k], up[k], stopIdx[k])
+        // an untimed track's speeds are stand-ins: its samples are built without them rather than built then copied
+        val sampleSpeed = if (track.untimed) DoubleArray(n) else speed
+        val samples = ArrayList<Sample>(n)
+        for (k in 0 until n) {
+            val p = kept[k]
+            val a = if (!altOk[k]) null else if (track.untimed) p.alt else alt[k]
+            samples.add(Sample(t[k], la[k], lo[k], cum[k], a, sampleSpeed[k], p.hr, down[k], up[k], stopIdx[k]))
         }
         val pauseStops = track.pauses.map { p ->
-            val ref0 = kept.lastOrNull { it.time <= p.start } ?: kept.firstOrNull()
+            val at = lastAtOrBefore(t, p.start)
+            val ref0 = if (at >= 0) kept[at] else kept.firstOrNull()
             Stop(p.start, p.end, ref0?.lat ?: 0.0, ref0?.lon ?: 0.0, manual = true)
-        }.filter { p -> kept.isNotEmpty() && p.end > kept.first().time && p.start < kept.last().time }
+        }.filter { p -> n > 0 && p.end > t[0] && p.start < t[n - 1] }
 
-        val hrs = kept.mapNotNull { it.hr }
-        val altVals = alt.filterNotNull()
-        val elapsed = if (n >= 2) kept.last().time - kept.first().time else (track.sessionElapsedMs ?: 0L)
-        val intervals = (1 until n).map { (kept[it].time - kept[it - 1].time) / 1000.0 }.sorted()
+        var hrCount = 0
+        var hrSum = 0L
+        var hrMax = Int.MIN_VALUE
+        var hrMin = Int.MAX_VALUE
+        for (p in kept) {
+            val h = p.hr ?: continue
+            hrCount++
+            hrSum += h
+            if (h > hrMax) hrMax = h
+            if (h < hrMin) hrMin = h
+        }
+        val elapsed = if (n >= 2) t[n - 1] - t[0] else (track.sessionElapsedMs ?: 0L)
+        val intervals = DoubleArray(maxOf(n - 1, 0)) { (t[it + 1] - t[it]) / 1000.0 }.also { it.sort() }
         val stats = Stats(
             elapsedMs = elapsed,
             movingMs = if (n >= 2) moving else (track.sessionTimerMs ?: 0L),
-            distance = deviceOrComputed(track.sessionDistance, if (n >= 2) cum.last() else 0.0),
+            distance = deviceOrComputed(track.sessionDistance, if (n >= 2) cum[n - 1] else 0.0),
             ascent = ascent, descent = descent,
-            maxSpeed = maxWindowSpeed(kept, seg, cum),
-            minAlt = altVals.minOrNull(), maxAlt = altVals.maxOrNull(),
-            hrAvg = if (hrs.isNotEmpty()) Math.round(hrs.average()).toInt() else track.hrAvg,
-            hrMax = hrs.maxOrNull() ?: track.hrMax,
+            maxSpeed = maxWindowSpeed(t, seg, cum),
+            minAlt = if (hasRef) minAlt else null, maxAlt = if (hasRef) maxAlt else null,
+            hrAvg = if (hrCount > 0) Math.round(hrSum.toDouble() / hrCount).toInt() else track.hrAvg,
+            hrMax = if (hrCount > 0) hrMax else track.hrMax,
             runs = runs.size,
             runDrop = runs.sumOf { it.drop },
             runMaxSpeed = runs.maxOfOrNull { it.maxSpeed } ?: 0.0,
@@ -269,9 +298,10 @@ object Analyzer {
             runLongest = runs.maxOfOrNull { it.distance } ?: 0.0,
             climbs = climbs.size,
             climbGain = climbs.sumOf { it.gain },
+            hrMin = if (hrCount > 0) hrMin else null,
         )
         val quality = Quality(
-            points = total, dropped = total - n, hasAltitude = hasAlt, hasHr = hrs.isNotEmpty() || track.hrAvg != null,
+            points = total, dropped = total - n, hasAltitude = hasAlt, hasHr = hrCount > 0 || track.hrAvg != null,
             medianIntervalSec = if (intervals.isEmpty()) 0.0 else intervals[intervals.size / 2],
             manufacturer = track.manufacturer,
         )
@@ -279,7 +309,7 @@ object Analyzer {
             // stand-in times one second apart: on a file recorded at 1 Hz (most watches) the stops above still keep
             // the jitter of standing still out of the distance, but their durations mean nothing and are not shown
             return Analysis(
-                samples.map { it.copy(speed = 0.0) }, emptyList(), pauseStops, runs, climbs,
+                samples, emptyList(), pauseStops, runs, climbs,
                 stats.copy(elapsedMs = 0, movingMs = 0, maxSpeed = 0.0, runMaxSpeed = 0.0, runAvgSpeed = 0.0),
                 quality.copy(medianIntervalSec = 0.0),
             )
@@ -287,18 +317,49 @@ object Analyzer {
         return Analysis(samples, stops, pauseStops, runs, climbs, stats, quality)
     }
 
+    /** Index of the last of the sorted [t] at or before [time], -1 when none. */
+    private fun lastAtOrBefore(t: LongArray, time: Long): Int {
+        var lo = 0
+        var hi = t.size - 1
+        var found = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (t[mid] <= time) { found = mid; lo = mid + 1 } else hi = mid - 1
+        }
+        return found
+    }
+
+    /**
+     * "Is a pause open between these two instants", asked with ever later instants: a running maximum of the pauses'
+     * ends instead of a scan of every pause for every point (a watch's auto-pause makes hundreds of them).
+     */
+    private class PauseIndex(pauses: List<Pause>) {
+        private val byStart = if (pauses.size > 1) pauses.sortedBy { it.start } else pauses
+        private var next = 0
+        private var maxEnd = Long.MIN_VALUE
+
+        /** Some pause starts before [to] and ends after [from]. [to] must never decrease from one call to the next. */
+        fun overlaps(from: Long, to: Long): Boolean {
+            while (next < byStart.size && byStart[next].start < to) {
+                maxEnd = max(maxEnd, byStart[next].end)
+                next++
+            }
+            return maxEnd > from
+        }
+    }
+
     /** The device's own total when the file has one and it is in the same range as ours (its sensors know more). */
     private fun deviceOrComputed(device: Double?, computed: Double): Double =
         if (device != null && device > 0 && (computed <= 0 || device in computed * 0.8..computed * 1.25)) device else computed
 
     /** Top speed held for MAX_WINDOW_MS: single GPS catch-up spikes (after a signal gap) do not count. */
-    private fun maxWindowSpeed(p: List<TrackPoint>, seg: IntArray, cum: DoubleArray): Double {
+    private fun maxWindowSpeed(t: LongArray, seg: IntArray, cum: DoubleArray): Double {
         var best = 0.0
         var j = 0
-        for (i in p.indices) {
+        for (i in t.indices) {
             if (j < i) j = i
-            while (j + 1 < p.size && seg[j + 1] == seg[i] && p[j].time - p[i].time < MAX_WINDOW_MS) j++
-            val dt = (p[j].time - p[i].time) / 1000.0
+            while (j + 1 < t.size && seg[j + 1] == seg[i] && t[j] - t[i] < MAX_WINDOW_MS) j++
+            val dt = (t[j] - t[i]) / 1000.0
             if (dt >= MAX_WINDOW_MS / 1000.0 * 0.8) best = max(best, (cum[j] - cum[i]) / dt)
         }
         return best
@@ -306,10 +367,14 @@ object Analyzer {
 
     /** Sorted by time, no repeated instants, no impossible jumps, nothing recorded while paused. */
     fun clean(track: Track): List<TrackPoint> {
-        val out = ArrayList<TrackPoint>()
-        for (p in track.points.sortedBy { it.time }) {
+        val pts = track.points
+        // the readers already sort: a 200 000-point copy only for a track that really is out of order
+        val sorted = if ((1 until pts.size).all { pts[it - 1].time <= pts[it].time }) pts else pts.sortedBy { it.time }
+        val paused = PauseIndex(track.pauses)
+        val out = ArrayList<TrackPoint>(sorted.size)
+        for (p in sorted) {
             if (p.lat !in -90.0..90.0 || p.lon !in -180.0..180.0) continue
-            if (track.pauses.any { p.time > it.start && p.time < it.end }) continue
+            if (paused.overlaps(p.time, p.time)) continue
             val prev = out.lastOrNull()
             if (prev != null) {
                 val dt = (p.time - prev.time) / 1000.0
@@ -322,35 +387,37 @@ object Analyzer {
         return out
     }
 
-    private fun smoothAltitude(p: List<TrackPoint>): List<Double?> {
-        val out = ArrayList<Double?>(p.size)
+    /** Mean of the altitudes within ALT_WINDOW_MS on either side, where [ok] says a point has one. */
+    private fun smoothAltitude(t: LongArray, alt: DoubleArray, ok: BooleanArray): DoubleArray {
+        val n = t.size
+        val out = DoubleArray(n)
         var lo = 0
         var hi = 0
-        for (i in p.indices) {
-            if (p[i].alt == null) { out.add(null); continue }
-            while (p[lo].time < p[i].time - ALT_WINDOW_MS) lo++
+        for (i in 0 until n) {
+            if (!ok[i]) continue
+            while (t[lo] < t[i] - ALT_WINDOW_MS) lo++
             if (hi < i) hi = i
-            while (hi + 1 < p.size && p[hi + 1].time <= p[i].time + ALT_WINDOW_MS) hi++
+            while (hi + 1 < n && t[hi + 1] <= t[i] + ALT_WINDOW_MS) hi++
             var sum = 0.0
             var cnt = 0
-            for (k in lo..hi) p[k].alt?.let { sum += it; cnt++ }
-            out.add(sum / cnt)
+            for (k in lo..hi) if (ok[k]) { sum += alt[k]; cnt++ }
+            out[i] = sum / cnt
         }
         return out
     }
 
-    private fun smoothSpeed(p: List<TrackPoint>, seg: IntArray, cum: DoubleArray): DoubleArray {
-        val n = p.size
+    private fun smoothSpeed(t: LongArray, seg: IntArray, cum: DoubleArray): DoubleArray {
+        val n = t.size
         val out = DoubleArray(n)
         for (i in 0 until n) {
             var lo = i
-            while (lo > 0 && seg[lo - 1] == seg[i] && p[i].time - p[lo - 1].time <= SPEED_WINDOW_MS) lo--
+            while (lo > 0 && seg[lo - 1] == seg[i] && t[i] - t[lo - 1] <= SPEED_WINDOW_MS) lo--
             var hi = i
-            while (hi + 1 < n && seg[hi + 1] == seg[i] && p[hi + 1].time - p[i].time <= SPEED_WINDOW_MS) hi++
+            while (hi + 1 < n && seg[hi + 1] == seg[i] && t[hi + 1] - t[i] <= SPEED_WINDOW_MS) hi++
             if (lo == hi) {
                 if (i > 0 && seg[i - 1] == seg[i]) lo = i - 1 else if (i + 1 < n && seg[i + 1] == seg[i]) hi = i + 1
             }
-            val dt = (p[hi].time - p[lo].time) / 1000.0
+            val dt = (t[hi] - t[lo]) / 1000.0
             out[i] = if (dt > 0) (cum[hi] - cum[lo]) / dt else 0.0
         }
         return out

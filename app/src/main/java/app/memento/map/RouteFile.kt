@@ -27,11 +27,11 @@ object RouteFile {
         val trk = ArrayList<Triple<Double, Double, Double?>>()
         val rte = ArrayList<Triple<Double, Double, Double?>>()
         for ((tag, out) in listOf("trkpt" to trk, "rtept" to rte)) {
-            GpxScan.elements(text, tag) { _, attrs, inner ->
+            GpxScan.ranges(text, tag) { _, af, at, inf, int ->
                 // "NaN" parses as a number: one such point would make the route's box, and its pack, NaN
-                val lat = GpxScan.attr(attrs, "lat")?.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: return@elements
-                val lon = GpxScan.attr(attrs, "lon")?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: return@elements
-                out.add(Triple(lat, lon, GpxScan.child(inner, "ele")?.toDoubleOrNull()))
+                val lat = GpxScan.attr(text, af, at, "lat")?.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: return@ranges
+                val lon = GpxScan.attr(text, af, at, "lon")?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: return@ranges
+                out.add(Triple(lat, lon, GpxScan.child(text, inf, int, "ele")?.toDoubleOrNull()))
             }
         }
         val name = NAME.find(text)?.groupValues?.get(1)?.let { unescape(it) }?.trim()?.ifEmpty { null } ?: fallbackName
