@@ -13,6 +13,7 @@ import time
 import traceback
 import uuid
 from functools import partial
+from urllib.parse import quote
 from pathlib import Path
 from typing import Callable
 
@@ -22,14 +23,16 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWebEngineCore import (QWebEngineProfile, QWebEngineUrlRequestJob, QWebEngineUrlScheme,
                                      QWebEngineUrlSchemeHandler)
 
-from ..core import buildings, mapcache, peaks
+from ..core import buildings, mapcache, peaks, tuileries
 from .async_util import run_async
 
 SCHEME = b"scr"
 BASE_URL = "scr://app/"
 PURGE_EVERY = 20 * 1024 * 1024  # bytes written between two purges
+META_AGAIN_AFTER = 60.0  # s: a block's metatile is not asked again sooner; its missing tiles are asked for alone
+META_OFF_FOR = 600.0  # s: a Tuileries without /meta (404) gets single-tile requests that long
 TOUCH_AFTER = 3600  # seconds: a read refreshes the file's date (LRU) only past this age, the purge needs no finer
-MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg",
+MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg", "webp": b"image/webp",
         "json": b"application/json",
         "svg": b"image/svg+xml", "txt": b"text/plain"}
 # Errors that mean "no network", as opposed to a server answering (404 and the like).
@@ -65,11 +68,70 @@ def cache_root() -> Path:
     return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation))
 
 
-def _request(url: str) -> QNetworkRequest:
+def _request(url: str, source: tuileries.Tuileries | None = None) -> QNetworkRequest:
+    """[source]: a request to Tuileries, which alone gets its credentials; a redirect (Cloudflare Access's login page)
+    is not followed, so they never travel elsewhere."""
     request = QNetworkRequest(QUrl(url))
-    request.setRawHeader(QByteArray(b"User-Agent"), QByteArray(mapcache.USER_AGENT.encode()))
+    headers = source.headers() if source else {"User-Agent": mapcache.USER_AGENT}
+    for name, value in headers.items():
+        request.setRawHeader(QByteArray(name.encode()), QByteArray(value.encode()))
+    if source:
+        request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                             QNetworkRequest.RedirectPolicy.ManualRedirectPolicy)
     request.setTransferTimeout(15000)
     return request
+
+
+# What the settings chose: the Tuileries server (None: IGN, OpenStreetMap and AWS directly) and the photo's top zoom.
+_source: tuileries.Tuileries | None = None
+_photo_max_zoom = tuileries.PHOTO_MAX_ZOOM_DEFAULT
+_attribution = ""  # Tuileries' own credit, from its /api/info (read in the background)
+
+
+def configure(source: tuileries.Tuileries | None, photo_max_zoom: int, fetch_info: bool = True) -> None:
+    """Applies the map settings: to the tile store at once, to the pages on their next load."""
+    global _source, _photo_max_zoom, _attribution
+    source = source if source is not None and source.configured else None
+    changed = source != _source
+    _source = source
+    _photo_max_zoom = tuileries.clamp_photo_max_zoom(photo_max_zoom)
+    if changed:
+        _attribution = ""
+    if _profile is not None and shiboken6.isValid(_profile):
+        store = _profile.findChild(TileStore)
+        if store is not None:
+            store.source = _source
+    if _source is not None and changed and fetch_info:
+        wanted = _source
+
+        def run() -> None:
+            global _attribution
+            try:
+                info = tuileries.fetch_info(wanted)
+            except tuileries.TuileriesError as error:
+                _log(f"Tuileries: {error}")
+                return
+            if _source == wanted:
+                _attribution = info.attribution
+        threading.Thread(target=run, name="tuileries-info", daemon=True).start()
+
+
+def set_attribution(text: str) -> None:
+    """From a successful "Tester la connexion": shown by the next page load."""
+    global _attribution
+    _attribution = text
+
+
+def photo_max_zoom() -> int:
+    return _photo_max_zoom
+
+
+def page_query() -> str:
+    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its trails and credit."""
+    query = f"&photomax={_photo_max_zoom}"
+    if _source is not None:
+        query += "&trails=1" + (f"&attrib={quote(_attribution)}" if _attribution else "")
+    return query
 
 
 def _log(text: str) -> None:
@@ -119,11 +181,15 @@ class TileStore(QObject):
         super().__init__(parent)
         self.root = root
         self.backoff = mapcache.Backoff()
+        self.source = _source  # Tuileries when configured: then the only server asked
         self._nam = QNetworkAccessManager(self)
         self._waiting: dict[str, list[Callable[[bytes | None], None]]] = {}
         self._peaks_waiting: dict[tuple, list[Callable[[list | None], None]]] = {}
         self._cells_waiting: dict[tuple[int, int], list[Callable[[bytes | None], None]]] = {}
         self._pending: dict[Path, bytes] = {}  # handed to a worker, not on disk yet: served from here meanwhile
+        self._meta_waiting: dict[tuple, list[tuple[mapcache.TileRequest, Callable]]] = {}
+        self._meta_asked: dict[tuple, float] = {}  # block -> when its metatile was last asked for
+        self._meta_off_until = 0.0
         self._written = 0
         self._purge_lock = threading.Lock()
         self.purge_async()
@@ -131,7 +197,7 @@ class TileStore(QObject):
     # ---- tiles ----
 
     def get(self, tile: mapcache.TileRequest, done: Callable[[tuple[str, bytes] | None], None]) -> None:
-        for cached in (tile, tile.fallback()) if tile.kind == "ortho" else (tile,):
+        for cached in tile.variants():
             path = mapcache.tile_path(self.root, cached)
             if path in self._pending:
                 done((cached.mime, self._pending[path]))
@@ -147,11 +213,111 @@ class TileStore(QObject):
         if self.backoff.blocked(time.monotonic()):
             done(None)
             return
+        if self.source is not None and tile.kind == "ortho" and self._meta(tile, done):
+            return
+        self._single(tile, done)
+
+    def _single(self, tile: mapcache.TileRequest, done: Callable[[tuple[str, bytes] | None], None]) -> None:
         if tile.key in self._waiting:
             self._waiting[tile.key].append(done)
             return
         self._waiting[tile.key] = [done]
+        if self.source is not None:
+            reply = self._nam.get(_request(self.source.tile_url(tile), self.source))
+            reply.finished.connect(partial(self._tuileries_fetched, reply, tile))
+            return
         self._fetch(tile, mapcache.upstream_url(tile), primary=True)
+
+    # ---- Tuileries metatiles: one request for a 4x4 photo block and the relief, buildings and trails under it ----
+
+    def _meta(self, tile: mapcache.TileRequest, done: Callable) -> bool:
+        """Asks for (or joins) the metatile of the tile's block; False when the tile is to be asked for alone."""
+        block = tuileries.meta_block(tile.z, tile.x, tile.y)
+        if block in self._meta_waiting:
+            self._meta_waiting[block].append((tile, done))
+            return True
+        now = time.monotonic()
+        if now < self._meta_off_until or now - self._meta_asked.get(block, -1e9) < META_AGAIN_AFTER:
+            return False
+        if len(self._meta_asked) > 4000:
+            self._meta_asked = {k: v for k, v in self._meta_asked.items() if now - v < META_AGAIN_AFTER}
+        self._meta_asked[block] = now
+        self._meta_waiting[block] = [(tile, done)]
+        reply = self._nam.get(_request(tuileries.meta_url(self.source, *block), self.source))
+        reply.finished.connect(partial(self._meta_fetched, reply, block))
+        return True
+
+    def _meta_fetched(self, reply: QNetworkReply, block: tuple) -> None:
+        try:
+            error = reply.error()
+            status = int(reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0)
+            data = bytes(reply.readAll())
+        finally:
+            reply.deleteLater()
+        self._meta_answer(block, error in OFFLINE_ERRORS, status, data)
+
+    def _meta_answer(self, block: tuple, offline: bool, status: int, data: bytes) -> None:
+        """Every received entry goes to its cache (the page's next requests for that area are local); each waiting
+        photo tile gets its entry, or is asked for alone when its entry is pending, failed or missing."""
+        waiting = self._meta_waiting.pop(block, [])
+        if offline:
+            self.backoff.failed(time.monotonic())
+            for _tile, done in waiting:
+                done(None)
+            return
+        self.backoff.succeeded()
+        entries = []
+        if status == 200:
+            try:
+                entries = tuileries.parse_meta(data)
+            except ValueError as error:
+                _log(f"metatile {block}: {error}")
+        else:
+            if status == 404:  # a Tuileries from before metatiles
+                self._meta_off_until = time.monotonic() + META_OFF_FOR
+            _log(f"metatile {block}: Tuileries HTTP {status}")
+        photos = {}
+        for e in entries:
+            target = tuileries.meta_cache_target(self.root, e)
+            if target is not None:
+                self._store(*target)
+            if e.layer == "ortho":
+                photos[(e.x, e.y)] = e
+        for tile, done in waiting:
+            e = photos.get((tile.x, tile.y))
+            stored = tile.typed(e.mime) if e is not None and e.status == tuileries.META_OK and e.data else None
+            if stored is not None:
+                done((stored.mime, e.data))
+            elif e is not None and e.status == tuileries.META_NONE:
+                done(None)
+            else:
+                self._single(tile, done)
+
+    def _tuileries_fetched(self, reply: QNetworkReply, tile: mapcache.TileRequest) -> None:
+        """No stand-in here: Tuileries applies the OpenStreetMap rule itself, and a failure fails like offline."""
+        try:
+            error = reply.error()
+            status = int(reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0)
+            kind = str(reply.header(QNetworkRequest.KnownHeaders.ContentTypeHeader) or "")
+            data = bytes(reply.readAll())
+        finally:
+            reply.deleteLater()
+        self._tuileries_answer(tile, error in OFFLINE_ERRORS, status, kind, data)
+
+    def _tuileries_answer(self, tile: mapcache.TileRequest, offline: bool, status: int, kind: str, data: bytes) -> None:
+        if offline:
+            self.backoff.failed(time.monotonic())
+            self._finish(tile.key, None)
+            return
+        self.backoff.succeeded()
+        stored = tuileries.tile_answer(tile, status, kind, data)
+        if stored is None:
+            if status not in (204, 404):
+                _log(f"{tile.key}: Tuileries HTTP {status} {kind}")
+            self._finish(tile.key, None)
+            return
+        self._store(mapcache.tile_path(self.root, stored), data)
+        self._finish(tile.key, (stored.mime, data))
 
     def _fetch(self, tile: mapcache.TileRequest, url: str, primary: bool) -> None:
         reply = self._nam.get(_request(url))
@@ -220,6 +386,9 @@ class TileStore(QObject):
     # ---- peaks ----
 
     def peaks(self, req: mapcache.PeaksRequest, done: Callable[[list], None]) -> None:
+        if self.source is not None:
+            self._tuileries_peaks(req, done)
+            return
         box = peaks.cache_box(req.w, req.s, req.e, req.n)
         wanted = (req.w, req.s, req.e, req.n)
         if peaks.too_large(box):
@@ -294,6 +463,95 @@ class TileStore(QObject):
             done(candidates or [])
 
 
+    def _tuileries_peaks(self, req: mapcache.PeaksRequest, done: Callable[[list], None]) -> None:
+        """Tuileries answers the selected list for the exact square: cached as such, in its own folder."""
+        wanted = (req.w, req.s, req.e, req.n)
+        file = tuileries_peaks_file(self.root, wanted)
+        try:
+            done(tuileries.parse_peaks(self._pending[file] if file in self._pending else file.read_bytes()))
+            return
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError) as error:  # damaged: fetched again
+            _log(f"summits: damaged cache {file.name}: {error!r}")
+        if self.backoff.blocked(time.monotonic()):
+            done([])
+            return
+        key = ("tuileries",) + wanted
+        if key in self._peaks_waiting:
+            self._peaks_waiting[key].append(done)
+            return
+        self._peaks_waiting[key] = [done]
+        reply = self._nam.get(_request(self.source.peaks_url(*wanted), self.source))
+        reply.finished.connect(partial(self._tuileries_peaks_done, reply, key, file))
+
+    def _tuileries_peaks_done(self, reply: QNetworkReply, key: tuple, file: Path) -> None:
+        self._tuileries_peaks_text(self._text(reply), key, file)
+
+    def _tuileries_peaks_text(self, text: str | None, key: tuple, file: Path) -> None:
+        found = None
+        if text is not None:
+            try:
+                found = tuileries.parse_peaks(text.encode())
+            except (ValueError, KeyError, TypeError) as error:
+                _log(f"summits: unreadable Tuileries answer: {error!r}")
+        if found is not None:
+            self._store(file, json.dumps(found).encode())
+        for done in self._peaks_waiting.pop(key, []):
+            done(found or [])
+
+    # ---- trails (Tuileries only) ----
+
+    def trails(self, req: mapcache.TrailsRequest, done: Callable[[bytes | None], None]) -> None:
+        """The vector tile from the cache, else from Tuileries; b"" where it has none (never cached), None on error."""
+        if self.source is None:
+            done(None)
+            return
+        path = mapcache.trails_path(self.root, req)
+        if path in self._pending:
+            done(self._pending[path])
+            return
+        try:
+            data = _read_cached(path)
+            done(data)
+            return
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            _log(f"{path}: {error}")
+        if self.backoff.blocked(time.monotonic()):
+            done(None)
+            return
+        key = f"trails/{req.z}/{req.x}/{req.y}"
+        if key in self._waiting:
+            self._waiting[key].append(done)
+            return
+        self._waiting[key] = [done]
+        reply = self._nam.get(_request(self.source.trails_url(req), self.source))
+        reply.finished.connect(partial(self._trails_fetched, reply, req, key))
+
+    def _trails_fetched(self, reply: QNetworkReply, req: mapcache.TrailsRequest, key: str) -> None:
+        try:
+            error = reply.error()
+            status = int(reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0)
+            data = bytes(reply.readAll())
+        finally:
+            reply.deleteLater()
+        self._trails_answer(req, key, error in OFFLINE_ERRORS, status, data)
+
+    def _trails_answer(self, req: mapcache.TrailsRequest, key: str, offline: bool, status: int, data: bytes) -> None:
+        if offline:
+            self.backoff.failed(time.monotonic())
+            self._finish(key, None)
+            return
+        self.backoff.succeeded()
+        found = tuileries.trails_answer(status, data)
+        if found is None:
+            _log(f"{key}: Tuileries HTTP {status}")
+        elif found:
+            self._store(mapcache.trails_path(self.root, req), found)
+        self._finish(key, found)
+
     # ---- buildings ----
 
     def buildings(self, req: mapcache.BuildingsRequest, done: Callable[[bytes | None], None]) -> None:
@@ -318,7 +576,24 @@ class TileStore(QObject):
             self._cells_waiting[key].append(done)
             return
         self._cells_waiting[key] = [done]
+        if self.source is not None:
+            reply = self._nam.get(_request(self.source.buildings_url(*key), self.source))
+            reply.finished.connect(partial(self._tuileries_cell_done, reply, key))
+            return
         self._cell_page(key, [])
+
+    def _tuileries_cell_done(self, reply: QNetworkReply, key: tuple[int, int]) -> None:
+        self._tuileries_cell_text(self._text(reply), key)
+
+    def _tuileries_cell_text(self, text: str | None, key: tuple[int, int]) -> None:
+        data = text.encode() if text is not None else None
+        if data is not None and not tuileries.valid_cell(data, *key):
+            _log(f"buildings {key}: unreadable Tuileries answer")
+            data = None
+        if data is not None:
+            self._store(buildings.cache_path(self.root, *key), data)
+        for done in self._cells_waiting.pop(key, []):
+            done(data)
 
     def _cell_page(self, key: tuple[int, int], features: list) -> None:
         reply = self._nam.get(_request(buildings.wfs_url(*key, len(features))))
@@ -377,6 +652,9 @@ class SchemeHandler(QWebEngineUrlSchemeHandler):
             self.store.peaks(req, lambda found, j=job: self._answer(j, b"application/json", json.dumps(found).encode()))
         elif isinstance(req, mapcache.BuildingsRequest):
             self.store.buildings(req, lambda found, j=job: self._answer(j, b"application/json", found))
+        elif isinstance(req, mapcache.TrailsRequest):
+            # an empty body is an empty vector tile: the page draws no trail there
+            self.store.trails(req, lambda found, j=job: self._answer(j, mapcache.TRAILS_MIME.encode(), found))
         else:
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
 
@@ -427,6 +705,10 @@ def release_profile() -> None:
     if _profile is not None and shiboken6.isValid(_profile):
         shiboken6.delete(_profile)
     _profile = None
+
+
+def tuileries_peaks_file(root: Path, box: tuple) -> Path:
+    return root / "peaks-tuileries" / ("_".join(f"{v:.5f}" for v in box) + ".json")
 
 
 def tile_store() -> TileStore:

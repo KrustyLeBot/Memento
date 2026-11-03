@@ -7,6 +7,8 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { dark, prefs, setPref } from '../../lib/ui.js';
   import Glyph from './Glyph.svelte';
+  import { pageQuery, photoMaxZoom } from '../settings/map.js';
+  import { settings as settingsApi } from '../../lib/api.js';
 
   /** Off screen, kept loaded (the list, an activity without track). */
   export let parked = true;
@@ -45,10 +47,26 @@
     frame?.contentWindow?.postMessage({ target: 'smap', call: name, args }, location.origin);
   }
 
-  function start() {
+  /** @type {{ source: string, attribution?: string } | null} */
+  let tiles = null;
+  let starting = false;
+
+  async function start() {
+    if (starting) return;
+    starting = true;
+    // the tile source decides the trails overlay and the credit; unknown (an error) reads as no Tuileries
+    tiles = await settingsApi.mapTiles().catch(() => null);
+    starting = false;
     const theme = $dark ? 'dark' : 'light';
     state.set('setTheme', [theme]);
-    src = `/map/index.html?mode=${mode}&theme=${theme}&interactive=1`;
+    src = `/map/index.html?mode=${mode}&theme=${theme}&interactive=1${pageQuery(photomax, tiles)}`;
+  }
+
+  // the page reads the photo's top zoom when it loads: a new value reloads it, and onLoad replays the state
+  $: photomax = photoMaxZoom($prefs['map.photoMaxZoom']);
+  $: if (src && !src.includes(`&photomax=${photomax}&`) && !src.endsWith(`&photomax=${photomax}`)) {
+    loaded = false;
+    start();
   }
 
   function onLoad() {

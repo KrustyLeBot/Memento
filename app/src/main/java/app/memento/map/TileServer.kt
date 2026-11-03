@@ -48,7 +48,8 @@ class FetchedTile(val key: TileKey, val bytes: ByteArray)
 /**
  * Serves the map page and its data from the app's own origin (`appassets.androidplatform.net`): the page
  * from the APK assets, tiles from the offline packs, then the browsing cache, then the network, the
- * peaks list and the buildings cells the same way. Runs on the WebView's background threads; every network step
+ * peaks list and the buildings cells the same way. The network is IGN / OpenStreetMap / AWS, or only the Tuileries
+ * server when one is configured ([MapConfig]). Runs on the WebView's background threads; every network step
  * has a deadline.
  */
 object TileServer {
@@ -75,6 +76,21 @@ object TileServer {
         peaksDir = File(root, PEAKS)
     }
 
+    /** A browsing cache in [root] without a Context (tests). */
+    @Synchronized
+    internal fun initCache(root: File) {
+        cache = TileCache(root, BROWSING_MAX)
+        peaksDir = File(root, PEAKS)
+    }
+
+    /** What the page gets for a photo or relief tile (tests). */
+    internal fun serveTile(key: TileKey): WebResourceResponse = tile(key)
+
+    internal fun forgetMetatiles() {
+        metaSeen.clear()
+        metaOffUntil = 0L
+    }
+
     fun handle(request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
         if (url.host != HOST) return null
@@ -85,6 +101,7 @@ object TileServer {
                 path.startsWith("/t/") -> TileKey.parse(path)?.let { tile(it) } ?: notFound()
                 path == "/peaks" -> peaks(url)
                 path.startsWith("/buildings/") -> TileKey.parseBuildings(path)?.let { buildings(it) } ?: notFound()
+                path.startsWith("/trails/") -> trails(path)
                 else -> notFound()
             }
         } catch (e: Exception) {
@@ -102,12 +119,12 @@ object TileServer {
 
     private fun tile(key: TileKey): WebResourceResponse {
         // the file can vanish between the lookup and the open: a cache trim, an expired pack deleted
-        (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }?.let { return image(key.mime, it) }
-        if (key.kind == TileKey.KIND_ORTHO) {
-            val osm = key.fallback()
-            cache.get(osm.path)?.let { openOrNull(it) }?.let { return image(osm.mime, it) }
+        for (v in key.variants()) {
+            (OfflinePacks.findTile(v.path) ?: cache.get(v.path))?.let { openOrNull(it) }?.let { return image(v.mime, it) }
         }
         if (!NetState.online.value || backedOff()) return overzoomed(key) ?: notFound()
+        val t = MapConfig.tuileries
+        if (t != null && key.kind == TileKey.KIND_ORTHO) viaMeta(t, key)?.let { return it }
         val got = try {
             fetchShared(key, allowOsm = true)
         } catch (e: IOException) {
@@ -115,6 +132,63 @@ object TileServer {
             return overzoomed(key) ?: throw e
         } ?: return notFound()
         return image(got.key.mime, ByteArrayInputStream(got.bytes))
+    }
+
+    // ---- Tuileries metatiles: one request for a 4x4 photo block and the relief, buildings and trails under it ----
+
+    private const val META_AGAIN_MS = 60_000L  // a block's metatile is not asked again sooner: its missing tiles go alone
+    private const val META_OFF_MS = 600_000L  // a Tuileries without /meta (404) gets single-tile requests that long
+    private val metaLocks = ConcurrentHashMap<Triple<Int, Int, Int>, Any>()
+    /** Block -> (when asked, status of each photo entry by "x/y"). */
+    private val metaSeen = ConcurrentHashMap<Triple<Int, Int, Int>, Pair<Long, Map<String, Int>>>()
+    @Volatile private var metaOffUntil = 0L
+
+    /**
+     * The tile's answer from its block's metatile, every received entry going to the browsing cache (the page's next
+     * requests for that area are local); null when the tile is to be asked for alone (pending or failed in the
+     * metatile, block asked less than a minute ago, no /meta). The block's other tiles wait for the same metatile.
+     */
+    private fun viaMeta(t: Tuileries, key: TileKey): WebResourceResponse? {
+        val block = Metatile.block(key)
+        val lock = metaLocks.computeIfAbsent(block) { Any() }
+        try {
+            synchronized(lock) {
+                for (v in key.variants()) cache.get(v.path)?.let { openOrNull(it) }?.let { return image(v.mime, it) }
+                val now = SystemClock.elapsedRealtime()
+                metaSeen[block]?.takeIf { now - it.first < META_AGAIN_MS }?.let { seen ->
+                    return if (seen.second["${key.x}/${key.y}"] == Metatile.NONE) notFound() else null
+                }
+                if (now < metaOffUntil) return null
+                val r = try {
+                    get(Metatile.url(t, block), t.headers())
+                } catch (e: IOException) {
+                    return overzoomed(key) ?: notFound()
+                }
+                val entries = if (r.code == 200) {
+                    try { Metatile.parse(r.body) } catch (e: IOException) { Log.w(TAG, "metatile $block: ${e.message}"); emptyList() }
+                } else {
+                    if (r.code == 404) metaOffUntil = now + META_OFF_MS  // a Tuileries from before metatiles
+                    Log.w(TAG, "metatile $block: HTTP ${r.code}")
+                    emptyList()
+                }
+                val statuses = HashMap<String, Int>()
+                var answer: WebResourceResponse? = null
+                for (e in entries) {
+                    val path = e.cachePath()
+                    if (path != null) cache.put(path, e.data)
+                    if (e.layer != TileKey.KIND_ORTHO) continue
+                    statuses["${e.x}/${e.y}"] = e.status
+                    if (e.x == key.x && e.y == key.y && path != null) {
+                        answer = image(key.typed(e.mime)!!.mime, ByteArrayInputStream(e.data))
+                    }
+                }
+                if (metaSeen.size > 4000) metaSeen.entries.removeIf { now - it.value.first >= META_AGAIN_MS }
+                metaSeen[block] = now to statuses
+                return answer ?: if (statuses["${key.x}/${key.y}"] == Metatile.NONE) notFound() else null
+            }
+        } finally {
+            metaLocks.remove(block, lock)
+        }
     }
 
     /** Process-wide: a failure seen by one tile, a cell or a pack download spares the next requests their timeouts. */
@@ -181,7 +255,9 @@ object TileServer {
         if (key.kind != TileKey.KIND_ORTHO) return null
         overzoomCache.get(key.path)?.let { return image(key.mime, ByteArrayInputStream(it)) }
         for (o in Overzoom.candidates(key)) {
-            val f = OfflinePacks.findTile(o.ancestor.path) ?: cache.get(o.ancestor.path) ?: continue
+            // a photo, JPEG or WebP; never the OpenStreetMap stand-in, which is not the photo
+            val f = o.ancestor.variants().filter { it.kind != TileKey.KIND_OSM }
+                .firstNotNullOfOrNull { OfflinePacks.findTile(it.path) ?: cache.get(it.path) } ?: continue
             val bytes = try { crop(f, o) } catch (e: IOException) { Log.w(TAG, "overzoom ${key.path}: $e"); null } ?: continue
             overzoomCache.put(key.path, bytes)
             return image(key.mime, ByteArrayInputStream(bytes))
@@ -211,6 +287,11 @@ object TileServer {
      * the OSM tile policy forbids bulk downloads, so only browsing falls back to it.
      */
     fun fetch(key: TileKey, allowOsm: Boolean): FetchedTile? {
+        MapConfig.tuileries?.let { t ->
+            // Tuileries applies the OpenStreetMap rule itself: its PNG stand-in is refused where OSM would be
+            val got = Tuileries.tileOf(key, get(t.tileUrl(key), t.headers())) ?: return null
+            return got.takeIf { allowOsm || it.key.kind != TileKey.KIND_OSM }
+        }
         if (key.kind == TileKey.KIND_BUILDINGS) return FetchedTile(key, Buildings.fetchCell(key.x, key.y, ::get))
         if (key.kind == TileKey.KIND_DEM) {
             val r = get(TileSources.dem(key.z, key.x, key.y))
@@ -242,6 +323,40 @@ object TileServer {
         return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), ByteArrayInputStream(got.bytes))
     }
 
+    // ---- trails (Tuileries only) ----
+
+    private val TRAILS_PATH = Regex("""^/trails/(\d{1,2})/(\d{1,7})/(\d{1,7})$""")
+    private const val TRAILS_MAX_Z = 15
+
+    /** The vector tile from the cache, else from Tuileries; an empty one where it has none (never cached). */
+    private fun trails(path: String): WebResourceResponse {
+        val t = MapConfig.tuileries ?: return notFound()
+        val (z, x, y) = TRAILS_PATH.matchEntire(path)?.destructured?.toList()?.map { it.toInt() } ?: return notFound()
+        if (z > TRAILS_MAX_Z || x >= (1 shl z) || y >= (1 shl z)) return notFound()
+        val rel = "trails/$z/$x/$y.pbf"
+        cache.get(rel)?.let { openOrNull(it) }?.let { return WebResourceResponse(TRAILS_MIME, null, 200, "OK", headers(), it) }
+        if (!NetState.online.value || backedOff()) return notFound()
+        val bytes = Tuileries.trailsOf(get(t.trailsUrl(z, x, y), t.headers()))
+        if (bytes.isNotEmpty()) cache.put(rel, bytes)
+        // an empty body is an empty vector tile: the page draws no trail there
+        return WebResourceResponse(TRAILS_MIME, null, 200, "OK", headers(), ByteArrayInputStream(bytes))
+    }
+
+    private const val TRAILS_MIME = "application/x-protobuf"
+
+    /** Reads Tuileries' /api/info in the background for its credit on the map ([MapConfig.attribution]). */
+    fun refreshInfo() {
+        val t = MapConfig.tuileries ?: return
+        Thread {
+            try {
+                val info = tuileriesInfo(t)
+                if (MapConfig.tuileries == t) MapConfig.attribution = info.attribution
+            } catch (e: IOException) {
+                Log.w(TAG, "Tuileries info: ${e.message}")
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
     // ---- peaks ----
 
     private fun peaks(url: Uri): WebResourceResponse {
@@ -267,6 +382,15 @@ object TileServer {
     }
 
     fun computePeaks(b: Bbox): List<Peak> {
+        MapConfig.tuileries?.let { t ->
+            val r = get(t.peaksUrl(b), t.headers())
+            if (r.code != 200) throw IOException("Sommets Tuileries : ${Tuileries.statusMessage(r.code)}")
+            return try {
+                Peaks.fromJson(String(r.body, Charsets.UTF_8))
+            } catch (e: Json.JsonException) {
+                throw IOException("Sommets Tuileries : réponse illisible")
+            }
+        }
         val wfs = get(Peaks.wfsUrl(b))
         if (wfs.code != 200) throw IOException("Sommets IGN : HTTP ${wfs.code}")
         val candidates = Peaks.preselect(Peaks.parseWfs(String(wfs.body, Charsets.UTF_8)))
@@ -295,11 +419,68 @@ object TileServer {
         null
     }
 
-    fun get(url: String): HttpResult {
+    /**
+     * Asks Tuileries to warm an area before a trip (`POST /api/prepare`, [body] from [Tuileries.prepareLine] or
+     * [Tuileries.prepareBbox]); fire-and-forget on its own thread, a failure only logs. Nothing without Tuileries.
+     */
+    fun prepare(body: String) {
+        val t = MapConfig.tuileries ?: return
+        Thread {
+            try {
+                val r = post(t.prepareUrl, t.headers(), body)
+                if (r.code !in 200..299) Log.w(TAG, "prepare: ${Tuileries.statusMessage(r.code)}")
+            } catch (e: IOException) {
+                Log.w(TAG, "prepare: $e")
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    fun post(url: String, headers: Map<String, String>, body: String): HttpResult {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = TIMEOUT_MS
         c.readTimeout = TIMEOUT_MS
-        c.setRequestProperty("User-Agent", TileSources.USER_AGENT)
+        c.instanceFollowRedirects = false
+        c.requestMethod = "POST"
+        c.doOutput = true
+        for ((k, v) in headers) c.setRequestProperty(k, v)
+        c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("X-Tuileries", "1")  // Tuileries asks it of every POST (its CSRF rule)
+        try {
+            c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = c.responseCode
+            val answer = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+            return HttpResult(code, c.contentType, answer)
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** `GET /api/info` of [t] (blocking): the settings' "Tester la connexion". */
+    fun tuileriesInfo(t: Tuileries): TuileriesInfo {
+        if (!t.configured) throw TuileriesException("Adresse invalide : https://… attendue")
+        val r = try {
+            get(t.infoUrl, t.headers())
+        } catch (e: IOException) {
+            throw TuileriesException("Serveur injoignable (${e.message})")
+        }
+        if (r.code != 200) throw TuileriesException(Tuileries.statusMessage(r.code))
+        return Tuileries.parseInfo(String(r.body, Charsets.UTF_8))
+    }
+
+    /**
+     * [headers]: Tuileries' credentials, given only for its URLs. A redirect is then not followed (Cloudflare Access's
+     * login page), so they never travel elsewhere.
+     */
+    fun get(url: String, headers: Map<String, String>? = null): HttpResult {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = TIMEOUT_MS
+        c.readTimeout = TIMEOUT_MS
+        if (headers != null) {
+            c.instanceFollowRedirects = false
+            for ((k, v) in headers) c.setRequestProperty(k, v)
+        } else {
+            c.setRequestProperty("User-Agent", TileSources.USER_AGENT)
+        }
         try {
             val code = c.responseCode
             val body = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
@@ -334,6 +515,7 @@ object TileServer {
         "json" -> "application/json"
         "png" -> "image/png"
         "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
         "svg" -> "image/svg+xml"
         "woff2" -> "font/woff2"
         "pbf" -> "application/x-protobuf"

@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, Q
                                QPushButton, QStackedWidget, QWidget)
 
 from ..config import Config
-from ..core import atomic
+from ..core import atomic, tuileries
 from ..core import note as fmt
 from ..core.note import Note
 from ..core.store import Store, now_ms
-from ..services import updater
+from ..services import maphost, updater
 from ..services.async_util import run_async
 from . import files, theme
 from .activities_view import ActivitiesScreen, summary_line
@@ -21,6 +21,7 @@ from .contacts_view import ContactsScreen
 from .rail import Rail
 from .editor_view import EditorScreen
 from .list_view import ListScreen
+from .mapview import MapView
 from .settings_view import SettingsScreen
 from .update_toast import UpdateToast
 
@@ -46,6 +47,8 @@ class MainWindow(QMainWindow):
         self.toast: UpdateToast | None = None
         self._cleanup_tries = 0
         self.resize(1100, 740)
+        # before any map page exists: the first one is built with these settings
+        maphost.configure(self._tuileries(), self._photo_max_zoom())
 
         self.stack = QStackedWidget()
         self.list_screen = ListScreen(config.grid)
@@ -128,6 +131,8 @@ class MainWindow(QMainWindow):
         self.settings.check_updates.connect(lambda: self.check_updates(manual=True))
         self.settings.activity_changed.connect(self._activity_settings_changed)
         self.settings.module_visibility.connect(self.set_module_visible)
+        self.settings.map_changed.connect(self._map_settings_changed)
+        self.settings.test_tiles.connect(self._test_tiles)
 
         QShortcut(QKeySequence("Ctrl+N"), self, activated=lambda: self.new_note(False))
         QShortcut(QKeySequence("Ctrl+Shift+N"), self, activated=lambda: self.new_note(True))
@@ -207,6 +212,7 @@ class MainWindow(QMainWindow):
                            self.config.hidden_modules)
         self.settings.set_contacts_first_name_first(self.contacts.first_name_first)
         self.settings.load_agenda(self.agenda.prefs, self.agenda.data.settings)
+        self.settings.load_map(self._tuileries(), self._photo_max_zoom())
         self.rail.set_current(None)
         self.stack.setCurrentWidget(self.settings)
 
@@ -338,6 +344,29 @@ class MainWindow(QMainWindow):
         if "birthdays" in change:
             self.agenda.set_layer("birthdays", visible=change["birthdays"])
         self.agenda.apply_prefs(prefs)
+
+    def _tuileries(self) -> tuileries.Tuileries:
+        return getattr(self.config, "tuileries", None) or tuileries.Tuileries("")
+
+    def _photo_max_zoom(self) -> int:
+        return getattr(self.config, "photo_max_zoom", tuileries.PHOTO_MAX_ZOOM_DEFAULT)
+
+    def _map_settings_changed(self, source: tuileries.Tuileries, photo_max_zoom: int) -> None:
+        reload = photo_max_zoom != self._photo_max_zoom() or source != self._tuileries()
+        self.config.tuileries = source
+        self.config.photo_max_zoom = photo_max_zoom
+        maphost.configure(source, photo_max_zoom)
+        if reload:  # the photo's zoom is read when the page loads; a new server's tiles show on a fresh page
+            for view in self.findChildren(MapView):
+                view.reload_page()
+
+    def _test_tiles(self, source: tuileries.Tuileries) -> None:
+        self.settings.tiles_status.setText("Connexion…")
+        def done(result) -> None:
+            self.settings.show_tiles_test(result)
+            if isinstance(result, tuileries.Info) and source == self._tuileries():
+                maphost.set_attribution(result.attribution)
+        run_async(lambda: tuileries.fetch_info(source), done, done)
 
     def _contacts_order_changed(self, first_name_first: bool) -> None:
         self.config.contacts_first_name_first = first_name_first

@@ -503,7 +503,7 @@ def test_every_function_the_windows_host_calls_is_in_the_page_api():
 def test_urls_the_page_requests_are_served():
     page = _page()
     assert "fetch(`${BASE}t/ortho/${z}/${x}/${y}`, { signal })" in page  # through the page's ortho:// protocol
-    assert "maxzoom: 19" in page
+    assert "maxzoom: PHOTO_MAX_Z }" in page and "params.get('photomax')" in page
     assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
     assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
     assert mapcache.parse_request("/t/ortho/14/8501/5850") == mapcache.TileRequest("ortho", 14, 8501, 5850)

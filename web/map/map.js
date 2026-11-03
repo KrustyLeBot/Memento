@@ -9,7 +9,11 @@
   const PITCH_TALL = 45;     // on a tall narrow view, so the whole square's surface stays in sight
   const FOLLOW_PITCH = 55;
   const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
-  const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
+  // attrib: the tile server's own credit (e.g. the photo abroad), passed by the host; trails=1: its hiking-trails overlay
+  const EXTRA_ATTRIBUTION = (params.get('attrib') || '').slice(0, 300);
+  const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium' + (EXTRA_ATTRIBUTION ? ' · ' + EXTRA_ATTRIBUTION : '');
+  const TRAILS = params.get('trails') === '1';
+  const TRAIL_LAYERS = ['trails-halo', 'trails-route', 'trails-path'];
   // Buildings (3D only): IGN BD TOPO footprints extruded, walls a light stone, roofs coloured from the aerial photo.
   const BLD_Z = 15;            // the host serves one z15 cell (850 m wide in the Alps) per request
   const BLD_SAMPLE_Z = 17;     // the photo zoom roofs are sampled at (1.2 m a pixel)
@@ -28,7 +32,9 @@
     dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1' },
   };
   const HALO = 'rgba(255,255,255,0.85)', CASING = 'rgba(0,0,0,0.75)';
-  const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19 };
+  // the host's "zoom maximal de la photo" setting (14..19, default 17): MapLibre enlarges that level beyond it
+  const PHOTO_MAX_Z = Math.min(19, Math.max(14, Math.round(+params.get('photomax')) || 17));
+  const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: PHOTO_MAX_Z };
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
   let mode = params.get('mode') === '2d' ? '2d' : '3d';
@@ -352,12 +358,26 @@
         live: geo(), dots: geo(),
         bld: geo({ maxzoom: 16 }),
         peaks: geo(),
+        // the host answers 204 where a tile has no trail (or is still being built): an empty tile, no error
+        ...(TRAILS ? { trails: { type: 'vector', tiles: [`${BASE}trails/{z}/{x}/{y}`], minzoom: 10, maxzoom: 15 } } : {}),
       },
       // only the buildings are lit (the terrain and the photo are not): from behind the camera, a little to the left
       light: { anchor: 'viewport', position: [1.5, 200, 35], color: '#ffffff', intensity: 0.35 },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': t.bg } },
         { id: 'ortho', type: 'raster', source: 'ortho', layout: { visibility: 'none' }, paint: rasterPaint() },
+        // hiking trails on the photo (under the 3D block's surround, so only the block shows them): waymarked routes
+        // solid, other paths dashed, purple on a white halo so they read on snow and forest without looking like a track
+        ...(TRAILS ? [
+          { id: 'trails-halo', type: 'line', source: 'trails', 'source-layer': 'trails', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': HALO, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 15, 5] } },
+          { id: 'trails-route', type: 'line', source: 'trails', 'source-layer': 'trails', filter: ['==', ['get', 'kind'], 'route'],
+            layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': '#8e24aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.2, 15, 2.6] } },
+          { id: 'trails-path', type: 'line', source: 'trails', 'source-layer': 'trails', filter: ['!=', ['get', 'kind'], 'route'],
+            layout: { visibility: 'none', 'line-join': 'round' },
+            paint: { 'line-color': '#8e24aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 1, 15, 2], 'line-dasharray': [2, 1.5] } },
+        ] : []),
         { id: 'band', type: 'fill', source: 'band', paint: { 'fill-color': t.band, 'fill-antialias': false } },
         { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': t.bg, 'fill-antialias': false } },
         { id: 'frame', type: 'line', source: 'frame', paint: { 'line-color': t.frame, 'line-width': 1.5 } },
@@ -506,7 +526,7 @@
     // sources bounded to the square: MapLibre requests no tile outside it
     if (SQ) {
       map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
-      map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
+      map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, TRAILS ? TRAIL_LAYERS[0] : 'band');
       // MapLibre 4.7 on terrain: on the first frame at a new tile zoom, the parent standing in for the missing tiles is
       // taken from the tile cache without being drawn, and the tiles it replaces are hidden: a blank frame at each zoom
       // step (the whole view when zooming out). A second pass of the same update finds it in place and draws it.
@@ -557,6 +577,7 @@
     vis('ortho', photo === 'ortho' || (!!handover && handover.layer === 'ortho'));
     vis('orthosq', photo === 'orthosq' || (!!handover && handover.layer === 'orthosq'));
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
+    TRAIL_LAYERS.forEach((id) => vis(id, shown));
     // setTerrain rebuilds the whole terrain renderer: only when its state really changes
     const want = is3d && shown && !!(SQ || pos) && !!map.getSource('dem'), cur = map.getTerrain();
     if (want && (!cur || cur.exaggeration !== exag)) map.setTerrain({ source: 'dem', exaggeration: exag });
@@ -1148,10 +1169,12 @@
     mergeSoon();
     enqueueColouring(key);
   }
-  /** The host's compact cell (README): rings of microdegree deltas from the cell's corner, unclosed. */
+  /** The host's compact cell (README): rings of microdegree deltas from the cell's corner, unclosed. A v2 cell
+   *  (Tuileries) also has each roof's colour, `c` (0xRRGGBB + 1, 0 = none), used as is: no photo sampling then. */
   function decodeCell(doc, key) {
-    const [ox, oy] = doc.o, items = [];
-    for (const b of doc.b || []) {
+    const [ox, oy] = doc.o, items = [], pre = doc.v === 2 && Array.isArray(doc.c);
+    for (let j = 0; j < (doc.b || []).length; j++) {
+      const b = doc.b[j];
       const rings = [];
       let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
       for (let r = 1; r < b.length; r++) {
@@ -1172,10 +1195,12 @@
       const kx = 111320 * Math.cos(s * Math.PI / 180), area = (e - w) * kx * (n - s) * 110540;
       if (area < 4) continue;
       const geom = area < 30 && rings[0].length > 5 ? [ring([w, s, e, n])] : rings;
-      items.push({ id: bld.nextId++, h: b[0], rings: geom, box: [w, s, e, n] });
+      items.push({ id: bld.nextId++, h: b[0], rings: geom, box: [w, s, e, n], c: pre ? (doc.c[j] >>> 0) : 0 });
     }
+    bld.cells.get(key).pre = pre;
     const known = bld.colours.get(key);
-    if (!known || known.length !== items.length) bld.colours.set(key, new Uint32Array(items.length));
+    if (pre) bld.colours.set(key, Uint32Array.from(items, (it) => it.c));
+    else if (!known || known.length !== items.length) bld.colours.set(key, new Uint32Array(items.length));
     return items;
   }
   function mergeSoon() {
@@ -1207,8 +1232,8 @@
   // ---- roof colours ----
 
   function enqueueColouring(key) {
-    const colours = bld.colours.get(key);
-    if (!colours || colours.every((v) => v !== 0) || bld.queue.includes(key)) return;
+    const colours = bld.colours.get(key), cell = bld.cells.get(key);
+    if (!colours || (cell && cell.pre) || colours.every((v) => v !== 0) || bld.queue.includes(key)) return;
     bld.queue.push(key);
     if (!bld.colouring) nextColouring();
   }
@@ -1239,8 +1264,9 @@
     const jobs = [];
     for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
       jobs.push(fetch(`${BASE}t/ortho/${BLD_SAMPLE_Z}/${tx}/${ty}`)
-        // only the photo: where IGN has none, the host answers OpenStreetMap's drawn map (a PNG), no roof colour
-        .then((r) => (r.ok && /jpeg/.test(r.headers.get('content-type') || '') ? r.blob() : null))
+        // only the photo (JPEG from IGN, WebP or AVIF from Tuileries): where there is none, the host answers
+        // OpenStreetMap's drawn map (a PNG), no roof colour
+        .then((r) => (r.ok && /jpeg|webp|avif/.test(r.headers.get('content-type') || '') ? r.blob() : null))
         .then((b) => (b ? createImageBitmap(b) : null))
         .then((bmp) => { if (bmp) { ctx.drawImage(bmp, (tx - tx0) * 256, (ty - ty0) * 256, 256, 256); bmp.close(); } })
         .catch(() => {}));  // a missing tile leaves its roofs neutral

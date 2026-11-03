@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import htpasswd
+from .core import tuileries
 
 
 class ConfigError(Exception):
@@ -35,6 +36,7 @@ class Config:
     map_dir: Path | None = None  # web/map of the repository
     tiles_fetch: object = field(default=None, compare=False)  # tests replace the network
     password_hash: str = ""  # the user's line of the htpasswd file (bcrypt, apr1 or {SHA})
+    tiles: tuileries.Tuileries | None = field(default=None, repr=False)  # MEMENTO_TILES_*: never printed (secrets)
 
     @property
     def tiles_dir(self) -> Path:
@@ -159,6 +161,7 @@ def from_env(env: dict | None = None) -> Config:
     if trust and not proxies:
         print("memento-web: MEMENTO_TRUST_PROXY without MEMENTO_TRUSTED_PROXIES: any peer that reaches the port "
               "(the LAN too) may set CF-Connecting-IP and X-Forwarded-Proto. Set the tunnel's network.", flush=True)
+    tiles = _tiles(env)
     static = env.get("MEMENTO_STATIC")
     map_dir = env.get("MEMENTO_MAP")
     return Config(
@@ -166,4 +169,21 @@ def from_env(env: dict | None = None) -> Config:
         session_secret=_session_secret(env, config_dir), session_days=days, cookie_secure=secure,
         trust_proxy=trust, trusted_proxies=proxies, warm=warm,
         poll_seconds=max(poll, 0.5), static_dir=Path(static) if static else None, map_dir=Path(map_dir) if map_dir else None,
+        tiles=tiles,
     )
+
+
+def _tiles(env: dict) -> tuileries.Tuileries | None:
+    """The optional Tuileries tile server: MEMENTO_TILES_URL set means every map tile comes from it."""
+    url = env.get("MEMENTO_TILES_URL", "").strip()
+    values = [env.get(f"MEMENTO_TILES_{k}", "").strip() for k in ("USER", "PASSWORD", "CF_ID", "CF_SECRET")]
+    if not url:
+        if any(values):
+            raise ConfigError("MEMENTO_TILES_URL manque : les autres MEMENTO_TILES_* ne servent qu'avec elle.")
+        return None
+    source = tuileries.Tuileries(url, *values)
+    if not source.configured:
+        raise ConfigError(f"MEMENTO_TILES_URL doit être une adresse http(s)://… sans paramètres (reçu « {url} »).")
+    if bool(values[2]) != bool(values[3]):
+        raise ConfigError("MEMENTO_TILES_CF_ID et MEMENTO_TILES_CF_SECRET vont ensemble (Cloudflare Access).")
+    return source

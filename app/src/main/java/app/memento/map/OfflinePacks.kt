@@ -133,7 +133,7 @@ object OfflinePacks {
     /** What [route] would download, for the confirmation shown before it starts. CPU work: call it off the main thread. */
     fun planRoute(route: Route): TilePlan {
         if (route.bbox == null) throw PackException("Parcours vide")
-        return TilePlans.forRoute(route) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+        return TilePlans.forRoute(route, photoMax = MapConfig.photoMaxZoom) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
     }
 
     /**
@@ -148,6 +148,7 @@ object OfflinePacks {
             0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
+        TileServer.prepare(Tuileries.prepareLine(route))
         return pack.id
     }
 
@@ -199,6 +200,7 @@ object OfflinePacks {
             corridor = plan.corridor, relief = plan.demSquare,
         )
         create(pack, plan.estimatedBytes) {}
+        TileServer.prepare(Tuileries.prepareBbox(plan.square))
         return pack.id
     }
 
@@ -345,8 +347,8 @@ object OfflinePacks {
                 if (kind != TileKey.KIND_ORTHO || (!group.inCorridor && group.z <= TilePlans.ORTHO_MIN_Z)) {
                     throw PackException(if (pack.hasRoute) "Parcours trop étendu pour une carte hors ligne" else "Zone trop volumineuse pour une carte hors ligne")
                 }
-                // the square's zooms are all below the corridor's: this folder holds only the zoom being dropped
-                File(pdir, "${TileKey.KIND_ORTHO}/${group.z}").deleteRecursively()
+                // the square's zooms are all below the corridor's: these folders hold only the zoom being dropped
+                for (k in TileKey.PHOTO_KINDS) File(pdir, "$k/${group.z}").deleteRecursively()
                 if (group.inCorridor) {
                     corridor = corridor?.let { c -> if (group.z - 1 > zmax) c.copy(zooms = c.zooms.first until group.z) else null }
                 } else {
@@ -379,17 +381,18 @@ object OfflinePacks {
 
     /** False when the tile could not be fetched this time (a transient error). */
     private fun fetchOne(pdir: File, key: TileKey, bytes: AtomicLong, failures: AtomicInteger): Boolean {
-        val f = File(pdir, key.path)
-        if (f.isFile && f.length() > 0) return true
+        // a photo already there as JPEG (IGN) or WebP (Tuileries): a pack resumed after the source changed keeps it
+        if (key.variants().any { v -> File(pdir, v.path).let { it.isFile && it.length() > 0 } }) return true
         if (!NetState.online.value) throw PackException("Connexion perdue : téléchargement interrompu")
-        val body = try {
-            TileServer.fetch(key, allowOsm = false)?.bytes.also { failures.set(0) }
+        val got = try {
+            TileServer.fetch(key, allowOsm = false).also { failures.set(0) }
         } catch (e: IOException) {
             if (failures.incrementAndGet() > MAX_FAILURES_IN_A_ROW) throw PackException("Trop d'erreurs réseau : ${e.message}")
             return false
         } ?: return true // no tile exists there (no IGN photo outside France)
-        TileCache.writeAtomic(f, body)
-        bytes.addAndGet(body.size.toLong())
+        // under the path its type says, so the tile server serves a WebP as a WebP
+        TileCache.writeAtomic(File(pdir, got.key.path), got.bytes)
+        bytes.addAndGet(got.bytes.size.toLong())
         return true
     }
 }
