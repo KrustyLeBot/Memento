@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import struct
+from operator import attrgetter
 
 from .track import Pause, Track, TrackPoint
 
@@ -37,12 +38,121 @@ def looks_like_fit(data: bytes) -> bool:
 
 
 def read(data: bytes) -> Track:
+    """The generic reader's track, faster: one table lookup per message, records decoded without a dict."""
     if not looks_like_fit(data):
         raise FitError("Ce n'est pas un fichier FIT")
     points: list[TrackPoint] = []
     hrs: list[int] = []
     events: list[tuple[int, int]] = []
-    sport = start = elapsed = timer = distance = manufacturer = None
+    summary = dict.fromkeys(_SUMMARY)
+    append = points.append
+
+    pos = 0
+    while pos + 12 <= len(data) and looks_like_fit(data[pos:pos + 12]):
+        header_size = data[pos]
+        data_size = struct.unpack_from("<I", data, pos + 4)[0]
+        p = pos + header_size
+        end = min(len(data), p + data_size)
+        table: list[tuple | None] = [None] * 64  # data message header -> plan of its local message's definition
+        dev_names: dict[tuple[int, int], str] = {}
+        while p < end:
+            header = data[p]
+            p += 1
+            plan = table[header] if header < 64 else None
+            if plan is not None:
+                kind, size, glob, payload = plan
+                if p + size > end:
+                    break
+                if kind == _RECORD:
+                    st, (its, vts), (ila, vla), (ilo, vlo), (ial, val), (iea, vea), (ihr, vhr) = payload
+                    t = st.unpack_from(data, p)
+                    p += size
+                    if its is None or t[its] == vts:
+                        continue
+                    hr = None
+                    if ihr is not None and t[ihr] != vhr:
+                        hr = t[ihr]
+                        hrs.append(hr)
+                    if ila is None or ilo is None or t[ila] == vla or t[ilo] == vlo:
+                        continue
+                    if iea is not None and t[iea] != vea:
+                        alt = t[iea] / 5.0 - 500
+                    elif ial is not None and t[ial] != val:
+                        alt = t[ial] / 5.0 - 500
+                    else:
+                        alt = None
+                    append(TrackPoint((t[its] + _EPOCH_OFFSET) * 1000, t[ila] * _SEMICIRCLE, t[ilo] * _SEMICIRCLE,
+                                      alt, hr, None, None))
+                elif kind == _GENERIC:
+                    big, fields, dev, compiled = payload
+                    num, strs, devv = _decode(data, p, big, fields, dev, compiled)
+                    p += size
+                    if _handle(glob, num, strs, devv, points, hrs, events, dev_names):
+                        _summary(glob, num, summary)
+                else:
+                    p += size
+                continue
+            if header & 0x80:
+                return _read_generic(data)  # a compressed timestamp counts from the last message's: the full walk
+            if not header & 0x40:
+                raise FitError("Fichier FIT corrompu")
+            local = header & 0x0F
+            has_dev = bool(header & 0x20)
+            if p + 5 > end:
+                break
+            big = data[p + 1] == 1
+            glob = struct.unpack_from(">H" if big else "<H", data, p + 2)[0]
+            count = data[p + 4]
+            p += 5
+            if p + count * 3 > end:
+                break
+            fields = [(data[p + 3 * i], data[p + 3 * i + 1], data[p + 3 * i + 2]) for i in range(count)]
+            p += count * 3
+            dev = []
+            if has_dev:
+                dc = data[p]
+                p += 1
+                dev = [(data[p + 3 * i], data[p + 3 * i + 1], data[p + 3 * i + 2]) for i in range(dc)]
+                p += dc * 3
+            size = sum(f[1] for f in fields) + sum(d[1] for d in dev)
+            plan = _plan(big, glob, fields, dev, size, _compile(big, glob, fields, dev))
+            for h in (local, local | 0x10, local | 0x20, local | 0x30):  # every data header naming this local message
+                table[h] = plan
+        pos = end + 2
+    return _track(points, hrs, events, summary)
+
+
+_SUMMARY = ("sport", "start", "elapsed", "timer", "distance", "manufacturer")
+_SKIP, _RECORD, _GENERIC = 0, 1, 2
+
+
+def _plan(big: bool, glob: int, fields, dev, size: int, compiled):
+    """(kind, size, global number, payload) for the data messages of one definition."""
+    if compiled is None and glob != _MSG_FIELD_DESCRIPTION:
+        return (_SKIP, size, glob, None)
+    if glob == _MSG_RECORD and compiled[2] == 0:
+        st, keys, _floats = compiled
+        numbers = [number for number, _base in keys]
+        if len(set(numbers)) == len(numbers):  # a repeated field: the generic dict keeps its last valid value
+            at = {number: (i, _unpacked_invalid(base)) for i, (number, base) in enumerate(keys)}
+            return (_RECORD, size, glob, (st,) + tuple(at.get(n, (None, None)) for n in (253, 0, 1, 2, 78, 3)))
+    return (_GENERIC, size, glob, (big, fields, dev, compiled))
+
+
+def _unpacked_invalid(base: int) -> int:
+    """A base type's invalid value as its struct code unpacks it (the 64-bit ones are all ones)."""
+    raw = _INVALID[base] if base in _INVALID else (1 << 64) - 1
+    return struct.unpack("<" + _CODES[base], raw.to_bytes(_SIZES[base], "little"))[0]
+
+
+def _read_generic(data: bytes) -> Track:
+    """Every message walked and decoded: the reader for compressed timestamps, and the reference for read."""
+    if not looks_like_fit(data):
+        raise FitError("Ce n'est pas un fichier FIT")
+    points: list[TrackPoint] = []
+    hrs: list[int] = []
+    events: list[tuple[int, int]] = []
+    summary = dict.fromkeys(_SUMMARY)
 
     pos = 0
     while pos + 12 <= len(data) and looks_like_fit(data[pos:pos + 12]):
@@ -115,20 +225,28 @@ def read(data: bytes) -> Track:
                 if 253 in num:
                     last_ts = num[253]
                 if _handle(glob, num, strs, devv, points, hrs, events, dev_names):
-                    if glob == _MSG_SESSION:
-                        sport = num.get(5, sport)
-                        if 2 in num:
-                            start = (num[2] + _EPOCH_OFFSET) * 1000
-                        elapsed = num.get(7, elapsed)
-                        timer = num.get(8, timer)
-                        if 9 in num:
-                            distance = num[9] / 100.0
-                    elif glob == _MSG_SPORT and sport is None:
-                        sport = num.get(0)
-                    elif glob == _MSG_FILE_ID:
-                        manufacturer = num.get(1, manufacturer)
+                    _summary(glob, num, summary)
         pos = end + 2
+    return _track(points, hrs, events, summary)
 
+
+def _summary(glob: int, num: dict[int, int], summary: dict) -> None:
+    """Reads a session, sport or file_id message into the summary."""
+    if glob == _MSG_SESSION:
+        summary["sport"] = num.get(5, summary["sport"])
+        if 2 in num:
+            summary["start"] = (num[2] + _EPOCH_OFFSET) * 1000
+        summary["elapsed"] = num.get(7, summary["elapsed"])
+        summary["timer"] = num.get(8, summary["timer"])
+        if 9 in num:
+            summary["distance"] = num[9] / 100.0
+    elif glob == _MSG_SPORT and summary["sport"] is None:
+        summary["sport"] = num.get(0)
+    elif glob == _MSG_FILE_ID:
+        summary["manufacturer"] = num.get(1, summary["manufacturer"])
+
+
+def _track(points: list[TrackPoint], hrs: list[int], events: list[tuple[int, int]], summary: dict) -> Track:
     pauses: list[Pause] = []
     stopped_at = None
     for t, kind in sorted(events):
@@ -139,13 +257,15 @@ def read(data: bytes) -> Track:
             if stopped_at is not None and t > stopped_at:
                 pauses.append(Pause(stopped_at, t))
             stopped_at = None
-    points.sort(key=lambda q: q.time)
+    points.sort(key=attrgetter("time"))
+    start = summary["start"]
     return Track(
-        points=points, pauses=pauses, fit_sport=sport,
+        points=points, pauses=pauses, fit_sport=summary["sport"],
         start_time=start if start is not None else (points[0].time if points else None),
-        session_elapsed_ms=elapsed, session_timer_ms=timer, session_distance=distance,
+        session_elapsed_ms=summary["elapsed"], session_timer_ms=summary["timer"],
+        session_distance=summary["distance"],
         hr_avg=round(sum(hrs) / len(hrs)) if hrs else None, hr_max=max(hrs) if hrs else None,
-        manufacturer=manufacturer,
+        manufacturer=summary["manufacturer"],
     )
 
 

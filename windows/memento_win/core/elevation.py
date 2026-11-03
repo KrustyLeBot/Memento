@@ -107,5 +107,6 @@ def apply(track: Track, alts: list[tuple[int, float]]) -> Track:
         else:
             (t0, a0), (t1, a1) = alts[i], alts[i + 1]
             alt = a0 + (a1 - a0) * (p.time - t0) / max(t1 - t0, 1)
-        points.append(replace(p, alt=alt))
+        # not replace(p, alt=alt): about half a second more on a 200 000-point track
+        points.append(TrackPoint(p.time, p.lat, p.lon, alt, p.hr, p.gps_alt, p.pressure))
     return replace(track, points=points)
