@@ -30,6 +30,7 @@ private const val INFO = """{"name":"Tuileries","version":"0.1.0","max_zoom":17,
  */
 private class FakeTuileries {
     val requests: MutableList<Pair<String, Map<String, String>>> = Collections.synchronizedList(ArrayList())
+    val posted: MutableList<Pair<String, String>> = Collections.synchronizedList(ArrayList())
     val answers: MutableMap<String, Triple<Int, String, ByteArray>> =
         Collections.synchronizedMap(HashMap(mapOf("/api/info" to Triple(200, "application/json", INFO.toByteArray()))))
     private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
@@ -46,12 +47,19 @@ private class FakeTuileries {
 
     private fun serve(s: Socket) {
         val reader = s.getInputStream().bufferedReader(Charsets.ISO_8859_1)
-        val path = reader.readLine()?.split(' ')?.getOrNull(1) ?: return
+        val first = reader.readLine()?.split(' ') ?: return
+        val path = first.getOrNull(1) ?: return
         val headers = HashMap<String, String>()
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isEmpty()) break
             headers[line.substringBefore(':').trim().lowercase()] = line.substringAfter(':').trim()
+        }
+        if (first[0] == "POST") {
+            val body = CharArray(headers["content-length"]?.toInt() ?: 0)
+            var n = 0
+            while (n < body.size) n += reader.read(body, n, body.size - n).takeIf { it > 0 } ?: break
+            posted.add(path to String(body))
         }
         requests.add(path to headers)
         val expected = "Basic " + Base64.getEncoder().encodeToString("$USER:$PASSWORD".toByteArray())
@@ -187,6 +195,26 @@ class TuileriesTest {
                 assertTrue(e.message, e.message!!.contains(words))
             }
         }
+    }
+
+    @Test
+    fun prepareIsSentToTuileriesOnly() {
+        val lats = DoubleArray(5000) { 45.0 + it * 0.00001 }
+        val lons = DoubleArray(5000) { 6.0 + it * 0.00001 }
+        val body = Tuileries.prepareLine(Route("test", lats, lons, null))
+        val line = Json.parse(body).asMap()!!
+        assertEquals(1000.0, line["corridor_m"].asDouble())
+        val pts = line["line"].asList()!!
+        assertTrue(pts.size <= Tuileries.PREPARE_MAX_POINTS + 1)
+        assertEquals(listOf(6.0, 45.0), pts.first().asList()!!.map { it.asDouble() })
+        assertEquals("""{"bbox":[6,45,6.1,45.1]}""", Tuileries.prepareBbox(Bbox(6.0, 45.0, 6.1, 45.1)))
+        TileServer.prepare(body)  // not configured: nothing sent
+        MapConfig.set(source(), 17)
+        TileServer.prepare(Tuileries.prepareBbox(Bbox(6.0, 45.0, 6.1, 45.1)))
+        val end = System.currentTimeMillis() + 5000
+        while (fake.posted.isEmpty() && System.currentTimeMillis() < end) Thread.sleep(20)
+        assertEquals(listOf("/api/prepare" to """{"bbox":[6,45,6.1,45.1]}"""), fake.posted.toList())
+        assertEquals("csecret", fake.requests.single().second["cf-access-client-secret"])
     }
 
     @Test

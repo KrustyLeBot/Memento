@@ -310,6 +310,41 @@ object TileServer {
         null
     }
 
+    /**
+     * Asks Tuileries to warm an area before a trip (`POST /api/prepare`, [body] from [Tuileries.prepareLine] or
+     * [Tuileries.prepareBbox]); fire-and-forget on its own thread, a failure only logs. Nothing without Tuileries.
+     */
+    fun prepare(body: String) {
+        val t = MapConfig.tuileries ?: return
+        Thread {
+            try {
+                val r = post(t.prepareUrl, t.headers(), body)
+                if (r.code !in 200..299) Log.w(TAG, "prepare: ${Tuileries.statusMessage(r.code)}")
+            } catch (e: IOException) {
+                Log.w(TAG, "prepare: $e")
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    fun post(url: String, headers: Map<String, String>, body: String): HttpResult {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = TIMEOUT_MS
+        c.readTimeout = TIMEOUT_MS
+        c.instanceFollowRedirects = false
+        c.requestMethod = "POST"
+        c.doOutput = true
+        for ((k, v) in headers) c.setRequestProperty(k, v)
+        c.setRequestProperty("Content-Type", "application/json")
+        try {
+            c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = c.responseCode
+            val answer = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+            return HttpResult(code, c.contentType, answer)
+        } finally {
+            c.disconnect()
+        }
+    }
+
     /** `GET /api/info` of [t] (blocking): the settings' "Tester la connexion". */
     fun tuileriesInfo(t: Tuileries): TuileriesInfo {
         if (!t.configured) throw TuileriesException("Adresse invalide : https://… attendue")

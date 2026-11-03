@@ -40,6 +40,8 @@ data class Tuileries(
 
     val infoUrl: String get() = "${base}api/info"
 
+    val prepareUrl: String get() = "${base}api/prepare"
+
     // a data class prints every field: the secrets stay out of logs
     override fun toString() = "Tuileries($base)"
 
@@ -74,6 +76,21 @@ data class Tuileries(
             val typed = key.typed(r.contentType) ?: throw IOException("Tuileries : type inattendu ${r.contentType}")
             return FetchedTile(typed, r.body)
         }
+
+        /** Points sent at most in a `POST /api/prepare` line: the server only needs the corridor's shape. */
+        const val PREPARE_MAX_POINTS = 2000
+
+        /** `{"line":[[lon,lat],...],"corridor_m":N}`, the route thinned evenly to [PREPARE_MAX_POINTS]. */
+        fun prepareLine(route: Route, corridorM: Double = TilePlans.CORRIDOR_M): String {
+            val n = route.size
+            val step = maxOf(1, (n + PREPARE_MAX_POINTS - 1) / PREPARE_MAX_POINTS)
+            val idx = (0 until n step step).toMutableList().apply { if (n > 0 && last() != n - 1) add(n - 1) }
+            return idx.joinToString(",", "{\"line\":[", "],\"corridor_m\":${Json.num(corridorM, 0)}}") {
+                "[${Json.num(route.lons[it], 6)},${Json.num(route.lats[it], 6)}]"
+            }
+        }
+
+        fun prepareBbox(b: Bbox): String = "{\"bbox\":[" + b.toList().joinToString(",") { Json.num(it, 6) } + "]}"
 
         fun validCell(body: ByteArray, x: Int, y: Int): Boolean {
             val o = try { Json.parse(String(body, Charsets.UTF_8)).asMap() } catch (_: Json.JsonException) { null } ?: return false

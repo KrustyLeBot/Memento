@@ -43,6 +43,8 @@ import app.memento.map.OfflinePacks
 import app.memento.map.Pack
 import app.memento.map.Route
 import app.memento.map.RouteFile
+import app.memento.map.TileServer
+import app.memento.map.Tuileries
 import app.memento.map.TilePlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,7 +86,10 @@ fun rememberRoutePicker(vm: MainViewModel, onRoute: (Route) -> Unit): RoutePicke
 private fun load(vm: MainViewModel, scope: CoroutineScope, read: () -> Route, onRoute: (Route) -> Unit) {
     scope.launch {
         try {
-            onRoute(withContext(Dispatchers.IO) { read() })
+            val route = withContext(Dispatchers.IO) { read() }
+            // Tuileries (when configured) warms the route's area in the background, before the trip
+            TileServer.prepare(Tuileries.prepareLine(route))
+            onRoute(route)
         } catch (e: Exception) {
             vm.say(Snack("Parcours illisible : ${e.message}"))
         }

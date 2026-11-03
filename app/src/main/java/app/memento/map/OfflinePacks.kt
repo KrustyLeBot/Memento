@@ -148,6 +148,7 @@ object OfflinePacks {
             0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
+        TileServer.prepare(Tuileries.prepareLine(route))
         return pack.id
     }
 
@@ -199,6 +200,7 @@ object OfflinePacks {
             corridor = plan.corridor, relief = plan.demSquare,
         )
         create(pack, plan.estimatedBytes) {}
+        TileServer.prepare(Tuileries.prepareBbox(plan.square))
         return pack.id
     }
 
