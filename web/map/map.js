@@ -349,7 +349,7 @@
       sources: {
         ortho: ORTHO,
         band: geo(), mask: geo(), frame: geo(), route: geo(), lines: geo(), track: geo({ lineMetrics: true }),
-        live: geo(), acc: geo(), dots: geo(), cursor: geo(),
+        live: geo(), acc: geo(), dots: geo(),
         bld: geo({ maxzoom: 16 }),
         peaks: geo(),
       },
@@ -393,8 +393,6 @@
           'icon-padding': 4, 'icon-pitch-alignment': 'viewport', 'icon-rotation-alignment': 'viewport' } },
         { id: 'dots-halo', type: 'circle', source: 'dots', paint: { 'circle-radius': 11.5, 'circle-color': CASING, 'circle-blur': 0.15 } },
         { id: 'dots', type: 'circle', source: 'dots', paint: { 'circle-radius': 7, 'circle-color': ['get', 'color'], 'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff' } },
-        { id: 'cursor-halo', type: 'circle', source: 'cursor', paint: { 'circle-radius': 10, 'circle-color': CASING, 'circle-blur': 0.15 } },
-        { id: 'cursor', type: 'circle', source: 'cursor', paint: { 'circle-radius': 6, 'circle-color': '#111418', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff' } },
       ],
     };
   }
@@ -782,6 +780,13 @@
   // ---------------------------------------------------------------- position
 
   let posMarker = null, posEl = null, posAdded = false;
+  function domMarker(element) {
+    const marker = new maplibregl.Marker({ element, anchor: 'center', opacityWhenCovered: '1' });
+    // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
+    // buffer back (readPixels), which stalls the frame; these stay fully opaque when covered anyway
+    marker._updateOpacity = () => {};
+    return marker;
+  }
   function ensurePosMarker() {
     if (posMarker) return;
     posEl = document.createElement('div');
@@ -789,10 +794,17 @@
     for (const part of ['halo', 'arrow', 'dot']) {
       const d = document.createElement('div'); d.className = part; posEl.appendChild(d);
     }
-    posMarker = new maplibregl.Marker({ element: posEl, anchor: 'center', opacityWhenCovered: '1' });
-    // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
-    // buffer back (readPixels), which stalls the frame; this one stays fully opaque when covered anyway
-    posMarker._updateOpacity = () => {};
+    posMarker = domMarker(posEl);
+  }
+  // The point hovered on the host's charts: a DOM marker, moved for free. A GeoJSON source would reload all its tiles
+  // at each move, and on terrain every tile load redraws the photo of the terrain tiles under it (50-2500 ms a move
+  // on a software renderer).
+  let cursorMarker = null, cursorAdded = false;
+  function setCursorAt(lon, lat) {
+    if (lon == null || lat == null) { if (cursorMarker) cursorMarker.remove(); cursorAdded = false; return; }
+    if (!cursorMarker) cursorMarker = domMarker(el('div', 'smap-cursor'));
+    cursorMarker.setLngLat([lon, lat]);
+    if (!cursorAdded) { cursorMarker.addTo(map); cursorAdded = true; }
   }
   function orientArrow() {
     if (!posEl || !pos || pos.heading == null) return;
@@ -923,10 +935,11 @@
   // off the block or off screen. It is re-placed after such a frame.
   let markerFrame = 0, lastElevation = null;
   function replaceMarkers() {
-    if (markerFrame || !posAdded) return;
+    if (markerFrame || !(posAdded || cursorAdded)) return;
     markerFrame = requestAnimationFrame(() => {
       markerFrame = 0;
       if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
+      if (cursorAdded) cursorMarker.setLngLat(cursorMarker.getLngLat());
     });
   }
   map.on('render', () => {
@@ -1271,9 +1284,7 @@
       map.setPaintProperty('frame', 'line-color', c.frame);
       map.setLayoutProperty('peaks', 'icon-image', peakImageExpr());
     },
-    setCursor(lon, lat) {
-      src('cursor').setData(lon == null ? EMPTY : { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } });
-    },
+    setCursor(lon, lat) { setCursorAt(lon, lat); },
     fit() { fit(300); },
     reset() { reset(); },
   };
