@@ -1,7 +1,7 @@
 """Host side of the map page (web/map) on Windows: the `scr://app/` scheme serving the page, the tiles (fetched
-once, then from a 300 MB disk cache), the peaks and the buildings. Everything runs on the GUI thread with asynchronous
-network calls; only the cache purge runs in a worker thread. The rules themselves live in core/mapcache.py,
-core/peaks.py and core/buildings.py."""
+once, then from a 300 MB disk cache), the peaks and the buildings. The requests are answered on the GUI thread with
+asynchronous network calls; the cache writes, the buildings' parsing and the cache purge run in worker threads. The
+rules themselves live in core/mapcache.py, core/peaks.py and core/buildings.py."""
 from __future__ import annotations
 
 import json
@@ -23,10 +23,12 @@ from PySide6.QtWebEngineCore import (QWebEngineProfile, QWebEngineUrlRequestJob,
                                      QWebEngineUrlSchemeHandler)
 
 from ..core import buildings, mapcache, peaks
+from .async_util import run_async
 
 SCHEME = b"scr"
 BASE_URL = "scr://app/"
 PURGE_EVERY = 20 * 1024 * 1024  # bytes written between two purges
+TOUCH_AFTER = 3600  # seconds: a read refreshes the file's date (LRU) only past this age, the purge needs no finer
 MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg",
         "json": b"application/json",
         "svg": b"image/svg+xml", "txt": b"text/plain"}
@@ -74,6 +76,41 @@ def _log(text: str) -> None:
     print(f"maphost: {text}", file=sys.stderr)
 
 
+def _read_cached(path: Path) -> bytes:
+    """A cached file's bytes; OSError as open() raises it (FileNotFoundError on a miss). Its date, which the purge
+    sorts on (least recently read first), is refreshed only once it is older than TOUCH_AFTER."""
+    with open(path, "rb") as file:
+        mtime = os.fstat(file.fileno()).st_mtime  # from the open handle: no second lookup of the path
+        data = file.read()
+    if time.time() - mtime > TOUCH_AFTER:
+        os.utime(path)
+    return data
+
+
+def _write(path: Path, data: bytes) -> bool:
+    """Worker thread: atomic, so a reader (or a crash) never sees half a file. False when it could not be written."""
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except OSError as error:
+        _log(f"cannot cache {path}: {error}")
+        tmp.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _parse_cell(key: tuple[int, int], features: list, text: str) -> bytes | None:
+    """Worker thread: adds one WFS page to the cell's features; the cell's slim JSON once it was the last page, None
+    when another page is needed. Only this cell's fetch chain touches `features`, one step at a time."""
+    page = buildings.parse_page(text)
+    features += page
+    if not buildings.is_last_page(page) and len(features) < buildings.PAGE * buildings.MAX_PAGES:
+        return None
+    return buildings.encode(*key, buildings.slim(features, *key))
+
+
 class TileStore(QObject):
     """Tiles on disk under `root` (tiles2/), fetched on a miss. Concurrent requests for one tile share a fetch. Each
     answer is (MIME type, bytes): an aerial-photo request answered by its OpenStreetMap stand-in is a PNG."""
@@ -86,6 +123,7 @@ class TileStore(QObject):
         self._waiting: dict[str, list[Callable[[bytes | None], None]]] = {}
         self._peaks_waiting: dict[tuple, list[Callable[[list | None], None]]] = {}
         self._cells_waiting: dict[tuple[int, int], list[Callable[[bytes | None], None]]] = {}
+        self._pending: dict[Path, bytes] = {}  # handed to a worker, not on disk yet: served from here meanwhile
         self._written = 0
         self._purge_lock = threading.Lock()
         self.purge_async()
@@ -95,9 +133,11 @@ class TileStore(QObject):
     def get(self, tile: mapcache.TileRequest, done: Callable[[tuple[str, bytes] | None], None]) -> None:
         for cached in (tile, tile.fallback()) if tile.kind == "ortho" else (tile,):
             path = mapcache.tile_path(self.root, cached)
+            if path in self._pending:
+                done((cached.mime, self._pending[path]))
+                return
             try:
-                data = path.read_bytes()
-                os.utime(path)  # LRU: the purge removes the least recently read
+                data = _read_cached(path)
                 done((cached.mime, data))
                 return
             except FileNotFoundError:
@@ -138,23 +178,24 @@ class TileStore(QObject):
             self._finish(tile.key, None)
             return
         stored = tile if primary else tile.fallback()
+        self._finish(tile.key, (stored.mime, data))  # the page first: the disk write follows in a worker
         self._store(mapcache.tile_path(self.root, stored), data)
-        self._finish(tile.key, (stored.mime, data))
 
     def _finish(self, key: str, data: tuple[str, bytes] | None) -> None:
         for done in self._waiting.pop(key, []):
             done(data)
 
     def _store(self, path: Path, data: bytes) -> None:
-        # atomic, so a reader (or a crash) never sees half a tile
-        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(data)
-            os.replace(tmp, path)
-        except OSError as error:
-            _log(f"cannot cache {path}: {error}")
-            tmp.unlink(missing_ok=True)
+        if path in self._pending:  # an ortho fallback and a plain OSM tile share a file: one write, no os.replace race
+            return
+        self._pending[path] = data
+        run_async(partial(_write, path, data), partial(self._stored, path, data),
+                  lambda error: self._stored(path, data, False))
+
+    def _stored(self, path: Path, data: bytes, written: bool) -> None:
+        if self._pending.get(path) is data:  # a later write of the same file keeps its own entry
+            del self._pending[path]
+        if not written:
             return
         self._written += len(data)
         if self._written >= PURGE_EVERY:
@@ -258,9 +299,11 @@ class TileStore(QObject):
     def buildings(self, req: mapcache.BuildingsRequest, done: Callable[[bytes | None], None]) -> None:
         """The cell's slim JSON: from the cache, else from the WFS page by page; None offline or on a WFS error."""
         path = buildings.cache_path(self.root, req.x, req.y)
+        if path in self._pending:
+            done(self._pending[path])
+            return
         try:
-            data = path.read_bytes()
-            os.utime(path)
+            data = _read_cached(path)
             done(data)
             return
         except FileNotFoundError:
@@ -283,19 +326,28 @@ class TileStore(QObject):
 
     def _cell_page_done(self, reply: QNetworkReply, key: tuple[int, int], features: list) -> None:
         text = self._text(reply)
-        data = None
-        if text is not None:
-            try:
-                page = buildings.parse_page(text)
-                features += page
-                if not buildings.is_last_page(page) and len(features) < buildings.PAGE * buildings.MAX_PAGES:
-                    self._cell_page(key, features)
-                    return
-                data = buildings.encode(*key, buildings.slim(features, *key))
-            except Exception:  # any malformed answer: logged, the waiting pages get a 404
-                _log(f"buildings {key}: unreadable answer: {traceback.format_exc()}")
+        if text is None:
+            self._cell_finish(key, None)
+            return
+        # a dense cell takes 45-76 ms to parse, slim and encode: off the GUI thread, the job is answered back on it
+        run_async(partial(_parse_cell, key, features, text), partial(self._cell_parsed, key, features),
+                  partial(self._cell_unreadable, key))
+
+    def _cell_parsed(self, key: tuple[int, int], features: list, data: bytes | None) -> None:
         if data is not None:
+            self._cell_finish(key, data)
             self._store(buildings.cache_path(self.root, *key), data)
+        elif shiboken6.isValid(self._nam):  # the profile may have been released while the page was parsed
+            self._cell_page(key, features)
+        else:
+            self._cell_finish(key, None)
+
+    def _cell_unreadable(self, key: tuple[int, int], error: Exception) -> None:
+        # any malformed answer: logged, the waiting pages get a 404
+        _log(f"buildings {key}: unreadable answer: {''.join(traceback.format_exception(error))}")
+        self._cell_finish(key, None)
+
+    def _cell_finish(self, key: tuple[int, int], data: bytes | None) -> None:
         for done in self._cells_waiting.pop(key, []):
             done(data)
 

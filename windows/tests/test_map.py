@@ -9,6 +9,9 @@ import zlib
 import pytest
 
 from memento_win.core import mapcache, mapdata, peaks
+from memento_win.services import maphost
+
+REAL_GET = maphost.TileStore.get  # conftest's no_map_network replaces it for every test
 
 
 def png(width: int, height: int, pixel: bytes) -> bytes:
@@ -114,6 +117,53 @@ def test_purge_goes_on_past_a_tile_windows_refuses_to_delete(tmp_path, monkeypat
     assert [f.exists() for f in files] == [True, False, False, True]
 
 
+def _walk_entries(root):
+    """What the purge listed with os.walk + os.stat: the scandir listing must match it."""
+    entries = []
+    for dirpath, _dirs, names in os.walk(root):
+        cells = os.path.basename(os.path.dirname(os.path.dirname(dirpath))) == "buildings"
+        for name in names:
+            if name.endswith((".png", ".jpg")) or cells and name.endswith(".json"):
+                st = os.stat(os.path.join(dirpath, name))
+                entries.append((st.st_mtime, st.st_size, os.path.join(dirpath, name)))
+    return entries
+
+
+def _walk_purge(root, limit, target):
+    entries = _walk_entries(root)
+    total, deleted = sum(e[1] for e in entries), 0
+    if total <= limit:
+        return total, 0
+    for _mtime, size, path in sorted(entries):
+        if total <= target:
+            break
+        os.remove(path)
+        total -= size
+        deleted += 1
+    return total, deleted
+
+
+def test_purge_lists_and_deletes_what_os_walk_did(tmp_path):
+    import shutil
+    a = tmp_path / "a"
+    names = ["ortho/14/8501/5850.jpg", "dem/12/2100/1450.png", "osmfb2/14/8501/5851.png", "buildings/15/16941/11670.json",
+             "buildings/15/16941/11671.json", "buildings/15/x.json", "peaks/6.8_45.9.json", "ortho/14/8501/.5850.jpg.ab.tmp",
+             "ortho/14/8501/notes.txt", "other/deep/er/still/1.png"]
+    for i, name in enumerate(names * 3):  # the same names again one and two folders down
+        f = a / name if i < len(names) else a / "copy" / str(i // len(names)) / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x" * (500 + 37 * (i % 4)))
+        os.utime(f, (1_700_000_000 + i % 5, 1_700_000_000 + i % 5))  # ties on the date and on the size
+    listed = sorted(mapcache._cached_files(str(a)))
+    assert listed == sorted(_walk_entries(a)) and len(listed) == 18
+    for limit, target in ((10**9, 10**9), (12_000, 9_000), (8_000, 3_000), (1, 0)):
+        b, c = tmp_path / f"b{limit}", tmp_path / f"c{limit}"
+        shutil.copytree(a, b)  # copy2: the dates come along
+        shutil.copytree(a, c)
+        assert mapcache.purge(b, limit, target) == _walk_purge(c, limit, target)
+        assert sorted(p.relative_to(b) for p in b.rglob("*")) == sorted(p.relative_to(c) for p in c.rglob("*"))
+
+
 def test_a_malformed_summit_answer_still_answers_every_waiting_request(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication([])
@@ -128,6 +178,169 @@ def test_a_malformed_summit_answer_still_answers_every_waiting_request(tmp_path,
     (tmp_path / "peaks").mkdir(exist_ok=True)
     peaks.cache_file(tmp_path / "peaks", box).write_text('{"candidates": {"a": 1}}')
     assert peaks.covering(tmp_path / "peaks", box) is None  # a damaged entry is a miss, not an exception
+
+
+class _Reply:
+    """A finished QNetworkReply as TileStore._fetched reads it."""
+
+    def __init__(self, data, status=200, kind="image/jpeg"):
+        self.data, self.status, self.kind = data, status, kind
+
+    def error(self):
+        from PySide6.QtNetwork import QNetworkReply
+        return QNetworkReply.NetworkError.NoError
+
+    def attribute(self, _attribute):
+        return self.status
+
+    def header(self, _header):
+        return self.kind
+
+    def readAll(self):
+        return self.data
+
+    def deleteLater(self):
+        pass
+
+
+def _store_with_queued_work(tmp_path, monkeypatch):
+    """A TileStore whose worker jobs wait in a list: each one is run, and its answer delivered, by the test."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    jobs = []
+    monkeypatch.setattr(maphost, "run_async", lambda fn, on_done=None, on_error=None: jobs.append((fn, on_done, on_error)))
+    monkeypatch.setattr(maphost.TileStore, "get", REAL_GET)
+    return maphost.TileStore(tmp_path), jobs
+
+
+def _run(jobs):
+    fn, on_done, on_error = jobs.pop(0)
+    try:
+        result = fn()
+    except Exception as error:
+        on_error(error)
+    else:
+        on_done(result)
+
+
+def test_a_fetched_tile_is_answered_first_and_served_from_memory_until_written(tmp_path, monkeypatch):
+    store, jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    tile = mapcache.TileRequest("ortho", 14, 8501, 5850)
+    path = mapcache.tile_path(tmp_path, tile)
+    answers = []
+    store._waiting[tile.key] = [answers.append]
+    store._fetched(_Reply(b"jpeg bytes"), tile, True)
+    assert answers == [("image/jpeg", b"jpeg bytes")] and not path.exists() and len(jobs) == 1
+    again = []
+    store.get(tile, again.append)  # asked again before the write landed: no second fetch
+    assert again == [("image/jpeg", b"jpeg bytes")] and tile.key not in store._waiting
+    _run(jobs)
+    assert path.read_bytes() == b"jpeg bytes" and not store._pending and store._written == len(b"jpeg bytes")
+    store.get(tile, again.append)
+    assert again[-1] == ("image/jpeg", b"jpeg bytes")
+    # the photo's OpenStreetMap stand-in is kept in its own folder and answered as a PNG meanwhile
+    other = mapcache.TileRequest("ortho", 14, 8501, 5851)
+    store._waiting[other.key] = [answers.append]
+    store._fetched(_Reply(b"png bytes", kind="image/png"), other, False)
+    store.get(other, again.append)
+    assert answers[-1] == again[-1] == ("image/png", b"png bytes")
+    _run(jobs)
+    assert mapcache.tile_path(tmp_path, other.fallback()).read_bytes() == b"png bytes" and not store._pending
+
+
+def test_a_failed_cache_write_still_answered_the_page(tmp_path, monkeypatch):
+    store, jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    tile = mapcache.TileRequest("dem", 12, 2100, 1450)
+    (tmp_path / "dem").write_bytes(b"")  # a file where the folder should be: the write fails
+    answers = []
+    store._waiting[tile.key] = [answers.append]
+    store._fetched(_Reply(b"png", kind="image/png"), tile, True)
+    _run(jobs)
+    assert answers == [("image/png", b"png")] and not store._pending and store._written == 0
+    assert not list((tmp_path).glob("**/*.tmp"))
+
+
+def test_a_cache_hit_refreshes_the_date_only_when_older_than_an_hour(tmp_path, monkeypatch):
+    store, _jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    tile = mapcache.TileRequest("ortho", 14, 8501, 5850)
+    path = mapcache.tile_path(tmp_path, tile)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"jpeg")
+    recent, old = time.time() - 600, time.time() - 7200
+    os.utime(path, (recent, recent))
+    got = []
+    store.get(tile, got.append)
+    assert got == [("image/jpeg", b"jpeg")] and os.stat(path).st_mtime == recent
+    os.utime(path, (old, old))
+    store.get(tile, got.append)
+    assert got[-1] == ("image/jpeg", b"jpeg") and os.stat(path).st_mtime > time.time() - 60
+
+
+def _wfs_page(x, y, count=1):
+    from memento_win.core import buildings
+    w, s, e, n = buildings.cell_box(x, y)
+    cx, cy, d = (w + e) / 2, (s + n) / 2, (e - w) / 50
+    features = [{"type": "Feature", "id": f"b{i}", "properties": {"hauteur": 6 + i},
+                 "geometry": {"type": "Polygon", "coordinates": [[[cx + i * d, cy], [cx + i * d + d, cy],
+                                                                  [cx + i * d + d, cy + d], [cx + i * d, cy + d],
+                                                                  [cx + i * d, cy]]]}} for i in range(count)]
+    return json.dumps({"type": "FeatureCollection", "features": features}), features
+
+
+def test_a_buildings_cell_is_parsed_in_a_worker_and_served_from_memory_until_written(tmp_path, monkeypatch):
+    from memento_win.core import buildings
+    store, jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    key = buildings.cell_of(6.1265, 45.8992)
+    text, features = _wfs_page(*key, count=3)
+    path = buildings.cache_path(tmp_path, *key)
+    answers = []
+    store._cells_waiting[key] = [answers.append]
+    monkeypatch.setattr(store, "_text", lambda reply: text)
+    store._cell_page_done(None, key, [])
+    assert answers == [] and len(jobs) == 1  # the parsing waits for a worker
+    store.buildings(mapcache.BuildingsRequest(*key), answers.append)  # joins the fetch under way
+    _run(jobs)
+    expected = buildings.encode(*key, buildings.slim(features, *key))
+    assert answers == [expected, expected] and key not in store._cells_waiting and not path.exists()
+    store.buildings(mapcache.BuildingsRequest(*key), answers.append)
+    assert answers[-1] == expected and len(jobs) == 1
+    _run(jobs)
+    assert path.read_bytes() == expected and not store._pending
+
+
+def test_a_long_buildings_cell_asks_for_the_next_page_and_a_malformed_one_answers_404(tmp_path, monkeypatch):
+    from memento_win.core import buildings
+    store, jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    key = buildings.cell_of(6.8694, 45.9237)
+    monkeypatch.setattr(buildings, "PAGE", 2)
+    full, _ = _wfs_page(*key, count=2)
+    asked = []
+    monkeypatch.setattr(store, "_cell_page", lambda k, feats: asked.append((k, len(feats))))
+    monkeypatch.setattr(store, "_text", lambda reply: full)
+    answers = []
+    store._cells_waiting[key] = [answers.append]
+    store._cell_page_done(None, key, [])
+    _run(jobs)
+    assert asked == [(key, 2)] and answers == [] and not jobs  # a full page: the next one is fetched
+    monkeypatch.setattr(store, "_text", lambda reply: "<html>busy</html>")
+    store._cell_page_done(None, key, [])
+    _run(jobs)
+    assert answers == [None] and key not in store._cells_waiting and not jobs and not store._pending
+
+
+def test_tile_writes_go_through_the_real_worker_pool(tmp_path):
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    store = maphost.TileStore(tmp_path)
+    tiles = [mapcache.TileRequest("dem", 12, 2100, 1450 + i) for i in range(20)]
+    answers = []
+    for i, tile in enumerate(tiles):
+        store._waiting[tile.key] = [answers.append]
+        store._fetched(_Reply(bytes([i]) * 100, kind="image/png"), tile, True)
+    assert len(answers) == 20
+    assert wait_for(app, lambda: not store._pending)
+    assert [mapcache.tile_path(tmp_path, t).read_bytes() for t in tiles] == [bytes([i]) * 100 for i in range(20)]
+    assert store._written == 2000
 
 
 def test_backoff_after_a_connection_failure():

@@ -164,10 +164,23 @@ def test_purge_counts_building_cells_but_not_summits(tmp_path):
 
 # ---- the Windows host ----
 
+def run_now(fn, on_done=None, on_error=None):
+    """maphost's run_async inline: the parse and the cache write land before the test looks."""
+    try:
+        result = fn()
+    except Exception as error:  # noqa: BLE001 (handed over, as run_async does)
+        if on_error:
+            on_error(error)
+        return
+    if on_done:
+        on_done(result)
+
+
 def test_windows_host_fetches_page_by_page_caches_and_answers_every_waiting_request(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
     QApplication.instance() or QApplication([])
     from memento_win.services import maphost
+    monkeypatch.setattr(maphost, "run_async", run_now)
     monkeypatch.setattr(buildings, "PAGE", 1)
     store = maphost.TileStore(tmp_path)
     lon, lat = inside_cell()
