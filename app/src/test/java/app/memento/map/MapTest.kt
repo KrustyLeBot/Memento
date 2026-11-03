@@ -107,7 +107,7 @@ class TilePlanTest {
         assertNull(z.demZooms)
         assertTrue("${z.tileCount}", z.tileCount - z.corridorCount in 150..350)
         assertEquals(40_000.0, z.square.widthM, 1.0)
-        assertEquals(14..19, z.corridor!!.zooms)
+        assertEquals(14..18, z.corridor!!.zooms)
     }
 }
 

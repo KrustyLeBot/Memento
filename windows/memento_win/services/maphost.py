@@ -12,12 +12,13 @@ import threading
 import time
 import traceback
 import uuid
+from collections import deque
 from functools import partial
 from pathlib import Path
 from typing import Callable
 
 import shiboken6
-from PySide6.QtCore import QBuffer, QByteArray, QCoreApplication, QIODevice, QObject, QStandardPaths, Qt, QUrl
+from PySide6.QtCore import QBuffer, QByteArray, QCoreApplication, QIODevice, QObject, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWebEngineCore import (QWebEngineProfile, QWebEngineUrlRequestJob, QWebEngineUrlScheme,
                                      QWebEngineUrlSchemeHandler)
@@ -29,6 +30,8 @@ SCHEME = b"scr"
 BASE_URL = "scr://app/"
 PURGE_EVERY = 20 * 1024 * 1024  # bytes written between two purges
 TOUCH_AFTER = 3600  # seconds: a read refreshes the file's date (LRU) only past this age, the purge needs no finer
+WFS_IN_FLIGHT = 2  # IGN's WFS pages asked at a time (the buildings)
+WFS_RETRY_MS = (1000, 2000, 4000)
 MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg",
         "json": b"application/json",
         "svg": b"image/svg+xml", "txt": b"text/plain"}
@@ -123,6 +126,9 @@ class TileStore(QObject):
         self._waiting: dict[str, list[Callable[[bytes | None], None]]] = {}
         self._peaks_waiting: dict[tuple, list[Callable[[list | None], None]]] = {}
         self._cells_waiting: dict[tuple[int, int], list[Callable[[bytes | None], None]]] = {}
+        # IGN's WFS answers 429 to bursts (the page asks for up to 16 cells at once): WFS_IN_FLIGHT pages at a time
+        self._wfs_queue: deque[tuple[tuple[int, int], list, int]] = deque()
+        self._wfs_in_flight = 0
         self._pending: dict[Path, bytes] = {}  # handed to a worker, not on disk yet: served from here meanwhile
         self._written = 0
         self._purge_lock = threading.Lock()
@@ -320,12 +326,28 @@ class TileStore(QObject):
         self._cells_waiting[key] = [done]
         self._cell_page(key, [])
 
-    def _cell_page(self, key: tuple[int, int], features: list) -> None:
-        reply = self._nam.get(_request(buildings.wfs_url(*key, len(features))))
-        reply.finished.connect(partial(self._cell_page_done, reply, key, features))
+    def _cell_page(self, key: tuple[int, int], features: list, attempt: int = 0) -> None:
+        self._wfs_queue.append((key, features, attempt))
+        self._wfs_next()
 
-    def _cell_page_done(self, reply: QNetworkReply, key: tuple[int, int], features: list) -> None:
+    def _wfs_next(self) -> None:
+        while self._wfs_in_flight < WFS_IN_FLIGHT and self._wfs_queue and shiboken6.isValid(self._nam):
+            key, features, attempt = self._wfs_queue.popleft()
+            self._wfs_in_flight += 1
+            reply = self._nam.get(_request(buildings.wfs_url(*key, len(features))))
+            reply.finished.connect(partial(self._cell_page_done, reply, key, features, attempt))
+
+    def _cell_page_done(self, reply: QNetworkReply, key: tuple[int, int], features: list, attempt: int = 0) -> None:
+        self._wfs_in_flight = max(0, self._wfs_in_flight - 1)
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) if reply is not None else None
+        if status in (429, 503) and attempt < len(WFS_RETRY_MS):
+            # a refusal is waited out (1, 2, 4 s) before it fails the cell
+            reply.deleteLater()
+            QTimer.singleShot(WFS_RETRY_MS[attempt], partial(self._cell_page, key, features, attempt + 1))
+            self._wfs_next()
+            return
         text = self._text(reply)
+        self._wfs_next()
         if text is None:
             self._cell_finish(key, None)
             return

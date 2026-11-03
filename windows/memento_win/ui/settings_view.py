@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBox
                                QToolButton, QVBoxLayout, QWidget)
 
 from ..core.agenda.frdates import alert_label
-from ..core.settings import ActivitySettings
+from ..core.settings import RELIEFS, ActivitySettings
 from ..core.track import Sport
 from ..services import updater
 from . import icons, theme
@@ -123,6 +123,21 @@ class SettingsScreen(QWidget):
         self.refine_box = QCheckBox("Affiner l'altitude avec le relief à l'enregistrement (téléphone)")
         self.refine_box.toggled.connect(lambda _=False: self._activity_edited())
         body.addWidget(self.refine_box)
+        body.addWidget(QLabel("Relief de la carte"))
+        self.relief_buttons = {key: self._chip(label) for key, label in RELIEFS.items()}
+        relief_group = QButtonGroup(self)
+        relief_group.setExclusive(True)
+        relief_row = QHBoxLayout()
+        for b in self.relief_buttons.values():
+            relief_group.addButton(b)
+            relief_row.addWidget(b)
+            b.clicked.connect(lambda _=False: self._activity_edited())
+        relief_row.addStretch()
+        body.addLayout(relief_row)
+        relief_hint = QLabel("AWS : le relief actuel, environ 30 m en France. Mapterhorn : le RGE ALTI de l'IGN (5 m partout "
+                             "en France, 0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd.")
+        relief_hint.setWordWrap(True)
+        body.addWidget(relief_hint)
 
         section("Contacts")
         self.first_name_box = QCheckBox("Prénom d'abord (trie et regroupe la liste par prénom plutôt que par nom)")
@@ -195,8 +210,9 @@ class SettingsScreen(QWidget):
     def _activity_edited(self) -> None:
         if self._loading:
             return
+        relief = next((k for k, b in self.relief_buttons.items() if b.isChecked()), "aws")
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
-                                                    {s for s, b in self.total_boxes.items() if b.isChecked()}))
+                                                    {s for s, b in self.total_boxes.items() if b.isChecked()}, relief))
 
     def _alerts(self) -> list[int]:
         return sorted(m for m, b in self.alert_buttons.items() if b.isChecked())
@@ -234,6 +250,7 @@ class SettingsScreen(QWidget):
         for sport, box in self.total_boxes.items():
             box.setChecked(sport in activity.totals)
         self.refine_box.setChecked(activity.refine_altitude)
+        self.relief_buttons.get(activity.relief, self.relief_buttons["aws"]).setChecked(True)
         self._loading = False
         (self.grid_button if grid else self.list_button).setChecked(True)
         self.theme_buttons.get(theme_mode, self.theme_buttons["system"]).setChecked(True)

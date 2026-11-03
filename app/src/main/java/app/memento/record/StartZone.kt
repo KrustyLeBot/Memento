@@ -2,6 +2,7 @@ package app.memento.record
 
 import app.memento.Zone3dPolicy
 import app.memento.map.NetState
+import app.memento.map.MapRelief
 import app.memento.map.OfflinePacks
 import app.memento.map.TilePlans
 import app.memento.map.ZoneSpec
@@ -36,7 +37,7 @@ data class StartZone(
     companion object {
         /** [already3d]: a pack with relief already covers the zone, so there is nothing to ask. */
         fun of(zone: ZoneSpec, policy: Zone3dPolicy, already3d: Boolean = false) = StartZone(
-            zone, TilePlans.zone3dExtraBytes(zone.lon, zone.lat, zone.side2dKm, zone.side3dKm),
+            zone, TilePlans.zone3dExtraBytes(zone.lon, zone.lat, zone.side2dKm, zone.side3dKm, MapRelief.kind()),
             when {
                 policy == Zone3dPolicy.NEVER -> Answer.NO
                 policy == Zone3dPolicy.ALWAYS || already3d -> Answer.YES

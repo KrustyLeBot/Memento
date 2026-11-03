@@ -270,6 +270,12 @@ def test_activity_settings_default_to_everything_and_round_trip_through_the_fold
     assert again.refine_altitude is True and Sport.SKI not in again.totals and Sport.WALK in again.totals
     # the settings file is not an activity
     assert store.scan_activities() == []
+    # the map's relief: AWS until set, the phone's JSON read as written, anything unknown read as AWS
+    assert again.relief == "aws"
+    store.save_activity_settings(ActivitySettings(True, set(Sport), "mapterhorn"))
+    assert Store(tmp_path).activity_settings().relief == "mapterhorn"
+    assert ActivitySettings.parse('{"refine_altitude": false, "totals": ["walk"], "relief": "mapterhorn"}\n').relief == "mapterhorn"
+    assert ActivitySettings.parse('{"relief": "lidar"}').relief == "aws"
 
 
 def test_scanning_the_notes_keeps_the_activities_cache(tmp_path):

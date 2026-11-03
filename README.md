@@ -88,29 +88,37 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   altitude and the pressure are kept as developer fields (`gps_altitude`, `pressure`).
 - GPS rate while recording: 5 s walking, 2 s cycling and skiing, 3 s other; "Économie de batterie" uses 12 s.
 - The map is one web page shared by both apps (`web/map/`, MapLibre GL JS 4.7.1 vendored): the IGN aerial
-  photo (orthophotos, WMTS `ORTHOIMAGERY.ORTHOPHOTOS`, JPEG, up to z19, never filtered, in either theme) on the Terrarium
-  elevation model, in 3D (default) as a square block cut out of the relief around the track (side = the
+  photo (orthophotos, WMTS `ORTHOIMAGERY.ORTHOPHOTOS`, JPEG, up to z19, never filtered, in either theme) on a Terrarium
+  elevation model chosen in the settings ("Relief de la carte", synced in `activities/settings.json` as `"relief"`):
+  AWS (`aws`, 256 px PNG to z13, about 30 m data in France) or [Mapterhorn](https://mapterhorn.com) (`mapterhorn`,
+  512 px WebP asked to z15: IGN RGE ALTI 5 m everywhere in France, LiDAR HD 0.5–1 m where flown; 146–182 KB a tile).
+  A Mapterhorn tile the host cannot get (offline with a pack made before the switch, or the service down) is put
+  together from AWS's four tiles one zoom deeper. Every map open reloads when the setting changes, on every platform. In 3D (default) as a square block cut out of the relief around the track (side = the
   track's larger side + 25 %, at least 1 km), or flat in 2D; the switch is a native control and is remembered. The
   track is coloured by its speed relative to the mean (red slow, yellow mean, green fast), ski days keep their
   descents/climbs colours; lines are drawn with a white halo and a dark casing and the overlays on opaque surfaces,
   so everything reads on snow as on forest; up to 12 summits (IGN BD TOPO + IGN altimetry, spread out) are labelled. The page asks
-  its host for everything under one base URL (`t/ortho|dem/{z}/{x}/{y}`, `peaks?w&s&e&n`; JPEG for
-  the photo, PNG for the relief and the OpenStreetMap stand-in): the host fetches with an
+  its host for everything under one base URL (`t/ortho|dem|demhd/{z}/{x}/{y}`, `peaks?w&s&e&n`; JPEG for
+  the photo, PNG for AWS's relief and the OpenStreetMap stand-in, WebP for Mapterhorn's): the host fetches with an
   identifying User-Agent and keeps a disk cache (300 MB, least recently used purged), so what was seen once works
   offline. Where IGN has no photo (it answers 404 abroad and at sea, and a uniform white JPEG at the edge of its coverage) the
   OpenStreetMap tile is served instead. Offline route packs (Android) hold the photo of the route's square up to
-  z14 and, along the track, up to z19: z15–17 within 1 km, z18–19 on a narrower band (300 m down to 75 m), within
-  500 MB (the z18–19 band narrows, then z19, z18, z17 and the band's width give way, then z14, when it does not fit; a
-  short route gets its whole square at z17; a route so wide that even its relief does not fit gets a flat 2D pack),
-  estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). One setting (Réglages → Cartes → 3D
-  hors ligne: asked, always or never) decides the 3D (relief, buildings, peaks) everywhere: preparing a route asks
-  for 2D + 3D or 2D alone with the size of each (or offers only the one the setting imposes); a recording started on
+  z13 and, along the track, z14–16 within 500 m, z17 within 300 m and z18 within 150 m (no z19 offline: along a track
+  it weighed as much as the rest of the pack), within 300 MB (z18 narrows, then z18, z17 and the band's width give
+  way, then z13, when it does not fit; a route so wide that even its relief does not fit gets a flat 2D pack),
+  estimated at 15 KB a tile (measured 10–20 KB in the Alps, 15–18 KB along the Diagonale des Fous in La Réunion,
+  17–23 KB in towns). Measured along that 197 km race: about 100 MB of photo, 8 MB of AWS relief; the same race with
+  the earlier plan (z19 along the track) came to over 300 MB. One setting (Réglages → Cartes → 3D
+  hors ligne: asked, always or never) decides the 3D (relief, peaks) everywhere: preparing a route asks
+  for 2D + 3D or 2D alone (the same photo, without the relief) with the size of each (or offers only the one the setting imposes); a recording started on
   a route not prepared downloads its 2D pack at once and asks under the recording, as without a route. A recording without
   route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–13 over a square whose
-  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps), plus z14–17 within 3 km of
-  the start and z18–19 within 1 km (about 45 MB). An optional 3D zone adds relief z6–13 (130 KB a
-  tile, the full precision of the elevation data), buildings and peaks over its own square (5–80 km, 40 km by default; about
-  40 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
+  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps), plus z14–16 within 6 km of
+  the start, z17 within 3 km and z18 within 2 km (about 47 MB in the Alps, 27 MB in La Réunion). An optional 3D zone
+  adds relief and peaks over its own square (5–80 km, 40 km by default): AWS z6–13 (100 KB a tile estimated:
+  124–148 KB measured in the Alps, 21–26 KB over La Réunion) or Mapterhorn z6–12 (170 KB a tile; its 512 px z12 tile
+  holds AWS's four z13 ones), as the relief setting says when the pack is made (its manifest keeps which); the photo
+  also covers the 3D square when it is the larger, so 3D is never drawn
   without imagery. Réglages → Cartes says whether it is asked (default: an inline question once the recording has
   started, never delaying it; unanswered means no), always or never downloaded, with the live estimate of each size.
   A 2D zone pack is turned into the 3D one in place (its tiles kept). Zone packs are capped at 300 MB (the disc around the start goes first, then the plan lowers
@@ -123,11 +131,11 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   IGN BD TOPO V3 `batiment` from the Géoplateforme WFS (Licence Ouverte Etalab 2.0), height from `hauteur`, else the
   roof's top minus the ground, else 3 m a floor, else 6 m. The host serves them one z15 cell at a time
   (`buildings/15/{x}/{y}`: footprints rounded to 1e-6°, heights, a few tens of KB for a town's cell), fetched on demand
-  and kept in the same disk cache as the tiles; offline and not cached, there are none (404). The page draws the 16
+  (two WFS pages at a time; a 429 is waited out 1, 2 then 4 s) and kept in the same disk cache as the tiles; offline
+  and not cached, there are none (404). The page draws the 16
   cells nearest the camera's centre (15 000 buildings at most), only inside the block, all in one light stone colour
-  (one extrusion layer, nothing computed per building). Route packs and 3D zone packs hold the cells of their relief square, at most 600 (past
-  that, those within 1 km of the route or nearest the start), estimated at 16 KB a cell (measured 33 KB around
-  Annecy, 14 KB around Chamonix, 3 KB in the Vanoise).
+  (one extrusion layer, nothing computed per building). Offline packs hold no buildings: a pack downloads as little
+  as it can (packs from earlier builds still resume theirs).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
 

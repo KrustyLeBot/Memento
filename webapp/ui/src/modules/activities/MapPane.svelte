@@ -5,6 +5,8 @@
   // it data. As the Windows host (ui/mapview.py), the last value of each setter is kept and replayed whenever the
   // page (re)loads.
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { settings as settingsApi } from '../../lib/api.js';
+  import { onChange } from '../../lib/events.js';
   import { dark, prefs, setPref } from '../../lib/ui.js';
   import Glyph from './Glyph.svelte';
 
@@ -45,11 +47,36 @@
     frame?.contentWindow?.postMessage({ target: 'smap', call: name, args }, location.origin);
   }
 
-  function start() {
-    const theme = $dark ? 'dark' : 'light';
-    state.set('setTheme', [theme]);
-    src = `/map/index.html?mode=${mode}&theme=${theme}&interactive=1`;
+  // the synced "Relief de la carte" setting: read before the page loads, and the page loads again when it changes
+  let relief = 'aws';
+  let starting = false;
+  async function readRelief() {
+    try {
+      return (await settingsApi.activities()).relief || 'aws';
+    } catch (error) {
+      return relief;  // the settings could not be read: the page keeps what it has
+    }
   }
+  const pageSrc = () =>
+    `/map/index.html?mode=${state.get('setMode')?.[0] ?? mode}&theme=${state.get('setTheme')?.[0]}&interactive=1&relief=${relief}`;
+
+  async function start() {
+    if (starting || src) return;
+    starting = true;
+    relief = await readRelief();
+    state.set('setTheme', [$dark ? 'dark' : 'light']);
+    src = pageSrc();
+    starting = false;
+  }
+
+  const stopChanges = onChange(async (areas) => {
+    if (!src || !areas.includes('activities')) return;
+    const r = await readRelief();
+    if (r === relief) return;
+    relief = r;
+    loaded = false;
+    src = pageSrc();
+  });
 
   function onLoad() {
     if (!src) return;
@@ -90,7 +117,7 @@
   $: if (parked) expanded = false;
 
   onMount(() => addEventListener('message', onMessage));
-  onDestroy(() => removeEventListener('message', onMessage));
+  onDestroy(() => { removeEventListener('message', onMessage); stopChanges(); });
 </script>
 
 <svelte:window on:keydown={key} />

@@ -9,7 +9,11 @@
   const PITCH_TALL = 45;     // on a tall narrow view, so the whole square's surface stays in sight
   const FOLLOW_PITCH = 55;
   const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
-  const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
+  // relief=mapterhorn (the synced "Relief de la carte" setting, passed by the host): Mapterhorn's 512 px WebP tiles
+  // (IGN RGE ALTI 5 m, LiDAR HD where flown) asked to z15; else AWS Terrarium, 256 px PNG to z13
+  const MAPTERHORN = params.get('relief') === 'mapterhorn';
+  const DEM = MAPTERHORN ? { path: 'demhd', size: 512, maxzoom: 15 } : { path: 'dem', size: 256, maxzoom: 13 };
+  const ATTRIBUTION = '© IGN · © OpenStreetMap · ' + (MAPTERHORN ? '© Mapterhorn (IGN RGE ALTI, LiDAR HD)' : 'Terrarium');
   // Buildings (3D only): IGN BD TOPO footprints extruded in one light stone colour, walls and roofs alike: one
   // extrusion layer, nothing computed per building (colouring roofs from the photo cost seconds of main thread a cell).
   const BLD_Z = 15;            // the host serves one z15 cell (850 m wide in the Alps) per request
@@ -168,13 +172,32 @@
     return createImageBitmap(floorImages[size]);  // a new bitmap each time: MapLibre transfers it to its worker
   }
   const terrarium = (d, i) => d[i] * 256 + d[i + 1] + d[i + 2] / 256 - 32768;
-  async function demPixels(z, x, y, signal) {
-    const res = await fetch(`${BASE}t/dem/${z}/${x}/${y}`, { signal });
+  async function demBytes(path, z, x, y, signal) {
+    const res = await fetch(`${BASE}t/${path}/${z}/${x}/${y}`, { signal });
     if (!res.ok) throw new Error(`dem ${res.status}`);
     return res.arrayBuffer();
   }
+  /** A relief tile as the source's bytes (PNG or WebP), or an ImageBitmap when it had to be put together. */
+  async function demPixels(z, x, y, signal) {
+    if (!MAPTERHORN) return demBytes('dem', z, x, y, signal);
+    try {
+      return await demBytes('demhd', z, x, y, signal);
+    } catch (e) {
+      if (signal && signal.aborted) throw e;
+      // offline with a pack made before the switch, or Mapterhorn down: AWS's four tiles one zoom deeper are
+      // exactly this 512 px tile, stitched (the pack's AWS relief, so offline 3D keeps its terrain)
+      if (z + 1 > 13) throw e;
+      const parts = await Promise.all([[0, 0], [1, 0], [0, 1], [1, 1]].map(([dx, dy]) =>
+        demBytes('dem', z + 1, 2 * x + dx, 2 * y + dy, signal).then((b) => decodeBitmap(b))));
+      const c = canvasOf(512, 512), g = c.getContext('2d');
+      parts.forEach((b, i) => { g.drawImage(b, (i & 1) * 256, (i >> 1) * 256); b.close(); });
+      return createImageBitmap(c, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    }
+  }
+  const decodeBitmap = (raw) => raw instanceof ImageBitmap ? raw
+    : createImageBitmap(new Blob([raw]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   async function decode(raw) {
-    const bmp = await createImageBitmap(new Blob([raw], { type: 'image/png' }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    const bmp = await decodeBitmap(raw);
     const c = canvasOf(bmp.width, bmp.height), ctx = c.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(bmp, 0, 0); bmp.close();
     return ctx.getImageData(0, 0, c.width, c.height);
@@ -396,7 +419,7 @@
   maplibregl.addProtocol('dem', async (req, abort) => {
     const m = /^dem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
     const z = +m[1], x = +m[2], y = +m[3];
-    const sq = built3d, W = 256, H = 256, scale = 2 ** z;  // Terrarium tiles are 256 px (checked after decoding)
+    const sq = built3d, W = DEM.size, H = DEM.size, scale = 2 ** z;  // the source's tile size (checked after decoding)
     if (!sq) return { data: await demPixels(z, x, y, abort.signal) };
     const x0 = (mercX(sq[0]) * scale - x) * W - 3, x1 = (mercX(sq[2]) * scale - x) * W + 3;
     const y0 = (mercY(sq[3]) * scale - y) * H - 3, y1 = (mercY(sq[1]) * scale - y) * H + 3;
@@ -526,9 +549,10 @@
   }
   // MapLibre 4.7 draws the photo of each terrain tile into a texture twice the tile's size (qualityFactor 2) and
   // meshes each tile 128x128: on a 1x screen that is 4 times the pixels shown, and the relief has no detail to fill
-  // the mesh (a z15 view's terrain tile spans 64 DEM pixels or fewer). Rotating a 3D block at 1x on a software
-  // renderer went from 846 to 288 ms a frame with the texture at the screen's density and a 64x64 mesh.
-  const TERRAIN_MESH = 64;
+  // the mesh with AWS (a z15 view's terrain tile spans 64 of its pixels or fewer). Rotating a 3D block at 1x on a
+  // software renderer went from 846 to 288 ms a frame with the texture at the screen's density and a 64x64 mesh.
+  // Mapterhorn's tiles hold 4 times as many pixels: 128 there (a vertex every 2 of them), 64 on a small PC.
+  const TERRAIN_MESH = MAPTERHORN && !LOW_END ? 128 : 64;
   // the photo drawn on terrain without a block (3D around the position) too; the block's own source is patched when added
   map.on('styledata', () => { if (map.style && map.style.sourceCaches) keepLoadedOnTerrain(map.style.sourceCaches.ortho); });
   function tuneTerrain() {
@@ -580,7 +604,7 @@
   // ---------------------------------------------------------------- the 3D block
 
   function bandMetres() {
-    const z = Math.min(13, Math.max(0, Math.floor(map.getZoom())));
+    const z = Math.min(DEM.maxzoom, Math.max(0, Math.floor(map.getZoom())));
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     return 6 * 156543 * Math.cos(lat * Math.PI / 180) / 2 ** z;  // 6 DEM pixels: wider than the cliff, so no white stripes
   }
@@ -633,7 +657,7 @@
       cache.update = function (...args) { update.apply(this, args); update.apply(this, args); };
       keepLoadedOnTerrain(cache);
     }
-    map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
+    map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: DEM.size, maxzoom: DEM.maxzoom, encoding: 'terrarium', bounds });
   }
   let measuring = null;
   function measureForCamera(sq) {

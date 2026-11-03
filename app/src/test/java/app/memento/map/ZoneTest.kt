@@ -43,27 +43,27 @@ class ZoneTest {
     }
 
     @Test
-    fun theZoneHasZ14To19AroundTheStartZ18And19OnASmallerDisc() {
+    fun theZoneHasZ14To18AroundTheStartOnNarrowerDiscs() {
         val p = TilePlans.forZone(lon, lat)
         val c = p.corridor!!
         assertEquals(listOf(lon), c.lons)
-        assertEquals(14..19, c.zooms)
-        assertEquals(TilePlans.ZONE_HD_M, c.bufferAt(17), 0.0)
-        assertEquals(TilePlans.ZONE_FINE_M, c.bufferAt(18), 0.0)
-        assertEquals(TilePlans.ZONE_FINE_M, c.bufferAt(19), 0.0)
+        assertEquals(14..18, c.zooms)
+        assertEquals(6000.0, c.bufferAt(16), 0.0)
+        assertEquals(3000.0, c.bufferAt(17), 0.0)
+        assertEquals(2000.0, c.bufferAt(18), 0.0)
         val disc = p.corridorCount * TilePlans.ORTHO_TILE_BYTES
-        assertTrue("$disc", disc in 20 * mb..60 * mb)
-        // the start's own z19 tile is in, one 2 km away is not
-        val n = 1 shl 19
+        assertTrue("$disc", disc in 30 * mb..60 * mb)  // about 50 MB at this latitude
+        // the start's own z18 tile is in, one 3 km away is not
+        val n = 1 shl 18
         val x = ((lon + 180) / 360 * n).toInt()
         val y = ((1 - Math.log(Math.tan(Math.toRadians(lat)) + 1 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2 * n).toInt()
-        assertTrue(c.contains(19, x, y))
-        assertTrue(!c.contains(19, x + 40, y))
-        assertTrue(p.detailLabel(), p.detailLabel().startsWith("Autour du départ : zoom 19 à 1 km, zoom 17 à 3 km"))
+        assertTrue(c.contains(18, x, y))
+        assertTrue(!c.contains(18, x + 28, y))
+        assertEquals("Autour du départ : zoom 18 à 2 km, zoom 17 à 3 km, zoom 16 à 6 km ; moyenne ailleurs", p.detailLabel())
     }
 
     @Test
-    fun default3dZoneAddsTheReliefAndTheBuildings() {
+    fun default3dZoneAddsTheRelief() {
         val p2 = TilePlans.forZone(lon, lat)
         val p3 = TilePlans.forZone3d(lon, lat)
         assertEquals(p2.square, p3.square)
@@ -73,9 +73,9 @@ class ZoneTest {
         val dem = p3.demRanges.sumOf { it.count }
         assertTrue("$dem", dem in 200..320)
         val extra = TilePlans.zone3dExtraBytes(lon, lat)
-        assertEquals(Buildings.MAX_PACK_CELLS, p3.buildingCells.size)
-        assertEquals(dem * TilePlans.DEM_TILE_BYTES + p3.buildingCells.size * Buildings.CELL_BYTES, extra)
-        assertTrue("$extra", extra in 30 * mb..50 * mb)
+        assertTrue(p3.buildingCells.isEmpty())
+        assertEquals(dem * TilePlans.DEM_TILE_BYTES, extra)
+        assertTrue("$extra", extra in 15 * mb..40 * mb)
     }
 
     @Test
@@ -202,5 +202,26 @@ class ZoneTest {
         val always = StartZone.of(spec(), Zone3dPolicy.ALWAYS)
         assertEquals(true, always.next())
         assertNull(always.requested(true).next())
+    }
+}
+
+class ReliefPackTest {
+    @Test
+    fun aMapterhornPackHoldsItsOwnReliefTilesAndSaysSo() {
+        val hd = TilePlans.forZone3d(6.5, 45.5, demKind = TileKey.KIND_DEM_HD)
+        val aws = TilePlans.forZone3d(6.5, 45.5)
+        assertEquals(6..12, hd.demZooms)  // a 512 px z12 tile holds AWS's four z13 ones
+        assertTrue(hd.groups().filter { it.kind == TileKey.KIND_DEM_HD }.isNotEmpty() && hd.groups().none { it.kind == TileKey.KIND_DEM })
+        assertEquals(hd.demRanges.sumOf { it.count } * TilePlans.DEM_HD_TILE_BYTES, hd.estimatedBytes - hd.copy(demZooms = null).estimatedBytes)
+        assertTrue(aws.groups().none { it.kind == TileKey.KIND_DEM_HD })
+        val pack = Pack("z-2", "Zone", 0, hd.square, hd.orthoZooms.last, Zones.KINDS_3D, 0, false, false,
+            corridor = hd.corridor, relief = hd.demSquare, demKind = TileKey.KIND_DEM_HD)
+        val back = Pack.parse(pack.toJson())
+        assertEquals(TileKey.KIND_DEM_HD, back.demKind)
+        assertEquals(hd.tileCount, back.plan().tileCount)
+        // packs from before the choice: AWS, and their manifest says nothing of it
+        val old = pack.copy(demKind = TileKey.KIND_DEM)
+        assertTrue(!old.toJson().contains("dem_kind"))
+        assertEquals(TileKey.KIND_DEM, Pack.parse(old.toJson()).demKind)
     }
 }

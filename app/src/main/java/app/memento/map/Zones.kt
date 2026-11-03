@@ -5,7 +5,8 @@ package app.memento.map
  * pack serves it, and how a 2D zone pack becomes a 3D one. Pure logic.
  */
 data class ZoneSpec(val lon: Double, val lat: Double, val side2dKm: Int, val side3dKm: Int) {
-    fun plan(with3d: Boolean): TilePlan = if (with3d) TilePlans.forZone3d(lon, lat, side2dKm, side3dKm) else TilePlans.forZone(lon, lat, side2dKm)
+    fun plan(with3d: Boolean, demKind: String = MapRelief.kind()): TilePlan =
+        if (with3d) TilePlans.forZone3d(lon, lat, side2dKm, side3dKm, demKind) else TilePlans.forZone(lon, lat, side2dKm)
 
     /** The middle of each square: a pack covering it serves a recording starting here (a second one from the same spot). */
     val near2d: Bbox get() = TilePlans.zoneSquare(lon, lat, side2dKm).half()
@@ -19,7 +20,8 @@ data class ZoneSpec(val lon: Double, val lat: Double, val side2dKm: Int, val sid
 }
 
 object Zones {
-    val KINDS_3D = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS)
+    // no buildings offline: a pack holds as little as it can (the map draws none where a cell is not cached)
+    val KINDS_3D = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS)
 
     fun name(with3d: Boolean) = if (with3d) "Zone autour du départ (3D)" else "Zone autour du départ (2D)"
 
@@ -39,13 +41,13 @@ object Zones {
 
     /**
      * [p] as a 3D zone: its creation time (so its expiry) and its photo tiles kept, the photo widened to the 3D square
-     * when that is larger, relief, peaks, buildings and the z16 disc around the start left to fetch.
+     * when that is larger, relief (from the source chosen now), peaks and the disc around the start left to fetch.
      */
     fun upgrade(p: Pack, z: ZoneSpec): Pack {
         val plan = z.plan(true)
         return p.copy(
             name = name(true), kinds = KINDS_3D, square = TilePlans.union(p.square, plan.square), zmax = plan.orthoZooms.last,
-            corridor = plan.corridor, relief = plan.demSquare, complete = false,
+            corridor = plan.corridor, relief = plan.demSquare, complete = false, demKind = plan.demKind,
         )
     }
 }

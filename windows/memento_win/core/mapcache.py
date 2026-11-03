@@ -9,9 +9,9 @@ from urllib.parse import parse_qs
 
 CACHE_LIMIT = 300 * 1024 * 1024
 PURGE_TARGET = int(CACHE_LIMIT * 0.8)  # purge down to this so the next purge is not one tile away
-MAX_ZOOM = {"ortho": 19, "dem": 15}
-MIME = {"ortho": "image/jpeg", "dem": "image/png", "osmfb2": "image/png"}
-EXT = {"ortho": "jpg", "dem": "png", "osmfb2": "png"}
+MAX_ZOOM = {"ortho": 19, "dem": 15, "demhd": 17}
+MIME = {"ortho": "image/jpeg", "dem": "image/png", "demhd": "image/webp", "osmfb2": "image/png"}
+EXT = {"ortho": "jpg", "dem": "png", "demhd": "webp", "osmfb2": "png"}
 OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer; OSM stand-ins of IGN errors (build 73)
 # and of white sea tiles (build 80)
 BUILDINGS_Z = 15  # core/buildings.py's cells
@@ -21,11 +21,14 @@ IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.
              "&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}")
 OSM = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+# the "Relief de la carte" setting's other choice: IGN RGE ALTI 5 m and LiDAR HD, Terrarium in 512 px WebP
+MAPTERHORN = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"
 
 
 @dataclass(frozen=True)
 class TileRequest:
-    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (Terrarium PNG), or "osmfb2" (the photo's OpenStreetMap stand-in, PNG)
+    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (AWS Terrarium PNG), "demhd" (Mapterhorn WebP), or "osmfb2" (the
+    # photo's OpenStreetMap stand-in, PNG)
     z: int
     x: int
     y: int
@@ -96,7 +99,8 @@ def tile_path(root: Path, tile: TileRequest) -> Path:
 
 
 def upstream_url(tile: TileRequest) -> str:
-    return (IGN_ORTHO if tile.kind == "ortho" else TERRARIUM).format(z=tile.z, x=tile.x, y=tile.y)
+    url = {"ortho": IGN_ORTHO, "demhd": MAPTERHORN}.get(tile.kind, TERRARIUM)
+    return url.format(z=tile.z, x=tile.x, y=tile.y)
 
 
 def fallback_url(tile: TileRequest) -> str:

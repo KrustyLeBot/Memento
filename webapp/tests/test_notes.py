@@ -254,3 +254,16 @@ def test_activity_settings_round_trip_with_versions(client, data_dir):
     stale = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": []},
                        headers={**HEADERS, "If-Match": "none"})
     assert stale.status_code == 409
+    # the map's relief: AWS until chosen, kept when a page that knows nothing of it saves, refused when unknown
+    assert saved.json()["relief"] == "aws" and [r["key"] for r in saved.json()["reliefs"]] == ["aws", "mapterhorn"]
+    version = saved.json()["version"]
+    hd = client.put("/api/settings/activities", json={"refine_altitude": True, "totals": ["walk"], "relief": "mapterhorn"},
+                    headers={**HEADERS, "If-Match": version})
+    assert hd.status_code == 200 and hd.json()["relief"] == "mapterhorn"
+    assert '"relief": "mapterhorn"' in (data_dir / "activities" / "settings.json").read_text()
+    old_page = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": ["walk"]},
+                          headers={**HEADERS, "If-Match": hd.json()["version"]})
+    assert old_page.json()["relief"] == "mapterhorn"
+    bad = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": [], "relief": "lidar"},
+                     headers={**HEADERS, "If-Match": old_page.json()["version"]})
+    assert bad.status_code == 400

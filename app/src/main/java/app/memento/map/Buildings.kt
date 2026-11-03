@@ -1,6 +1,7 @@
 package app.memento.map
 
 import app.memento.activity.MapMath
+import java.util.concurrent.Semaphore
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
@@ -106,10 +107,25 @@ object Buildings {
     fun isLastPage(features: List<Any?>) = features.size < PAGE
 
     /** The slim JSON of a cell, [get] doing the requests. HTTP errors and malformed answers are [WfsException]s. */
+    // IGN's WFS answers 429 to bursts: the map asks for up to 16 cells at once, each one page or more. Two requests
+    // at a time, and a refusal waited out (1, 2, 4 s) before it fails the cell.
+    private val wfsGate = Semaphore(2)
+    private val RETRY_MS = longArrayOf(1000, 2000, 4000)
+
+    private fun wfsGet(url: String, get: (String) -> HttpResult): HttpResult {
+        var attempt = 0
+        while (true) {
+            wfsGate.acquire()
+            val r = try { get(url) } finally { wfsGate.release() }
+            if ((r.code != 429 && r.code != 503) || attempt == RETRY_MS.size) return r
+            Thread.sleep(RETRY_MS[attempt++])
+        }
+    }
+
     fun fetchCell(x: Int, y: Int, get: (String) -> HttpResult): ByteArray {
         val features = ArrayList<Any?>()
         for (page in 0 until MAX_PAGES) {
-            val r = get(wfsUrl(x, y, page * PAGE))
+            val r = wfsGet(wfsUrl(x, y, page * PAGE), get)
             if (r.code != 200) throw WfsException("Bâtiments : HTTP ${r.code}")
             val got = parsePage(String(r.body, Charsets.UTF_8))
             features.addAll(got)

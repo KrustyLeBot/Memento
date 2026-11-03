@@ -24,6 +24,8 @@ data class Pack(
     val corridor: Corridor? = null,
     /** 3D zone packs: where the relief and the peaks are, when that is not the whole [square]. */
     val relief: Bbox? = null,
+    /** Which relief tiles it holds: [TileKey.KIND_DEM] (AWS, also every pack from before the choice) or [TileKey.KIND_DEM_HD]. */
+    val demKind: String = KIND_DEM,
 ) {
     /** Where the 3D view works offline from this pack (given [has3d]). */
     val reliefSquare: Bbox get() = relief ?: square
@@ -38,7 +40,10 @@ data class Pack(
 
     /** The tiles this pack downloads. */
     fun plan(): TilePlan =
-        TilePlan(square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.DEM_ZOOMS else null, corridor, relief, buildings = KIND_BUILDINGS in kinds)
+        TilePlan(
+            square, TilePlans.ORTHO_MIN_Z..zmax, if (has3d) TilePlans.demZooms(demKind) else null, corridor, relief,
+            buildings = KIND_BUILDINGS in kinds, demKind = demKind,
+        )
 
     fun toJson(): String = buildString {
         append('{')
@@ -51,10 +56,12 @@ data class Pack(
         append(",\"bytes\":").append(bytes)
         append(",\"complete\":").append(complete)
         append(",\"route\":").append(hasRoute)
+        if (demKind != KIND_DEM) append(",\"dem_kind\":").append(Json.quote(demKind))
         relief?.let { r -> append(",\"relief\":[").append(r.toList().joinToString(",") { Json.num(it, 7) }).append(']') }
         corridor?.let { c ->
             append(",\"corridor\":{\"buffer\":").append(Json.num(c.bufferM, 1))
             if (c.fineM != c.bufferM) append(",\"fine\":").append(Json.num(c.fineM, 1))
+            if (c.midM != c.bufferM) append(",\"mid\":").append(Json.num(c.midM, 1))
             append(",\"zooms\":[").append(c.zooms.first).append(',').append(c.zooms.last).append(']')
             append(",\"line\":[")
             for (i in c.lons.indices) {
@@ -88,6 +95,7 @@ data class Pack(
                 hasRoute = o["route"] as? Boolean ?: false,
                 corridor = o["corridor"].asMap()?.let(::parseCorridor),
                 relief = Bbox.fromList(o["relief"].asList()?.mapNotNull { it.asDouble() }),
+                demKind = (o["dem_kind"] as? String)?.takeIf { it == TileKey.KIND_DEM_HD } ?: KIND_DEM,
             )
         }
 
@@ -99,6 +107,7 @@ data class Pack(
                 line.filterIndexed { i, _ -> i % 2 == 0 }, line.filterIndexed { i, _ -> i % 2 == 1 },
                 c["buffer"].asDouble() ?: return null, z[0]..z[1],
             ).let { k -> c["fine"].asDouble()?.let { k.copy(fineM = it) } ?: k }
+                .let { k -> c["mid"].asDouble()?.let { k.copy(midM = it) } ?: k }
         }
 
         /** Packs to delete at [now]: expired ones, whatever their state. */

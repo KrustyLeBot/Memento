@@ -238,7 +238,7 @@ fun PreparedRoutesSection(vm: MainViewModel) {
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     // the "3D hors ligne" setting: asked, always (2D + 3D only) or never (2D only)
-                    if (plan3d != null && plan2d != null) Text("Télécharger aussi la 3D hors ligne (relief, bâtiments, sommets) ?", fontWeight = FontWeight.SemiBold)
+                    if (plan3d != null && plan2d != null) Text("Télécharger aussi la 3D hors ligne (relief, sommets) ?", fontWeight = FontWeight.SemiBold)
                     if (plan3d != null) Text("2D + 3D : environ ${megabytes(plan3d.estimatedBytes)} Mo. ${plan3d.detailLabel()}.")
                     if (plan2d != null) Text("2D seule : environ ${megabytes(plan2d.estimatedBytes)} Mo. ${plan2d.detailLabel()}.")
                     Text(

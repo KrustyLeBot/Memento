@@ -28,7 +28,14 @@ class MapPageContractTest {
     fun tileUrlsThePageBuildsAreServed() {
         assertTrue(page.contains("tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19"))
         assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${z}/\${x}/\${y}`, { signal })"))
-        assertTrue(page.contains("`\${BASE}t/dem/\${z}/\${x}/\${y}`"))
+        // the relief: AWS ("dem") or Mapterhorn ("demhd"), the path the synced setting picks (relief= in the page URL)
+        assertTrue(page.contains("fetch(`\${BASE}t/\${path}/\${z}/\${x}/\${y}`, { signal })"))
+        assertTrue(page.contains("path: 'demhd', size: 512, maxzoom: 15") && page.contains("path: 'dem', size: 256, maxzoom: 13"))
+        assertTrue(page.contains("params.get('relief') === 'mapterhorn'"))
+        assertEquals(TileKey("demhd", 15, 17008, 11701), TileKey.parse("/t/demhd/15/17008/11701"))
+        assertEquals("demhd/15/17008/11701.webp", TileKey("demhd", 15, 17008, 11701).path)
+        assertEquals("image/webp", TileKey("demhd", 15, 17008, 11701).mime)
+        assertEquals("https://tiles.mapterhorn.com/15/17008/11701.webp", TileSources.demHd(15, 17008, 11701))
         // what MapLibre and the DEM protocol make of them, as TileServer sees the path
         assertEquals(TileKey("ortho", 19, 272042, 187212), TileKey.parse("/t/ortho/19/272042/187212"))
         assertEquals(TileKey("dem", 12, 2120, 1460), TileKey.parse("/t/dem/12/2120/1460"))

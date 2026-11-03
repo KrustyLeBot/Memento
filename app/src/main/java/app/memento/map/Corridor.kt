@@ -11,9 +11,9 @@ import kotlin.math.pow
 
 /**
  * The high-definition band of a route pack: the tiles at [zooms] whose rectangle comes within [bufferM] metres of
- * the polyline ([lons]/[lats], already simplified), narrowed to [fineM] from [Corridors.FINE_Z] (z18–19 weigh 4 and 16
- * times z17 for the same band). Stored in the pack manifest, so the tile list can be computed again identically on
- * resume.
+ * the polyline ([lons]/[lats], already simplified), narrowed to [midM] at [Corridors.MID_Z] and to [fineM] from
+ * [Corridors.FINE_Z] (each zoom weighs 4 times the one before for the same band). Stored in the pack manifest, so the
+ * tile list can be computed again identically on resume.
  */
 data class Corridor(
     val lons: List<Double>,
@@ -21,12 +21,17 @@ data class Corridor(
     val bufferM: Double,
     val zooms: IntRange,
     val fineM: Double = bufferM,
+    val midM: Double = bufferM,
 ) {
     init {
         require(lons.size == lats.size) { "lons/lats" }
     }
 
-    fun bufferAt(z: Int): Double = if (z >= Corridors.FINE_Z) minOf(bufferM, fineM) else bufferM
+    fun bufferAt(z: Int): Double = when {
+        z >= Corridors.FINE_Z -> minOf(bufferM, midM, fineM)
+        z == Corridors.MID_Z -> minOf(bufferM, midM)
+        else -> bufferM
+    }
 
     private val cache = HashMap<Int, LongArray>()
 
@@ -46,6 +51,9 @@ data class Corridor(
 object Corridors {
     /** Earth circumference at the equator in Web Mercator metres. */
     private const val EQUATOR_M = 40_075_016.686
+
+    /** The zoom held to a corridor's [Corridor.midM]. */
+    const val MID_Z = 17
 
     /** The first zoom held to a corridor's [Corridor.fineM]. */
     const val FINE_Z = 18

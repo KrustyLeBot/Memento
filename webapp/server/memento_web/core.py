@@ -14,6 +14,6 @@ except ImportError:
 
 from memento_win.core import atomic, drawing, mapcache, peaks  # noqa: E402,F401
 from memento_win.core import note as fmt  # noqa: E402,F401
-from memento_win.core.settings import PATH as SETTINGS_PATH, ActivitySettings  # noqa: E402,F401
+from memento_win.core.settings import PATH as SETTINGS_PATH, RELIEFS, ActivitySettings  # noqa: E402,F401
 from memento_win.core.store import ACTIVITIES_DIR, MAX_ATTACHMENT, Store, now_ms  # noqa: E402,F401
 from memento_win.core.track import Sport  # noqa: E402,F401

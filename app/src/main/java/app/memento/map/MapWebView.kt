@@ -206,9 +206,36 @@ object MapHost {
         // pauseTimers() is process-wide and outlives the WebView it was called on: after a renderer lost
         // while paused, the new page would otherwise never run a timer and never say "ready"
         w.resumeTimers()
-        val url = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") + "&theme=" + (if (dark) "dark" else "light") + "&interactive=1"
-        w.loadUrl(url)
+        w.loadUrl(pageUrl(mode3d, dark))
         return w
+    }
+
+    private var pageRelief = MapRelief.current
+
+    /** relief: the source the page draws the terrain from (the synced setting), read when it loads. */
+    internal fun pageUrl(mode3d: Boolean, dark: Boolean): String {
+        pageRelief = MapRelief.current
+        return TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") + "&theme=" + (if (dark) "dark" else "light") +
+            "&interactive=1&relief=" + pageRelief.key
+    }
+
+    /** The relief setting changed (here or synced from the PC): the page loads again with it; its kept state is replayed on "ready". */
+    fun reliefChanged() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { reliefChanged() }
+            return
+        }
+        val w = web ?: return
+        if (pageRelief == MapRelief.current) return
+        ready = false
+        dirty.addAll(state.keys)
+        if (paused) {
+            // a paused WebView would never finish loading; "ready" pauses it again when nothing shows it
+            paused = false
+            w.onResume()
+            w.resumeTimers()
+        }
+        w.loadUrl(pageUrl(state["setMode"] != "\"2d\"", state["setTheme"] == "\"dark\""))
     }
 
     private fun onPost(json: String) {

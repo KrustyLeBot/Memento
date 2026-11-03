@@ -129,6 +129,7 @@ def test_parse_page_refuses_what_is_not_a_feature_collection():
 
 def test_fetch_cell_pages_until_a_short_page(monkeypatch):
     monkeypatch.setattr(buildings, "PAGE", 2)
+    monkeypatch.setattr(buildings, "_RETRY_S", (0, 0, 0))
     lon, lat = inside_cell()
     pages = [[feature(f"b.{i}", [square(lon + i * 0.0003, lat)], hauteur=4.0 + i) for i in range(k, k + n)]
              for k, n in ((0, 2), (2, 2), (4, 1))]
@@ -146,6 +147,9 @@ def test_fetch_cell_pages_until_a_short_page(monkeypatch):
         assert "503" in str(error)
     else:
         raise AssertionError("an HTTP error must not be cached as an empty cell")
+    # a 429 is waited out, then the page asked again
+    answers = iter([(429, "text/plain", b""), (200, "application/json", json.dumps({"features": pages[2]}).encode())])
+    assert [h for h, _ in buildings.decode(buildings.fetch_cell(X, Y, lambda url: next(answers)))] == [8.0]
 
 
 def test_purge_counts_building_cells_but_not_summits(tmp_path):

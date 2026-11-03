@@ -39,7 +39,7 @@
     setPref('hidden', [...hidden]);
   }
 
-  /** @param {{ refine_altitude: boolean, totals: string[] }} value */
+  /** @param {{ refine_altitude: boolean, totals: string[], relief: string }} value */
   async function saveActivity(value) {
     if (!activity) return;
     try {
@@ -122,14 +122,25 @@
         <div class="sports">
           {#each activity.sports as sport}
             <label class="check"><input type="checkbox" checked={activity.totals.includes(sport.key)}
-              on:change={(e) => saveActivity({ refine_altitude: activity?.refine_altitude ?? false,
+              on:change={(e) => saveActivity({ refine_altitude: activity?.refine_altitude ?? false, relief: activity?.relief ?? 'aws',
                 totals: e.currentTarget.checked ? [...(activity?.totals ?? []), sport.key] : (activity?.totals ?? []).filter((k) => k !== sport.key) })} />
               {sport.label}</label>
           {/each}
         </div>
         <label class="check"><input type="checkbox" checked={activity.refine_altitude}
-          on:change={(e) => saveActivity({ refine_altitude: e.currentTarget.checked, totals: activity?.totals ?? [] })} />
+          on:change={(e) => saveActivity({ refine_altitude: e.currentTarget.checked, totals: activity?.totals ?? [],
+            relief: activity?.relief ?? 'aws' })} />
           Affiner l'altitude avec le relief à l'enregistrement (téléphone)</label>
+        <p class="muted">Relief de la carte</p>
+        <div class="sports">
+          {#each activity.reliefs as r}
+            <label class="check"><input type="radio" name="relief" checked={activity.relief === r.key}
+              on:change={() => saveActivity({ refine_altitude: activity?.refine_altitude ?? false, totals: activity?.totals ?? [],
+                relief: r.key })} /> {r.label}</label>
+          {/each}
+        </div>
+        <p class="muted">AWS : le relief actuel, environ 30 m en France. Mapterhorn : le RGE ALTI de l'IGN (5 m partout en
+          France, 0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd.</p>
       </div>
     {/if}
 

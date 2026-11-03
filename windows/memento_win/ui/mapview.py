@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import weakref
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtPositioning import QGeoPositionInfo, QGeoPositionInfoSource
@@ -60,7 +61,21 @@ class MapView(QWebEngineView):
         page.loadFinished.connect(self._load_finished)
         page.renderProcessTerminated.connect(self._crashed)
         self.setMinimumHeight(260)
-        self.load(QUrl(f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={_theme()}&interactive=1"))
+        self.relief = RELIEF
+        _VIEWS.add(self)
+        self._load_page()
+
+    def _load_page(self) -> None:
+        # relief: the source the page draws the terrain from (the synced setting), read when it loads
+        self.relief = RELIEF
+        self.load(QUrl(f"{maphost.BASE_URL}map/index.html?mode={self.state['setMode'][0]}&theme={self.state['setTheme'][0]}"
+                       f"&interactive=1&relief={self.relief}"))
+
+    def reload_for_relief(self) -> None:
+        """The relief setting changed: the page loads again with it; the kept state is replayed once it is loaded."""
+        if self.relief != RELIEF:
+            self.loaded = False
+            self._load_page()
 
     def call(self, name: str, *args) -> None:
         if name in STATE_ORDER:
@@ -87,6 +102,20 @@ class MapView(QWebEngineView):
         print(f"map: renderer ended ({status}, {code}), reloading", file=sys.stderr)
         self.loaded = False
         QTimer.singleShot(500, self, self.reload)
+
+
+RELIEF = "aws"  # core/settings.RELIEFS key of the synced "Relief de la carte" setting
+_VIEWS: "weakref.WeakSet[MapView]" = weakref.WeakSet()
+
+
+def set_relief(relief: str) -> None:
+    """The setting as read from activities/settings.json (changed here or synced from the phone): open maps reload."""
+    global RELIEF
+    if relief == RELIEF:
+        return
+    RELIEF = relief
+    for view in list(_VIEWS):
+        view.reload_for_relief()
 
 
 def _theme() -> str:

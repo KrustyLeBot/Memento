@@ -438,6 +438,11 @@ class SettingsAndRefineTest {
         assertEquals(Sport.values().toSet(), empty.totals)
         assertEquals(emptySet<Sport>(), ActivitySettings.parse("{\"totals\": []}").totals)
         assertEquals(Sport.values().toSet() - Sport.SKI, ActivitySettings(false, Sport.values().toSet() - Sport.SKI).let { ActivitySettings.parse(it.toJson()).totals })
+        // the map's relief: AWS until chosen, the PC's JSON read as written, anything unknown read as AWS
+        assertEquals(Relief.AWS, empty.relief)
+        assertEquals(Relief.MAPTERHORN, ActivitySettings.parse(ActivitySettings(relief = Relief.MAPTERHORN).toJson()).relief)
+        assertEquals(Relief.MAPTERHORN, ActivitySettings.parse("{\"refine_altitude\": false, \"totals\": [\"walk\"], \"relief\": \"mapterhorn\"}\n").relief)
+        assertEquals(Relief.AWS, ActivitySettings.parse("{\"relief\": \"lidar\"}").relief)
     }
 
     @Test

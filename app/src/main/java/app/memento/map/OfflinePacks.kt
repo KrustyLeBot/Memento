@@ -133,7 +133,7 @@ object OfflinePacks {
     /** What [route] would download, for the confirmation shown before it starts. CPU work: call it off the main thread. */
     fun planRoute(route: Route, with3d: Boolean = true): TilePlan {
         if (route.bbox == null) throw PackException("Parcours vide")
-        return TilePlans.forRoute(route, with3d = with3d) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+        return TilePlans.forRoute(route, with3d = with3d, demKind = MapRelief.kind()) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
     }
 
     /**
@@ -152,8 +152,8 @@ object OfflinePacks {
                 val more = plan.estimatedBytes - pack.bytes
                 if (dir.usableSpace < more + SPARE_BYTES) throw PackException("Espace insuffisant : environ ${(more + SPARE_BYTES) / 1_000_000} Mo nécessaires")
                 val up = pack.copy(
-                    zmax = plan.orthoZooms.last, kinds = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS),
-                    complete = false, corridor = plan.corridor,
+                    zmax = plan.orthoZooms.last, kinds = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS),
+                    complete = false, corridor = plan.corridor, demKind = plan.demKind,
                 )
                 jobs[id]?.cancelAndJoin()
                 writeManifest(up)
@@ -175,8 +175,8 @@ object OfflinePacks {
         val pack = Pack(
             newId("r"), route.name.ifBlank { "Parcours" }, System.currentTimeMillis(), plan.square, plan.orthoZooms.last,
             // a route too wide for its relief gets a flat (2D) pack: the kinds say so, and the map stays 2D offline
-            if (plan.demZooms != null) setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS) else setOf(Pack.KIND_ORTHO, Pack.KIND_PEAKS),
-            0, complete = false, hasRoute = true, corridor = plan.corridor,
+            if (plan.demZooms != null) setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS) else setOf(Pack.KIND_ORTHO, Pack.KIND_PEAKS),
+            0, complete = false, hasRoute = true, corridor = plan.corridor, demKind = plan.demKind,
         )
         create(pack, plan.estimatedBytes) { TileCache.writeAtomic(File(it, "route.json"), RouteFile.toJson(route).toByteArray()) }
         return pack.id
@@ -187,7 +187,7 @@ object OfflinePacks {
 
     /**
      * The pack of a recording without route ([ZoneSpec]): the aerial photo of the 2D square around the start and, with
-     * [with3d], relief and peaks over the 3D square plus the z16 disc around the start ([TilePlans.forZone3d]). A pack
+     * [with3d], relief and peaks over the 3D square ([TilePlans.forZone3d]). A pack
      * already covering the middle of the zone (a second recording from the same spot) is reused: resumed if
      * interrupted, and a 2D zone pack is turned into a 3D one by rewriting its manifest and resuming it, so its photo
      * tiles are kept. [onPack] gets the id of the zone pack in use, for the recording to pin it. Skipped offline. Runs
@@ -227,7 +227,7 @@ object OfflinePacks {
         val pack = Pack(
             newId("z"), Zones.name(with3d), now, plan.square, plan.orthoZooms.last,
             if (with3d) Zones.KINDS_3D else setOf(Pack.KIND_ORTHO), 0, complete = false, hasRoute = false,
-            corridor = plan.corridor, relief = plan.demSquare,
+            corridor = plan.corridor, relief = plan.demSquare, demKind = plan.demKind,
         )
         create(pack, plan.estimatedBytes) {}
         return pack.id

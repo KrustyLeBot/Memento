@@ -59,28 +59,30 @@ private fun squareOnlyUpTo17(square: Bbox): TilePlan {
 
 class CorridorTest {
     @Test
-    fun loopOf184KmGetsZ18AlongTheTrackAndZ14Elsewhere() {
+    fun loopOf184KmGetsZ18AlongTheTrackAndZ13Elsewhere() {
         val r = loop184()
         assertEquals(184_000.0, r.length, 8_000.0)
         val t0 = System.nanoTime()
         val p = TilePlans.forRoute(r)!!
         val ms = (System.nanoTime() - t0) / 1_000_000
         assertTrue("planning took $ms ms", ms < 5000)
-        assertEquals(8..14, p.orthoZooms)
+        assertEquals(8..13, p.orthoZooms)
         val c = p.corridor!!
-        // z19 along 184 km does not fit 500 MB: z18 on a narrower band, z15–17 at ±1 km
-        assertEquals(15..18, c.zooms)
-        assertEquals(1000.0, c.bufferM, 0.0)
+        // the first step: z14–16 at 500 m, z17 at 300 m, z18 at 150 m
+        assertEquals(14..18, c.zooms)
+        assertEquals(500.0, c.bufferAt(16), 0.0)
+        assertEquals(300.0, c.bufferAt(17), 0.0)
         assertEquals(150.0, c.bufferAt(18), 0.0)
         assertTrue(c.lons.size < r.size / 3) // simplified
         assertTrue(p.estimatedBytes <= TilePlans.ROUTE_BUDGET)
-        assertTrue(p.estimatedBytes > TilePlans.ROUTE_BUDGET / 8)
+        // about 275 MB here (the Alps' relief is 72 MB of it); the same plan was about 110 MB along a real 197 km race
+        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 200_000_000L..300_000_000L)
         assertEquals(18, p.topZoom)
-        assertEquals("Le long du tracé : zoom 18 à 150 m, zoom 17 à ±1 km ; moyenne ailleurs", p.detailLabel())
+        assertEquals("Le long du tracé : zoom 18 à 150 m, zoom 17 à 300 m, zoom 16 à 500 m ; moyenne ailleurs", p.detailLabel())
 
         // z17 band: about length × (2 × buffer + a tile) of ground, within 25 %
         val tileM = Corridors.tileMetres(17, LAT0)
-        val expected = r.length * (2 * 1000 + tileM) / (tileM * tileM)
+        val expected = r.length * (2 * 300 + tileM) / (tileM * tileM)
         val got = c.tiles(17).size.toDouble()
         assertTrue("z17 $got vs $expected", got in expected * 0.75..expected * 1.25)
 
@@ -92,7 +94,7 @@ class CorridorTest {
         // the middle of the loop, 20 km from the track, is not
         val (cx, cy) = tileOf(LON0, LAT0, 17)
         assertFalse(c.contains(17, cx, cy))
-        assertTrue(p.has(14, tileOf(LON0, LAT0, 14).first, tileOf(LON0, LAT0, 14).second))
+        assertTrue(p.has(13, tileOf(LON0, LAT0, 13).first, tileOf(LON0, LAT0, 13).second))
 
         val before = squareOnlyUpTo17(p.square)
         println(
@@ -124,45 +126,43 @@ class CorridorTest {
     fun aTightBudgetDropsZ17ThenNarrowsTheBandThenLowersTheSquare() {
         val r = loop184()
         val full = TilePlans.forRoute(r)!!
-        assertEquals(15..18, full.corridor!!.zooms)
-        val narrowFine = TilePlans.forRoute(r, full.estimatedBytes - 1)!!
-        assertEquals(15..18, narrowFine.corridor!!.zooms)
-        assertEquals(500.0, narrowFine.corridor!!.bufferM, 0.0)
-        assertEquals(75.0, narrowFine.corridor!!.bufferAt(18), 0.0)
-        val noZ18 = TilePlans.forRoute(r, narrowFine.estimatedBytes - 1)!!
-        assertEquals(15..17, noZ18.corridor!!.zooms)
-        val noZ17 = TilePlans.forRoute(r, noZ18.estimatedBytes - 1)!!
-        assertEquals(15..16, noZ17.corridor!!.zooms)
-        val narrower = TilePlans.forRoute(r, noZ17.estimatedBytes - 1)!!
-        assertEquals(500.0, narrower.corridor!!.bufferM, 0.0)
-        assertEquals(8..14, narrower.orthoZooms)
-        // a budget below the z14 square: the square goes down, a band stays
-        val small = TilePlans.forRoute(r, TilePlan(full.square, 8..14, TilePlans.DEM_ZOOMS).estimatedBytes - 1)!!
-        assertTrue(small.orthoZooms.last < 14)
-        assertNotNull(small.corridor)
-        for (b in listOf(full, narrowFine, noZ18, noZ17, narrower, small)) assertTrue(b.estimatedBytes <= full.estimatedBytes)
+        assertEquals(14..18, full.corridor!!.zooms)
+        // each budget a byte short of the plan before gives a lighter plan: z18 narrows, then goes, then z17…
+        val chain = generateSequence(full) { p -> TilePlans.forRoute(r, p.estimatedBytes - 1)?.takeIf { it.corridor != null } }
+            .take(6).toList()
+        chain.zipWithNext { a, b -> assertTrue(b.estimatedBytes < a.estimatedBytes) }
+        assertEquals(75.0, chain[1].corridor!!.bufferAt(18), 0.0)
+        assertTrue(chain.any { it.corridor!!.zooms.last == 17 })
+        assertTrue(chain.any { it.corridor!!.zooms.last == 16 })
+        val narrower = chain.last()
+        val noZ17 = chain.first { it.corridor!!.zooms.last == 16 }
+        // a budget below the z13 square: the square goes down
+        val small = TilePlans.forRoute(r, TilePlan(full.square, 8..13, TilePlans.DEM_ZOOMS).estimatedBytes - 1)!!
+        assertTrue(small.orthoZooms.last < 13)
+        for (b in listOf(full, noZ17, narrower, small)) assertTrue(b.estimatedBytes <= full.estimatedBytes)
     }
 
     @Test
-    fun aShortHikeGetsItsWholeSquareAtZ17AndZ19AlongTheTrack() {
+    fun aShortHikeGetsTheSameBandsAndStopsAtZ18() {
         val r = route((0..500).map { it * 20.0 to it * 6.0 })
         val p = TilePlans.forRoute(r)!!
-        assertEquals(8..17, p.orthoZooms)
-        assertEquals(18..19, p.corridor!!.zooms)
-        assertEquals(300.0, p.corridor!!.bufferAt(19), 0.0)
-        assertEquals(19, p.topZoom)
-        assertEquals("Haute définition sur toute la zone, zoom 19 à 300 m du tracé", p.detailLabel())
+        assertEquals(8..13, p.orthoZooms)
+        assertEquals(14..18, p.corridor!!.zooms)
+        assertEquals(18, p.topZoom)
+        assertTrue(p.estimatedBytes < 30_000_000)
     }
 
     @Test
-    fun withoutTheReliefThePhotoHasTheWholeBudget() {
+    fun theFlatPackIsTheSamePhotoWithoutTheReliefSoNeverTheLarger() {
         val r = loop184()
         val flat = TilePlans.forRoute(r, with3d = false)!!
         val full = TilePlans.forRoute(r)!!
         assertNull(flat.demZooms)
-        assertTrue(!flat.buildings)
-        assertTrue(flat.estimatedBytes <= TilePlans.ROUTE_BUDGET)
-        assertTrue(flat.topZoom >= full.topZoom)
+        assertEquals(full.orthoZooms, flat.orthoZooms)
+        assertEquals(full.corridor, flat.corridor)
+        assertTrue(flat.estimatedBytes < full.estimatedBytes)
+        // no buildings offline, 2D or 3D
+        assertTrue(full.buildingCells.isEmpty() && full.groups().none { it.kind == TileKey.KIND_BUILDINGS })
     }
 
     @Test
@@ -240,7 +240,7 @@ class CorridorManifestTest {
         val plan = TilePlans.forRoute(outAndBack())!!
         val pack = Pack(
             "r-1", "Aller-retour", created, plan.square, plan.orthoZooms.last,
-            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
+            setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS), 0, complete = false, hasRoute = true, corridor = plan.corridor,
         )
         val back = Pack.parse(pack.toJson())
         assertEquals(pack.corridor, back.corridor)
@@ -263,3 +263,4 @@ class CorridorManifestTest {
         assertTrue(Pack.covers3d(listOf(p), 6.0, 45.0, created + 1000))
     }
 }
+

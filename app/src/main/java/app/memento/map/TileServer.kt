@@ -212,8 +212,8 @@ object TileServer {
      */
     fun fetch(key: TileKey, allowOsm: Boolean): FetchedTile? {
         if (key.kind == TileKey.KIND_BUILDINGS) return FetchedTile(key, Buildings.fetchCell(key.x, key.y, ::get))
-        if (key.kind == TileKey.KIND_DEM) {
-            val r = get(TileSources.dem(key.z, key.x, key.y))
+        if (key.kind == TileKey.KIND_DEM || key.kind == TileKey.KIND_DEM_HD) {
+            val r = get(if (key.kind == TileKey.KIND_DEM) TileSources.dem(key.z, key.x, key.y) else TileSources.demHd(key.z, key.x, key.y))
             if (r.code == 404 || r.code == 403) return null
             if (r.code != 200 || r.body.isEmpty()) throw IOException("Relief : HTTP ${r.code}")
             return FetchedTile(key, r.body)

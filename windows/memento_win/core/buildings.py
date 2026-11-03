@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 from pathlib import Path
 
 Z = 15
@@ -92,12 +94,29 @@ def is_last_page(features: list) -> bool:
     return len(features) < PAGE
 
 
+# IGN's WFS answers 429 to bursts (the map asks for up to 16 cells at once): two requests at a time, and a refusal
+# waited out (1, 2, 4 s) before it fails the cell
+_WFS_GATE = threading.Semaphore(2)
+_RETRY_S = (1, 2, 4)
+
+
+def _wfs_get(url: str, get):
+    attempt = 0
+    while True:
+        with _WFS_GATE:
+            reply = get(url)
+        if reply[0] not in (429, 503) or attempt == len(_RETRY_S):
+            return reply
+        time.sleep(_RETRY_S[attempt])
+        attempt += 1
+
+
 def fetch_cell(x: int, y: int, get) -> bytes:
     """The slim JSON of a cell, `get(url) -> (status, content_type, bytes)` doing the requests (synchronous hosts).
     Raises WfsError on an HTTP error or a malformed answer; whatever `get` raises when offline goes through."""
     features: list = []
     for page in range(MAX_PAGES):
-        status, _kind, data = get(wfs_url(x, y, page * PAGE))
+        status, _kind, data = _wfs_get(wfs_url(x, y, page * PAGE), get)
         if status != 200:
             raise WfsError(f"HTTP {status}")
         got = parse_page(data.decode("utf-8", "replace"))

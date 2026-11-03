@@ -115,26 +115,32 @@ class BuildingsTest {
     }
 
     @Test
-    fun packsWithReliefCarryTheirBuildingsInTheEstimateAndThePlan() {
+    fun packsHoldNoBuildingsButOldOnesStillListTheirs() {
+        // new packs: none, 2D or 3D, route or zone (the less a pack downloads, the better)
         val route = TilePlans.squareOnly(MapSquare.centered(6.129, 45.899, 2500.0))!!
-        assertTrue(route.buildings && route.buildingCells.isNotEmpty())
-        val without = route.copy(buildings = false)
-        assertEquals(route.buildingCells.size * Buildings.CELL_BYTES, route.estimatedBytes - without.estimatedBytes)
-        assertEquals(route.buildingCells.size.toLong(), route.tileCount - without.tileCount)
-        val groups = route.groups()
-        assertEquals(listOf("dem", "buildings", "ortho"), groups.map { it.kind }.distinct())
-        val keys = ArrayList<TileKey>()
-        groups.first { it.kind == "buildings" }.forEach { cx, cy -> keys.add(TileKey("buildings", 15, cx, cy)) }
-        assertEquals(route.buildingCells.size, keys.size)
-        assertTrue(keys.all { it.path.startsWith("buildings/15/") && it.path.endsWith(".json") })
-        // a flat (2D) plan has none
-        assertTrue(route.copy(demZooms = null).buildingCells.isEmpty())
-        // the 3D zone: its 3D square only, at most MAX_PACK_CELLS (~10 MB)
+        assertTrue(!route.buildings && route.buildingCells.isEmpty())
+        assertTrue(route.groups().none { it.kind == "buildings" })
         val zone = TilePlans.forZone3d(6.5, 45.5)
-        assertEquals(Buildings.MAX_PACK_CELLS, zone.buildingCells.size)
-        assertTrue(Pack.KIND_BUILDINGS in Zones.KINDS_3D)
-        val pack = Pack("z-1", "Zone", 0, zone.square, zone.orthoZooms.last, Zones.KINDS_3D, 0, false, false, corridor = zone.corridor, relief = zone.demSquare)
-        assertEquals(zone.tileCount, Pack.parse(pack.toJson()).plan().tileCount)
-        assertTrue(pack.copy(kinds = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM)).plan().buildingCells.isEmpty()) // packs from before
+        assertTrue(zone.buildingCells.isEmpty())
+        assertTrue(Pack.KIND_BUILDINGS !in Zones.KINDS_3D)
+        // a pack from a build that held them still resumes them, as its manifest says
+        val old = route.copy(buildings = true)
+        assertTrue(old.buildingCells.isNotEmpty())
+        assertEquals(old.buildingCells.size * Buildings.CELL_BYTES, old.estimatedBytes - route.estimatedBytes)
+        val keys = ArrayList<TileKey>()
+        old.groups().first { it.kind == "buildings" }.forEach { cx, cy -> keys.add(TileKey("buildings", 15, cx, cy)) }
+        assertTrue(keys.size == old.buildingCells.size && keys.all { it.path.startsWith("buildings/15/") && it.path.endsWith(".json") })
+        val pack = Pack("r-1", "R", 0, route.square, route.orthoZooms.last, setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_BUILDINGS), 0, false, true)
+        assertTrue(Pack.parse(pack.toJson()).plan().buildingCells.isNotEmpty())
+    }
+
+    @Test
+    fun aRefusedWfsPageIsWaitedOutThenAskedAgain() {
+        val cell = """{"type":"FeatureCollection","features":[]}""".toByteArray()
+        val answers = ArrayDeque(listOf(HttpResult(429, "text/plain", ByteArray(0)), HttpResult(200, "application/json", cell)))
+        val t0 = System.currentTimeMillis()
+        val out = Buildings.fetchCell(16941, 11670) { answers.removeFirst() }
+        assertTrue(answers.isEmpty() && out.isNotEmpty())
+        assertTrue(System.currentTimeMillis() - t0 >= 900)  // the first wait, 1 s
     }
 }

@@ -62,6 +62,21 @@ fun MapCacheSettings(vm: MainViewModel) {
 
     SectionTitle("Cartes")
     SettingsCard {
+        val cfg by vm.repo.activitySettings.collectAsState()
+        Text("Relief de la carte", fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            app.memento.activity.Relief.values().forEach { r ->
+                FilterChip(cfg.relief == r, { vm.changeActivitySettings(cfg.copy(relief = r)) }, { Text(r.label) })
+            }
+        }
+        SettingsHint(
+            "AWS : le relief actuel, environ 30 m en France. Mapterhorn : le RGE ALTI de l'IGN (5 m partout en France, " +
+                "0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd. Les cartes hors ligne déjà préparées " +
+                "gardent leur relief. Réglage synchronisé avec le PC.",
+        )
+    }
+
+    SettingsCard {
         val u = usage
         Text(
             if (u == null) "Calcul de la place utilisée…"
@@ -112,7 +127,7 @@ private fun StartZoneSettings(settings: Settings) {
     var side3d by remember { mutableIntStateOf(settings.zone3dKm) }
     val lat = remember { settings.lastStartLat }
     val plan2d = remember(side2d) { TilePlans.forZone(0.0, lat, side2d) }
-    val plan3d = remember(side2d, side3d) { TilePlans.forZone3d(0.0, lat, side2d, side3d) }
+    val plan3d = remember(side2d, side3d) { TilePlans.forZone3d(0.0, lat, side2d, side3d, app.memento.map.MapRelief.kind()) }
     SettingsCard {
         Text("3D hors ligne (parcours préparé, enregistrement avec ou sans parcours)", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -122,7 +137,7 @@ private fun StartZoneSettings(settings: Settings) {
         }
         SettingsHint(
             "La carte 2D se télécharge toujours (Wi-Fi ou données mobiles) : photo jusqu'au zoom 19 à 1 km du départ ou le " +
-                "long du tracé, zoom 17 un peu plus loin, moins fine ailleurs. La 3D (relief, bâtiments, sommets) suit ce choix, " +
+                "long du tracé, zoom 17 un peu plus loin, moins fine ailleurs. La 3D (relief, sommets) suit ce choix, " +
                 "pour un parcours préparé comme pour un enregistrement ; « Demander » la propose à la préparation, ou une fois " +
                 "l'enregistrement lancé sans le retarder. Les deux sont gardées 24 h.",
         )

@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..core import ACTIVITIES_DIR, SETTINGS_PATH, ActivitySettings, Sport, atomic
+from ..core import ACTIVITIES_DIR, RELIEFS, SETTINGS_PATH, ActivitySettings, Sport, atomic
 from ..errors import ApiError, bad_request, json_body, not_found
 from ..files import file_response, read_versioned, require_version, unlink_quiet
 
@@ -113,8 +113,9 @@ class Common:
         found = read_versioned(self.data.path(SETTINGS_PATH))
         settings = ActivitySettings.parse(found[0].decode("utf-8", "replace")) if found else ActivitySettings()
         return {"refine_altitude": settings.refine_altitude, "totals": [s.key for s in Sport if s in settings.totals],
-                "version": found[1] if found else None,
-                "sports": [{"key": s.key, "label": s.label} for s in Sport]}
+                "relief": settings.relief, "version": found[1] if found else None,
+                "sports": [{"key": s.key, "label": s.label} for s in Sport],
+                "reliefs": [{"key": k, "label": label} for k, label in RELIEFS.items()]}
 
     async def get_activity_settings(self, request: Request) -> JSONResponse:
         return JSONResponse(await self.data.read(self._activity_settings))
@@ -127,14 +128,17 @@ class Common:
         try:
             totals = {known[k] for k in body["totals"]}
             refine = bool(body["refine_altitude"])
-        except (KeyError, TypeError):
+            relief = body.get("relief")  # absent from an older page: left as it is
+        except (KeyError, TypeError, AttributeError):
             raise bad_request("Réglages invalides") from None
+        if relief is not None and relief not in RELIEFS:
+            raise bad_request("Relief inconnu")
 
         def run():
             current = self._activity_settings()
             if (current["version"] or "none") != expected:
                 raise ApiError(409, "Ces réglages ont été modifiés ailleurs.", current=current)
-            self.data.store.save_activity_settings(ActivitySettings(refine, totals))
+            self.data.store.save_activity_settings(ActivitySettings(refine, totals, relief or current["relief"]))
             return self._activity_settings()
         return JSONResponse(await self.data.run(run))
 

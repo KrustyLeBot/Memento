@@ -504,7 +504,14 @@ def test_urls_the_page_requests_are_served():
     page = _page()
     assert "fetch(`${BASE}t/ortho/${z}/${x}/${y}`, { signal })" in page  # through the page's ortho:// protocol
     assert "maxzoom: 19" in page
-    assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
+    # the relief: AWS ("dem") or Mapterhorn ("demhd"), the path the setting picks
+    assert "fetch(`${BASE}t/${path}/${z}/${x}/${y}`, { signal })" in page
+    assert "path: 'demhd', size: 512, maxzoom: 15" in page and "path: 'dem', size: 256, maxzoom: 13" in page
+    assert "params.get('relief') === 'mapterhorn'" in page
+    assert mapcache.parse_request("/t/demhd/15/17008/11701") == mapcache.TileRequest("demhd", 15, 17008, 11701)
+    assert mapcache.upstream_url(mapcache.TileRequest("demhd", 15, 17008, 11701)) == \
+        "https://tiles.mapterhorn.com/15/17008/11701.webp"
+    assert mapcache.TileRequest("demhd", 1, 0, 0).mime == "image/webp"
     assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
     assert mapcache.parse_request("/t/ortho/14/8501/5850") == mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.parse_request("/t/dem/13/4253/2915") == mapcache.TileRequest("dem", 13, 4253, 2915)
@@ -514,3 +521,45 @@ def test_urls_the_page_requests_are_served():
     assert "BLD_SAMPLE_Z" not in page
     assert mapcache.parse_request("/buildings/15/16941/11670") == mapcache.BuildingsRequest(16941, 11670)
     assert mapcache.parse_request("/t/ortho/17/68012/46818") == mapcache.TileRequest("ortho", 17, 68012, 46818)
+
+
+def test_buildings_pages_go_two_at_a_time_and_a_429_is_retried(tmp_path, monkeypatch):
+    from memento_win.core import buildings
+    store, _jobs = _store_with_queued_work(tmp_path, monkeypatch)
+    sent = []
+
+    class Nam:
+        def get(self, request):
+            reply = type("R", (), {})()
+            reply.finished = type("S", (), {"connect": lambda _self, fn: sent.append(fn)})()
+            return reply
+    monkeypatch.setattr(store, "_nam", Nam())
+    monkeypatch.setattr(maphost.shiboken6, "isValid", lambda _obj: True)
+    later = []
+    monkeypatch.setattr(maphost.QTimer, "singleShot", lambda ms, fn: later.append((ms, fn)))
+    keys = [buildings.cell_of(6.1265 + i * 0.02, 45.8992) for i in range(4)]
+    for k in keys:
+        store._cell_page(k, [])
+    assert len(sent) == 2 and len(store._wfs_queue) == 2  # two in flight, the others wait
+    store._cell_page_done(_Reply(b"", status=429), keys[0], [], 0)
+    assert later and later[0][0] == maphost.WFS_RETRY_MS[0] and len(sent) == 3  # waited out; the next one goes
+    later[0][1]()
+    assert len(store._wfs_queue) == 2  # the retry queues behind the others
+
+
+def test_open_maps_reload_when_the_relief_changes(monkeypatch):
+    from memento_win.ui import mapview
+    loads = []
+
+    class View:
+        relief = "aws"
+
+        def reload_for_relief(self):
+            loads.append(mapview.RELIEF)
+    view = View()
+    monkeypatch.setattr(mapview, "RELIEF", "aws")
+    monkeypatch.setattr(mapview, "_VIEWS", {view})
+    mapview.set_relief("aws")
+    assert loads == []  # unchanged: nothing reloads
+    mapview.set_relief("mapterhorn")
+    assert loads == ["mapterhorn"]

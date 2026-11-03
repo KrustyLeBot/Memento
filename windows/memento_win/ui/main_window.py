@@ -14,7 +14,7 @@ from ..core.note import Note
 from ..core.store import Store, now_ms
 from ..services import updater
 from ..services.async_util import run_async
-from . import files, theme
+from . import files, mapview, theme
 from .activities_view import ActivitiesScreen, summary_line
 from .agenda_view import AgendaScreen
 from .contacts_view import ContactsScreen
@@ -280,9 +280,11 @@ class MainWindow(QMainWindow):
         self.notes = self.store.scan()
         self.list_screen.set_notes(self.notes)
         acts = self.store.scan_activities()
-        included = set(self.store.activity_settings().totals)
+        activity = self.store.activity_settings()
+        included = set(activity.totals)
         if included != self.activities.included:  # changed by the phone (settings.json synced)
             self.activities.set_included(included)
+        mapview.set_relief(activity.relief)
         self.activities.set_activities(acts)
         latest = max((n for n in acts if n.activity), key=lambda n: n.activity.start, default=None)
         self.list_screen.set_activity_summary(
@@ -303,6 +305,7 @@ class MainWindow(QMainWindow):
     def _activity_settings_changed(self, settings) -> None:
         self.store.save_activity_settings(settings)
         self.activities.set_included(settings.totals)
+        mapview.set_relief(settings.relief)
 
     def _open_in(self, key: str) -> None:
         origin = self.module if self.stack.currentWidget() is not self.settings else None

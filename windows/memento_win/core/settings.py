@@ -7,16 +7,20 @@ from dataclasses import dataclass, field
 from .track import Sport
 
 PATH = "activities/settings.json"
+# AWS Terrarium (256 px PNG to z13, about 30 m data in France) or Mapterhorn (512 px WebP: IGN RGE ALTI 5 m, LiDAR HD
+# 0.5-1 m where flown), with the label the settings show
+RELIEFS = {"aws": "AWS (standard)", "mapterhorn": "Mapterhorn (précis)"}
 
 
 @dataclass
 class ActivitySettings:
     refine_altitude: bool = False  # on the phone, when saving a recording: correct the barometer with the terrain model
     totals: set[Sport] = field(default_factory=lambda: set(Sport))  # sports counted in the totals
+    relief: str = "aws"  # the map's relief on every platform: one of RELIEFS
 
     def to_json(self) -> str:
         return json.dumps({"refine_altitude": self.refine_altitude,
-                           "totals": [s.key for s in Sport if s in self.totals]}) + "\n"
+                           "totals": [s.key for s in Sport if s in self.totals], "relief": self.relief}) + "\n"
 
     @staticmethod
     def parse(text: str) -> "ActivitySettings":
@@ -28,4 +32,5 @@ class ActivitySettings:
             return ActivitySettings()
         totals = data.get("totals")
         sports = set(Sport) if not isinstance(totals, list) else {s for s in Sport if s.key in totals}
-        return ActivitySettings(data.get("refine_altitude") is True, sports)
+        relief = data.get("relief")
+        return ActivitySettings(data.get("refine_altitude") is True, sports, relief if relief in RELIEFS else "aws")

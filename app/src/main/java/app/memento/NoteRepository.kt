@@ -25,6 +25,8 @@ class NoteRepository(private val context: Context, private val settings: Setting
     fun saveActivitySettings(s: app.memento.activity.ActivitySettings) {
         fs.writeText(app.memento.activity.ActivitySettings.PATH, s.toJson())
         _activitySettings.value = s
+        app.memento.map.MapRelief.current = s.relief
+        app.memento.map.MapHost.reliefChanged()
     }
 
     /** `agenda/`: event files ([app.memento.agenda.AgendaStore.scan]), with the files that could not be read. */
@@ -100,7 +102,11 @@ class NoteRepository(private val context: Context, private val settings: Setting
             acts.add(note)
         }
         parsed.keys.retainAll(seen)
-        fs.readText(app.memento.activity.ActivitySettings.PATH)?.let { _activitySettings.value = app.memento.activity.ActivitySettings.parse(it) }
+        fs.readText(app.memento.activity.ActivitySettings.PATH)?.let {
+            _activitySettings.value = app.memento.activity.ActivitySettings.parse(it)
+            app.memento.map.MapRelief.current = _activitySettings.value.relief
+            app.memento.map.MapHost.reliefChanged()
+        }
         _notes.value = result
         _activities.value = acts
         _agenda.value = agendaStore.scan()

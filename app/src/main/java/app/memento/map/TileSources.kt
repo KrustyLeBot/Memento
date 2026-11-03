@@ -1,27 +1,30 @@
 package app.memento.map
 
 /**
- * A tile the map page asks for: `/t/{kind}/{z}/{x}/{y}`, kind "ortho" (the IGN aerial photo, JPEG) or "dem"
- * (Terrarium relief, PNG). "osmfb2" is never asked for: it is where the photo's OpenStreetMap stand-in is cached,
+ * A tile the map page asks for: `/t/{kind}/{z}/{x}/{y}`, kind "ortho" (the IGN aerial photo, JPEG), "dem"
+ * (Terrarium relief from AWS, 256 px PNG) or "demhd" (Terrarium relief from Mapterhorn, 512 px WebP). "osmfb2" is never asked for: it is where the photo's OpenStreetMap stand-in is cached,
  * in its own folder so a file's type follows its folder. "buildings" is a z15 cell of [Buildings] (JSON), asked for
  * as `/buildings/15/{x}/{y}`.
  */
 data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
     /** Relative path in a cache or pack folder. */
-    val path: String get() = "$kind/$z/$x/$y.${when (kind) { KIND_ORTHO -> "jpg"; KIND_BUILDINGS -> "json"; else -> "png" }}"
+    val path: String get() = "$kind/$z/$x/$y.${when (kind) { KIND_ORTHO -> "jpg"; KIND_BUILDINGS -> "json"; KIND_DEM_HD -> "webp"; else -> "png" }}"
 
-    val mime: String get() = when (kind) { KIND_ORTHO -> "image/jpeg"; KIND_BUILDINGS -> "application/json"; else -> "image/png" }
+    val mime: String get() = when (kind) {
+        KIND_ORTHO -> "image/jpeg"; KIND_BUILDINGS -> "application/json"; KIND_DEM_HD -> "image/webp"; else -> "image/png"
+    }
 
     fun fallback() = TileKey(KIND_OSM, z, x, y)
 
     companion object {
         const val KIND_ORTHO = "ortho"
         const val KIND_DEM = "dem"
+        const val KIND_DEM_HD = "demhd"
         const val KIND_OSM = "osmfb2"
         const val KIND_BUILDINGS = "buildings"
         /** Browsing-cache folders deleted at startup: a former base layer; OSM stand-ins once cached for IGN refusals. */
         val OLD_KINDS = listOf("plan", "osm", "osmfb")
-        private val PATH = Regex("""^/t/(ortho|dem)/(\d{1,2})/(\d{1,7})/(\d{1,7})(?:\.png|\.jpg)?$""")
+        private val PATH = Regex("""^/t/(ortho|dem|demhd)/(\d{1,2})/(\d{1,7})/(\d{1,7})(?:\.png|\.jpg|\.webp)?$""")
         private val BUILDINGS_PATH = Regex("""^/buildings/(\d{1,2})/(\d{1,7})/(\d{1,7})$""")
 
         /** `/buildings/15/{x}/{y}`: only z15 cells exist. */
@@ -54,6 +57,8 @@ object TileSources {
     fun osm(z: Int, x: Int, y: Int) = "https://tile.openstreetmap.org/$z/$x/$y.png"
 
     fun dem(z: Int, x: Int, y: Int) = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/$z/$x/$y.png"
+
+    fun demHd(z: Int, x: Int, y: Int) = "https://tiles.mapterhorn.com/$z/$x/$y.webp"
 
     /**
      * IGN has no photo there: a 404 (its "No data found" report, abroad and at sea from z13 or so), a 400 (past the edge
