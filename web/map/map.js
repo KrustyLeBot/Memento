@@ -486,6 +486,11 @@
     if (SQ) {
       map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
       map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
+      // MapLibre 4.7 on terrain: on the first frame at a new tile zoom, the parent standing in for the missing tiles is
+      // taken from the tile cache without being drawn, and the tiles it replaces are hidden: a blank frame at each zoom
+      // step (the whole view when zooming out). A second pass of the same update finds it in place and draws it.
+      const cache = map.style.sourceCaches.orthosq, update = cache.update;
+      cache.update = function (...args) { update.apply(this, args); update.apply(this, args); };
     }
     map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
   }
