@@ -185,8 +185,8 @@ fun startRoutePack(vm: MainViewModel, scope: CoroutineScope, route: Route, polic
     }
 }
 
-/** The two plans of a route being prepared, for the choice between them. */
-private class RoutePlans(val route: Route, val with3d: TilePlan, val flat: TilePlan)
+/** The plans of a route being prepared, as the "3D hors ligne" setting allows: [with3d] null on "Jamais", [flat] null on "Toujours". */
+private class RoutePlans(val route: Route, val with3d: TilePlan?, val flat: TilePlan?)
 
 /** "Préparer un parcours": the prepared routes, their size and expiry, and the button to add one. */
 @Composable
@@ -199,8 +199,12 @@ fun PreparedRoutesSection(vm: MainViewModel) {
     val picker = rememberRoutePicker(vm) { route ->
         scope.launch {
             try {
+                val policy = vm.settings.zone3d
                 pending = withContext(Dispatchers.Default) {
-                    RoutePlans(route, OfflinePacks.planRoute(route, with3d = true), OfflinePacks.planRoute(route, with3d = false))
+                    val with3d = if (policy == Zone3dPolicy.NEVER) null else OfflinePacks.planRoute(route, with3d = true)
+                    // a route too wide for its relief: its "3D" plan is already flat
+                    val flat = if (policy == Zone3dPolicy.ALWAYS && with3d?.demZooms != null) null else OfflinePacks.planRoute(route, with3d = false)
+                    RoutePlans(route, with3d?.takeIf { it.demZooms != null }, flat)
                 }
             } catch (e: OfflinePacks.PackException) {
                 vm.say(Snack(e.message ?: "Préparation impossible"))
@@ -226,16 +230,17 @@ fun PreparedRoutesSection(vm: MainViewModel) {
         )
     }
     pending?.let { p ->
-        val has3d = p.with3d.demZooms != null
+        val plan3d = p.with3d
+        val plan2d = p.flat
         AlertDialog(
             onDismissRequest = { pending = null },
             title = { Text("Préparer « ${p.route.name.ifBlank { "Parcours" }} »") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Télécharger aussi la 3D hors ligne (relief, bâtiments) ?", fontWeight = FontWeight.SemiBold)
-                    if (has3d) Text("2D + 3D : environ ${megabytes(p.with3d.estimatedBytes)} Mo. ${p.with3d.detailLabel()}.")
-                    else Text("Parcours trop étendu pour la 3D hors ligne.")
-                    Text("2D seule : environ ${megabytes(p.flat.estimatedBytes)} Mo. ${p.flat.detailLabel()}.")
+                    // the "3D hors ligne" setting: asked, always (2D + 3D only) or never (2D only)
+                    if (plan3d != null && plan2d != null) Text("Télécharger aussi la 3D hors ligne (relief, bâtiments, sommets) ?", fontWeight = FontWeight.SemiBold)
+                    if (plan3d != null) Text("2D + 3D : environ ${megabytes(plan3d.estimatedBytes)} Mo. ${plan3d.detailLabel()}.")
+                    if (plan2d != null) Text("2D seule : environ ${megabytes(plan2d.estimatedBytes)} Mo. ${plan2d.detailLabel()}.")
                     Text(
                         "Gardé 24 h sur le téléphone, puis supprimé. Mieux vaut le télécharger en Wi-Fi.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -244,8 +249,16 @@ fun PreparedRoutesSection(vm: MainViewModel) {
             },
             confirmButton = {
                 Row {
-                    TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, p.flat) }) { Text("2D seule") }
-                    if (has3d) TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, p.with3d) }) { Text("2D + 3D") }
+                    if (plan2d != null) {
+                        TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, plan2d) }) {
+                            Text(if (plan3d != null) "2D seule" else "Télécharger")
+                        }
+                    }
+                    if (plan3d != null) {
+                        TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, plan3d) }) {
+                            Text(if (plan2d != null) "2D + 3D" else "Télécharger")
+                        }
+                    }
                 }
             },
             dismissButton = { TextButton(onClick = { pending = null }) { Text("Annuler") } },

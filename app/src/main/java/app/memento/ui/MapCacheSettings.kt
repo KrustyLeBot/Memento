@@ -114,15 +114,17 @@ private fun StartZoneSettings(settings: Settings) {
     val plan2d = remember(side2d) { TilePlans.forZone(0.0, lat, side2d) }
     val plan3d = remember(side2d, side3d) { TilePlans.forZone3d(0.0, lat, side2d, side3d) }
     SettingsCard {
-        Text("3D hors ligne au démarrage d'un enregistrement (sans parcours, ou parcours non préparé)", fontWeight = FontWeight.SemiBold)
+        Text("3D hors ligne (parcours préparé, enregistrement avec ou sans parcours)", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Zone3dPolicy.values().forEach { p ->
                 FilterChip(selected = policy == p, onClick = { policy = p; settings.zone3d = p }, label = { Text(p.label) })
             }
         }
         SettingsHint(
-            "La carte 2D autour du départ se télécharge toujours (Wi-Fi ou données mobiles). La 3D (relief, sommets et " +
-                "photo plus fine à 5 km du départ) suit ce choix ; « Demander » la propose une fois l'enregistrement lancé, sans le retarder. Les deux sont gardées 24 h.",
+            "La carte 2D se télécharge toujours (Wi-Fi ou données mobiles) : photo jusqu'au zoom 19 à 1 km du départ ou le " +
+                "long du tracé, zoom 17 un peu plus loin, moins fine ailleurs. La 3D (relief, bâtiments, sommets) suit ce choix, " +
+                "pour un parcours préparé comme pour un enregistrement ; « Demander » la propose à la préparation, ou une fois " +
+                "l'enregistrement lancé sans le retarder. Les deux sont gardées 24 h.",
         )
         KmSlider("Zone 2D hors ligne autour du départ", side2d, TilePlans.ZONE_2D_KM, "≈ ${mb(plan2d.estimatedBytes)} Mo", reduced(plan2d)) {
             side2d = it

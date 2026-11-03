@@ -102,10 +102,10 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   z14 and, along the track, up to z19: z15–17 within 1 km, z18–19 on a narrower band (300 m down to 75 m), within
   500 MB (the z18–19 band narrows, then z19, z18, z17 and the band's width give way, then z14, when it does not fit; a
   short route gets its whole square at z17; a route so wide that even its relief does not fit gets a flat 2D pack),
-  estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). Preparing a route asks whether to
-  download the 3D too (relief, buildings, peaks) or the 2D alone, with the size of each; a recording started on a
-  route not prepared downloads its 2D pack at once and asks the same question under the recording, as without a
-  route (Réglages → Cartes: asked, always or never). A recording without
+  estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). One setting (Réglages → Cartes → 3D
+  hors ligne: asked, always or never) decides the 3D (relief, buildings, peaks) everywhere: preparing a route asks
+  for 2D + 3D or 2D alone with the size of each (or offers only the one the setting imposes); a recording started on
+  a route not prepared downloads its 2D pack at once and asks under the recording, as without a route. A recording without
   route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–13 over a square whose
   side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps), plus z14–17 within 3 km of
   the start and z18–19 within 1 km (about 45 MB). An optional 3D zone adds relief z6–13 (130 KB a
