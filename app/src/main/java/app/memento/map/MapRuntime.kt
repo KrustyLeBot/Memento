@@ -27,7 +27,8 @@ object MapRuntime {
             File(app.cacheDir, "peaks").deleteRecursively()
             // tiles of a former base layer (Plan IGN), never read again; once gone, later startups find nothing
             for (kind in TileKey.OLD_KINDS) File(File(app.cacheDir, "maptiles"), kind).deleteRecursively()
-            TileServer.cache.trim()
+            // queued with the trims the first tiles ask for, so the folder is walked once, not once each
+            TileServer.cache.trimLater()
         }
     }
 }

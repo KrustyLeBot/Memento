@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.Executor
 import kotlin.math.cos
 
 // Synthetic places only: the repository is public.
@@ -480,7 +481,7 @@ class TileCacheTest {
             val t = System.currentTimeMillis()
             for (i in 0 until 4) {
                 TileCache.writeAtomic(File(dir, "ortho/1/0/$i.jpg"), ByteArray(3000))
-                File(dir, "ortho/1/0/$i.jpg").setLastModified(t - (10 - i) * 60_000L)
+                File(dir, "ortho/1/0/$i.jpg").setLastModified(t - (10 - i) * 3_600_000L)
             }
             // tile 0 is the oldest, but reading it makes it the most recent
             assertNotNull(cache.get("ortho/1/0/0.jpg"))
@@ -489,6 +490,53 @@ class TileCacheTest {
             assertNull(cache.get("ortho/1/0/1.jpg"))
             assertTrue(dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } <= 8000)
             assertFalse(dir.walkTopDown().any { it.name.endsWith(".tmp") })
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aRecentReadDoesNotWrite() {
+        val dir = Files.createTempDirectory("tilecache").toFile()
+        try {
+            val cache = TileCache(dir, 10_000)
+            val now = System.currentTimeMillis() / 1000 * 1000
+            val recent = File(dir, "ortho/1/0/0.jpg")
+            val old = File(dir, "ortho/1/0/1.jpg")
+            TileCache.writeAtomic(recent, ByteArray(10))
+            TileCache.writeAtomic(old, ByteArray(10))
+            recent.setLastModified(now - 10 * 60_000L)
+            old.setLastModified(now - 2 * 3_600_000L)
+            assertNotNull(cache.get("ortho/1/0/0.jpg"))
+            assertNotNull(cache.get("ortho/1/0/1.jpg"))
+            assertEquals(now - 10 * 60_000L, recent.lastModified())
+            assertTrue(old.lastModified() >= now - 60_000L)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun putTrimsOnTheTrimmer() {
+        val dir = Files.createTempDirectory("tilecache").toFile()
+        try {
+            val jobs = ArrayList<Runnable>()
+            val cache = TileCache(dir, 10_000, Executor { jobs.add(it) })
+            // the size is unknown until a walk: the first put queues one, the next ones find it queued
+            for (i in 0 until 4) cache.put("ortho/1/0/$i.jpg", ByteArray(3000))
+            assertEquals(1, jobs.size)
+            val t = System.currentTimeMillis()
+            for (i in 0 until 4) File(dir, "ortho/1/0/$i.jpg").setLastModified(t - (10 - i) * 3_600_000L)
+            jobs.removeAt(0).run()
+            assertNull(cache.get("ortho/1/0/0.jpg"))
+            assertNull(cache.get("ortho/1/0/1.jpg"))
+            assertNotNull(cache.get("ortho/1/0/2.jpg"))
+            assertNotNull(cache.get("ortho/1/0/3.jpg"))
+            // counted from then on, without walking: 9000 bytes stay under the limit, 12 000 queue a trim
+            cache.put("ortho/1/0/4.jpg", ByteArray(3000))
+            assertEquals(0, jobs.size)
+            cache.put("ortho/1/0/5.jpg", ByteArray(3000))
+            assertEquals(1, jobs.size)
         } finally {
             dir.deleteRecursively()
         }
@@ -504,5 +552,19 @@ class TileCacheTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+}
+
+class BackoffTest {
+    @Test
+    fun failureBlocksForTwentySecondsAndAnAnswerClearsIt() {
+        val b = Backoff()
+        assertFalse(b.blocked(1_000))
+        b.failed(1_000)
+        assertTrue(b.blocked(20_999))
+        assertFalse(b.blocked(21_000))
+        b.failed(30_000)
+        b.succeeded()
+        assertFalse(b.blocked(30_001))
     }
 }

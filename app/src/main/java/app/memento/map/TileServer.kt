@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.util.LruCache
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -16,9 +17,30 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
 
 /** One HTTP answer, body read in full. */
 class HttpResult(val code: Int, val contentType: String?, val body: ByteArray)
+
+/**
+ * After a connection failure, uncached tiles fail at once for a while instead of each waiting for its own
+ * timeout: offline, the page gets its blank tiles immediately. Times are monotonic milliseconds.
+ */
+class Backoff(private val millis: Long = 20_000L) {
+    @Volatile private var until = 0L
+
+    fun failed(now: Long) {
+        until = now + millis
+    }
+
+    fun succeeded() {
+        until = 0L
+    }
+
+    fun blocked(now: Long): Boolean = now < until
+}
 
 /** A fetched tile: [key] says what it really is (an aerial-photo request answered by OpenStreetMap is an "osmfb2" PNG). */
 class FetchedTile(val key: TileKey, val bytes: ByteArray)
@@ -85,15 +107,43 @@ object TileServer {
             val osm = key.fallback()
             cache.get(osm.path)?.let { openOrNull(it) }?.let { return image(osm.mime, it) }
         }
-        if (!NetState.online.value) return overzoomed(key) ?: notFound()
+        if (!NetState.online.value || backedOff()) return overzoomed(key) ?: notFound()
         val got = try {
-            fetch(key, allowOsm = true)
+            fetchShared(key, allowOsm = true)
         } catch (e: IOException) {
             // a network that drops mid-hike is offline for all purposes: the enlarged photo beats an error
             return overzoomed(key) ?: throw e
         } ?: return notFound()
-        cache.put(got.key.path, got.bytes)
         return image(got.key.mime, ByteArrayInputStream(got.bytes))
+    }
+
+    /** Process-wide: a failure seen by one tile, a cell or a pack download spares the next requests their timeouts. */
+    private val backoff = Backoff()
+
+    private fun backedOff() = backoff.blocked(SystemClock.elapsedRealtime())
+
+    /** Fetches under way, by tile path: the page asking again for a tile on its way waits for that fetch. */
+    private val fetching = ConcurrentHashMap<String, FutureTask<FetchedTile?>>()
+
+    /** [fetch] once for concurrent requests of one tile; the request that fetched it caches it. */
+    private fun fetchShared(key: TileKey, allowOsm: Boolean): FetchedTile? {
+        val mine = FutureTask<FetchedTile?> { fetch(key, allowOsm) }
+        val task = fetching.putIfAbsent(key.path, mine) ?: mine
+        if (task !== mine) return await(task)
+        try {
+            mine.run()
+            return await(mine)?.also { cache.put(it.key.path, it.bytes) }
+        } finally {
+            // released once the file is in place: a request arriving meanwhile finds the file, not a second fetch
+            fetching.remove(key.path, mine)
+        }
+    }
+
+    /** The task's result, or what it threw (an IOException stays one for the callers' fallbacks). */
+    private fun <T> await(task: FutureTask<T>): T = try {
+        task.get()
+    } catch (e: ExecutionException) {
+        throw e.cause ?: e
     }
 
     /** Overzoomed tiles already made, so panning back and forth does not decode again. */
@@ -101,6 +151,30 @@ object TileServer {
         override fun sizeOf(key: String, value: ByteArray) = value.size
     }
     private const val OVERZOOM_CACHE_BYTES = 12 * 1024 * 1024
+
+    /** Decoded ancestor photos: the tiles cut from one ancestor decode its JPEG once, not once each. */
+    private val ancestorCache = object : LruCache<String, Bitmap>(ANCESTOR_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    private const val ANCESTOR_CACHE_BYTES = 4 * 1024 * 1024
+
+    /** Decodes under way, by file: the children asked together wait for one decode. */
+    private val decoding = ConcurrentHashMap<String, FutureTask<Bitmap?>>()
+
+    /** Not recycled when evicted: another request may still be drawing from it; the GC frees it. */
+    private fun ancestor(f: File): Bitmap? {
+        ancestorCache.get(f.path)?.let { return it }
+        val mine = FutureTask<Bitmap?> { BitmapFactory.decodeFile(f.path)?.also { ancestorCache.put(f.path, it) } }
+        val task = decoding.putIfAbsent(f.path, mine) ?: mine
+        if (task === mine) {
+            try {
+                mine.run()
+            } finally {
+                decoding.remove(f.path, mine)
+            }
+        }
+        return await(task)
+    }
 
     /** The nearest ancestor photo tile held offline (packs, then the browsing cache), cropped and enlarged. */
     private fun overzoomed(key: TileKey): WebResourceResponse? {
@@ -116,7 +190,7 @@ object TileServer {
     }
 
     private fun crop(f: File, o: Overzoom): ByteArray? {
-        val src = BitmapFactory.decodeFile(f.path) ?: return null
+        val src = ancestor(f) ?: return null
         val out = Bitmap.createBitmap(Overzoom.TILE_PX, Overzoom.TILE_PX, Bitmap.Config.ARGB_8888)
         try {
             // a tile smaller than 256 px (never seen from IGN) is scaled as if it were 256
@@ -127,7 +201,7 @@ object TileServer {
             out.compress(Bitmap.CompressFormat.JPEG, 85, buf)
             return buf.toByteArray()
         } finally {
-            src.recycle()
+            // src belongs to ancestorCache
             out.recycle()
         }
     }
@@ -163,9 +237,8 @@ object TileServer {
         (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }?.let {
             return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), it)
         }
-        if (!NetState.online.value) return notFound()
-        val got = fetch(key, allowOsm = false) ?: return notFound()
-        cache.put(key.path, got.bytes)
+        if (!NetState.online.value || backedOff()) return notFound()
+        val got = fetchShared(key, allowOsm = false) ?: return notFound()
         return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), ByteArrayInputStream(got.bytes))
     }
 
@@ -183,7 +256,7 @@ object TileServer {
         val rel = "$PEAKS/" + Peaks.key(req) + ".json"
         cache.get(rel)?.let { f -> Peaks.parseCache(f.readText())?.let { return it.second } }
         packPeaks().firstOrNull { Peaks.key(it.first) == Peaks.key(req) }?.let { return it.second }
-        if (!NetState.online.value) return Peaks.fromCovering(cachedPeaks(), req).orEmpty()
+        if (!NetState.online.value || backedOff()) return Peaks.fromCovering(cachedPeaks(), req).orEmpty()
         val list = try {
             computePeaks(req)
         } catch (e: IOException) {
@@ -230,7 +303,13 @@ object TileServer {
         try {
             val code = c.responseCode
             val body = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
+            // any answer, an HTTP error too, means the network works
+            backoff.succeeded()
             return HttpResult(code, c.contentType, body)
+        } catch (e: IOException) {
+            // here only a connection failure: no answer, a timeout, a dropped transfer
+            backoff.failed(SystemClock.elapsedRealtime())
+            throw e
         } finally {
             c.disconnect()
         }

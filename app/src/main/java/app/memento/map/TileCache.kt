@@ -2,67 +2,127 @@ package app.memento.map
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The browsing cache: tiles seen while looking at activities, kept so a map reopens instantly. Least
- * recently used files go first once it passes [maxBytes]. Pure java.io, safe from several threads:
- * files are written to a temporary name then renamed, so a reader never sees half a tile.
+ * recently used files go first once it passes [maxBytes]. Pure Java file IO, safe from several threads:
+ * files are written to a temporary name then renamed, so a reader never sees half a tile. Reads and
+ * writes never walk the folder: the size is counted as tiles arrive and the trims run on [trimmer].
  */
-class TileCache(private val dir: File, private val maxBytes: Long) {
+class TileCache(private val dir: File, private val maxBytes: Long, private val trimmer: Executor = TRIMMER) {
     private val lock = Any()
-    private var total = -1L
+    // -1 until a walk has counted the folder; then kept up to date by every put
+    private val total = AtomicLong(-1L)
+    private val trimQueued = AtomicBoolean(false)
 
     fun get(rel: String): File? {
         val f = File(dir, rel)
+        val attrs = try {
+            Files.readAttributes(f.toPath(), BasicFileAttributes::class.java)
+        } catch (_: IOException) {
+            return null
+        }
         // an empty file is what an unsynced write looks like after a power cut: a miss, not a tile
-        if (!f.isFile || f.length() == 0L) return null
-        f.setLastModified(System.currentTimeMillis())
+        if (!attrs.isRegularFile || attrs.size() == 0L) return null
+        val now = System.currentTimeMillis()
+        // an hour is precise enough for least recently used, and spares a disk write per tile shown
+        if (now - attrs.lastModifiedTime().toMillis() > TOUCH_MS) f.setLastModified(now)
         return f
     }
 
     fun put(rel: String, bytes: ByteArray) {
-        val f = File(dir, rel)
-        writeAtomic(f, bytes)
-        val over = synchronized(lock) {
-            if (total < 0) total = size()
-            total += bytes.size
-            total > maxBytes
+        writeAtomic(File(dir, rel), bytes)
+        val t = total.updateAndGet { if (it < 0) it else it + bytes.size }
+        if (t < 0 || t > maxBytes) trimLater()
+    }
+
+    /** Counts the folder (the first time) and trims it if needed, on [trimmer]: one job queued at a time. */
+    fun trimLater() {
+        if (!trimQueued.compareAndSet(false, true)) return
+        trimmer.execute {
+            try {
+                trim()
+            } catch (_: Exception) {
+                // thrown on this thread it would kill the app; the next put past the limit tries again
+            } finally {
+                trimQueued.set(false)
+            }
         }
-        if (over) trim()
     }
 
     /** Down to 80 % of the limit, oldest first, so trimming does not run on every tile. */
     fun trim() {
         synchronized(lock) {
-            val files = dir.walkTopDown().filter { it.isFile }.toMutableList()
-            var sum = files.sumOf { it.length() }
+            val files = scan()
+            var sum = files.sumOf { it.size }
             if (sum > maxBytes) {
-                files.sortBy { it.lastModified() }
-                for (f in files) {
+                files.sortBy { it.modified }
+                for (e in files) {
                     if (sum <= maxBytes * 8 / 10) break
-                    val len = f.length()
-                    if (f.delete()) sum -= len
+                    if (e.file.delete()) sum -= e.size
                 }
             }
-            total = sum
+            total.set(sum)
         }
     }
 
-    private fun size(): Long = dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    private class Entry(val file: File, val size: Long, val modified: Long)
+
+    /** Every file with its size and date, one stat each. */
+    private fun scan(): MutableList<Entry> {
+        val files = ArrayList<Entry>()
+        if (!dir.isDirectory) return files
+        Files.walkFileTree(dir.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun visitFile(p: Path, a: BasicFileAttributes): FileVisitResult {
+                if (a.isRegularFile) files.add(Entry(p.toFile(), a.size(), a.lastModifiedTime().toMillis()))
+                return FileVisitResult.CONTINUE
+            }
+
+            // a file deleted while walking (a trim, a cleared cache): skipped, not an error
+            override fun visitFileFailed(p: Path, e: IOException) = FileVisitResult.CONTINUE
+
+            override fun postVisitDirectory(p: Path, e: IOException?) = FileVisitResult.CONTINUE
+        })
+        return files
+    }
+
+    private fun size(): Long = scan().sumOf { it.size }
 
     /** Bytes on disk now (walks the folder: off the main thread). */
-    fun sizeBytes(): Long = synchronized(lock) { size().also { total = it } }
+    fun sizeBytes(): Long = synchronized(lock) { size().also { total.set(it) } }
 
     /** Deletes every cached file (tiles and peaks answers). */
     fun clear() {
         synchronized(lock) {
             dir.listFiles()?.forEach { it.deleteRecursively() }
-            total = size()
+            total.set(size())
         }
     }
 
     companion object {
+        private const val TOUCH_MS = 60 * 60 * 1000L
+
+        /** One low-priority thread for every cache's trims, so a walk never runs on a WebView request thread. */
+        private val TRIMMER: Executor by lazy {
+            Executors.newSingleThreadExecutor { r ->
+                Thread(r, "tile-trim").apply {
+                    isDaemon = true
+                    priority = Thread.MIN_PRIORITY
+                }
+            }
+        }
+
         /** Writes then renames, so a killed process or a full disk never leaves a truncated file under the real name. */
         fun writeAtomic(f: File, bytes: ByteArray) {
             f.parentFile?.mkdirs()
