@@ -136,10 +136,32 @@ def test_ski_analysis_has_runs_climbs_and_the_day_square(client):
     assert len(m["square"]) == 4 and "speeds" not in m
 
 
+def clear_cache(client):
+    client.app.state.activities.cache.memory.clear()
+    for f in (client.app.state.data.config.config_dir / "cache" / "activities").iterdir():
+        f.unlink()
+
+
+def test_the_import_and_a_sport_change_leave_the_analysis_ready(client):
+    cache = client.app.state.activities.cache
+    result = import_file(client, tracks.walk(T0, 600).encode(), "w.gpx", sport="walk")
+    url = f"/api/activities/{result['id']}/analysis"
+    ready = client.get(url).json()
+    assert cache.computed == 0 and ready["sport"] == "walk"
+    detail = client.get(f"/api/activities/{result['id']}").json()
+    changed = put(client, result["id"], detail["version"], sport="bike").json()
+    assert changed["activity"]["sport"] == "bike" and changed["activity"]["vmax"]
+    bike = client.get(url).json()
+    assert bike["sport"] == "bike" and cache.computed == 0
+    clear_cache(client)
+    assert client.get(url).json() == bike and cache.computed == 1  # the same as computed on its own
+
+
 def test_the_analysis_is_computed_once_then_cached_until_its_inputs_change(client):
     cache = client.app.state.activities.cache
     result = import_file(client, tracks.walk(T0, 600).encode(), "w.gpx", sport="walk")
     url = f"/api/activities/{result['id']}/analysis"
+    clear_cache(client)
     first = client.get(url).json()
     assert cache.computed == 1
     assert client.get(url).json() == first and cache.computed == 1
@@ -151,22 +173,79 @@ def test_the_analysis_is_computed_once_then_cached_until_its_inputs_change(clien
     assert changed["activity"]["analysis_key"] == key  # a new name changes nothing in the analysis
     changed = put(client, result["id"], changed["version"], sport="bike").json()
     assert changed["activity"]["analysis_key"] != key
-    assert client.get(url).json()["sport"] == "bike" and cache.computed == 2
+    assert client.get(url).json()["sport"] == "bike"
+
+
+def test_the_analysis_is_sent_gzipped_to_a_browser_and_plain_to_anything_else(client):
+    result = import_file(client, tracks.walk(T0, 600).encode(), "w.gpx", sport="walk")
+    url = f"/api/activities/{result['id']}/analysis"
+    with client.stream("GET", url, headers={"Accept-Encoding": "gzip"}) as zipped:
+        raw = b"".join(zipped.iter_raw())
+        assert zipped.headers["content-encoding"] == "gzip" and raw[:2] == b"\x1f\x8b"
+    plain = client.get(url, headers={"Accept-Encoding": "identity"})
+    assert "content-encoding" not in plain.headers and plain.json()["sport"] == "walk"
+
+
+def test_a_slow_analysis_answers_pending_then_the_result(client):
+    activities = client.app.state.activities
+    result = import_file(client, tracks.walk(T0, 600).encode(), "w.gpx", sport="walk")
+    url = f"/api/activities/{result['id']}/analysis"
+    clear_cache(client)
+    gate = __import__("threading").Event()
+    compute = activities._compute
+    activities._compute = lambda info: (gate.wait(10), compute(info))[1]
+    activities.analysis_wait = 0.05
+    first = client.get(url)
+    assert first.status_code == 202 and first.json() == {"pending": True}
+    assert client.get(url).status_code == 202  # the same computation, not a second one
+    gate.set()
+    deadline = time.monotonic() + 10
+    while (answer := client.get(url)).status_code == 202:
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    assert answer.json()["sport"] == "walk" and activities.cache.computed == 1
+
+
+def test_a_long_file_is_uploaded_and_imported_through_a_child_process_alike(client):
+    activities = client.app.state.activities
+    text = tracks.walk(T0, 900).encode()
+    here = import_file(client, text, "w.gpx", sport="walk")
+    expected = client.get(f"/api/activities/{here['id']}/analysis").json()
+    summary = client.get(f"/api/activities/{here['id']}").json()["activity"]
+    client.delete(f"/api/activities/{here['id']}",
+                  headers={**HEADERS, "If-Match": client.get(f"/api/activities/{here['id']}").json()["version"]})
+    activities.subprocess_bytes = 0
+    staged = upload(client, text, "w.gpx").json()
+    assert staged["points"] == 900 and staged["title"] == "Tour du lac"
+    apart = import_file(client, text, "w.gpx", sport="walk")
+    assert client.get(f"/api/activities/{apart['id']}/analysis").json() == expected
+    again = client.get(f"/api/activities/{apart['id']}").json()["activity"]
+    skip = {"id", "path", "file", "analysis_key"}
+    assert {k: v for k, v in again.items() if k not in skip} == {k: v for k, v in summary.items() if k not in skip}
+    assert activities.cache.computed == 0
+
+
+def test_a_gzipped_upload_is_read_as_the_file(client):
+    import gzip
+    response = client.post("/api/activities/uploads", params={"name": "sortie.fit"}, content=gzip.compress(FIT),
+                           headers={**HEADERS, "Content-Type": "application/octet-stream", "Content-Encoding": "gzip"})
+    assert response.status_code == 200, response.text
+    assert response.json()["points"] == 90 and response.json()["sport"] == "bike"
+    broken = client.post("/api/activities/uploads", params={"name": "sortie.fit"}, content=gzip.compress(FIT)[:-30],
+                         headers={**HEADERS, "Content-Type": "application/octet-stream", "Content-Encoding": "gzip"})
+    assert broken.status_code == 400
 
 
 def test_a_long_track_is_analysed_in_a_child_process_with_the_same_result(client, data_dir):
     activities = client.app.state.activities
     result = import_file(client, tracks.walk(T0, 900).encode(), "w.gpx", sport="walk")
     url = f"/api/activities/{result['id']}/analysis"
+    clear_cache(client)
     inside = client.get(url).json()
-    activities.cache.drop_memory()
-    for f in (client.app.state.data.config.config_dir / "cache" / "activities").glob("*.json"):
-        f.unlink()
+    clear_cache(client)
     activities.subprocess_bytes = 0
     assert client.get(url).json() == inside and activities.cache.computed == 2
-    activities.cache.drop_memory()
-    for f in (client.app.state.data.config.config_dir / "cache" / "activities").glob("*.json"):
-        f.unlink()
+    clear_cache(client)
     track = client.get(f"/api/activities/{result['id']}").json()["activity"]["file"]
     (data_dir / track).write_text("pas un tracé", encoding="utf-8")
     broken = client.get(url)
@@ -181,7 +260,7 @@ def test_the_analysis_cache_is_bounded_in_memory_and_on_disk(client, folders):
     for i in ids:
         assert client.get(f"/api/activities/{i}/analysis").status_code == 200
     assert len(cache.memory) == 2
-    assert len(list((folders[1] / "cache" / "activities").glob("*.json"))) == 3
+    assert len(list((folders[1] / "cache" / "activities").glob("*.json.gz"))) == 3
     cache.max_bytes = 1
     client.get(f"/api/activities/{ids[0]}/analysis")
     assert len(cache.memory) == 0  # one analysis larger than the budget is answered, not kept

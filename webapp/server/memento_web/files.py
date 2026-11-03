@@ -6,9 +6,11 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import os
+import zlib
 from pathlib import Path
 from urllib.parse import quote
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
 
 from .core import atomic
@@ -86,7 +88,7 @@ async def write_stream(target: Path, chunks, limit: int) -> int:
                     raise ApiError(413, f"Fichier trop volumineux ({limit // 1_000_000} Mo au plus)")
                 handle.write(chunk)
             handle.flush()
-            os.fsync(handle.fileno())
+            await run_in_threadpool(os.fsync, handle.fileno())  # tens of MB on a NAS disk: not on the event loop
         os.replace(tmp, target)
     except BaseException:
         try:
@@ -95,6 +97,33 @@ async def write_stream(target: Path, chunks, limit: int) -> int:
             pass
         raise
     return size
+
+
+async def gunzip(chunks, limit: int):
+    """A gzipped request body, decompressed as it arrives. Never more than `limit` + one piece in memory, so a
+    small body that inflates enormously stops at write_stream's limit instead of filling the RAM."""
+    inflate = zlib.decompressobj(wbits=31)
+    piece = 1 << 20
+    total = 0
+    try:
+        async for chunk in chunks:
+            data = inflate.decompress(chunk, piece)
+            while True:
+                total += len(data)
+                if data:
+                    yield data
+                if total > limit or not inflate.unconsumed_tail:
+                    break
+                data = inflate.decompress(inflate.unconsumed_tail, piece)
+            if total > limit:
+                return
+        rest = inflate.flush()
+        if rest:
+            yield rest
+    except zlib.error:
+        raise bad_request("Envoi compressé abîmé : réessayez.") from None
+    if not inflate.eof:
+        raise bad_request("Envoi compressé incomplet : réessayez.")
 
 
 def unlink_quiet(path: Path) -> None:

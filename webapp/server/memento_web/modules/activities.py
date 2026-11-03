@@ -7,22 +7,25 @@ An activity is addressed by its note id (the agenda links `#/activities/<id>`), 
 (`sortie-a1b2c3.md`) for a sync conflict copy, which shares its original's id.
 
 Memory: an analysis holds every sample of the track (tens of MB for a long day), so it is never kept. What is kept
-is the JSON the UI gets (charts and map thinned, a few hundred KB), in an in-memory LRU (MEMORY_ITEMS / MEMORY_BYTES)
-and on disk under /config/cache/activities so a reopened activity costs one file read. The RECENT most recent
-activities' analyses are computed at warm-up (warm.py) and stay in memory when the server goes idle; the others go.
+is the JSON the UI gets (charts and map thinned, a few hundred KB, kept gzipped), in an in-memory LRU (MEMORY_ITEMS /
+MEMORY_BYTES) and on disk under /config/cache/activities so a reopened activity costs one file read. The RECENT most
+recent activities' analyses are computed at warm-up (warm.py) and stay in memory when the server goes idle; the
+others go. Reading and analysing a file (trackwork.py) happens outside the data lock, in a child process for a long
+track; only the light commit (the note, the copy of the file) holds the lock. An import fills the analysis cache, so
+the activity opens at once afterwards.
 
 Imports and altitude completions run in a background thread (`/api/activities/jobs/<id>` reports progress): the
 terrain service allows one request per second, so a batch can take minutes, longer than a proxied request may last.
+An analysis that takes longer than ANALYSIS_WAIT answers 202 `{"pending": true}` and goes on: the page asks again.
 """
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hashlib
 import json
 import os
 import secrets
-import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -35,27 +38,29 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.concurrency import run_in_threadpool
 
+from .. import trackwork
 from ..core import ACTIVITIES_DIR, MAX_ATTACHMENT, SETTINGS_PATH, ActivitySettings, Sport, atomic, fmt, now_ms
 from ..data import _malloc_trim
 from ..errors import ApiError, bad_request, json_body, not_found
-from ..files import owned, read_versioned, require_version, unlink_quiet, write_stream
+from ..files import gunzip, owned, read_versioned, require_version, unlink_quiet, write_stream
 from ..memo import Answers, json_response
 
 from memento_win.core import activity as act  # noqa: E402  (..core put memento_win on the path)
 from memento_win.core import elevation, mapdata  # noqa: E402
-from memento_win.core.analysis import Analysis, analyze, clean  # noqa: E402
+from memento_win.core.analysis import Analysis  # noqa: E402
 from memento_win.core.store import default_title  # noqa: E402
+from memento_win.core.track import TrackPoint  # noqa: E402
 
 # Bump when the analysis JSON changes shape: cached files of another version are never read.
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2
 CHART_POINTS = 400   # charts: enough for a smooth curve and a precise hover on a wide screen
 MAP_POINTS = 5000    # the map: as the Android and Windows hosts send it
 GPS_SPORTS = [Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS]
 UPLOAD_TTL = 3600
-# Above this size a track file is analysed in a child process (memento_web/analyse.py); 1 MB is ~5000 GPX points.
+# Above this size a track file is read in a child process (trackwork.py); 1 MB is ~5000 GPX points.
 SUBPROCESS_BYTES = 1_000_000
-ANALYSIS_TIMEOUT = 50  # s: under the 60 s a proxied request may last
-PACKAGE_PARENT = Path(__file__).resolve().parents[2]
+TRACK_TIMEOUT = 900  # s: only stops a runaway child; a slow NAS takes ~30 s for a 200 000-point race
+ANALYSIS_WAIT = 25.0  # s: an analysis request answers "pending" after this, well under Cloudflare's 100 s
 JOB_TTL = 600
 MEMORY_ITEMS = 40
 MEMORY_BYTES = 24_000_000
@@ -99,9 +104,20 @@ def _thin(n: int, limit: int) -> list[int]:
     return mapdata.thin_indices(n, limit)
 
 
-def analysis_body(track, info: act.ActivityInfo) -> bytes:
-    """The JSON bytes the page gets for this track."""
-    return json.dumps(analysis_json(analyze(track, info.sport), info.sport, info.alt), separators=(",", ":")).encode()
+def dumps(value) -> bytes:
+    return json.dumps(value, separators=(",", ":")).encode()
+
+
+def gzipped_response(request: Request, gz: bytes) -> Response:
+    """Gzipped JSON as is to a browser that accepts it (all do), decompressed for anything else."""
+    headers = {"Cache-Control": "no-store", "Vary": "Accept-Encoding"}
+    if "gzip" in request.headers.get("accept-encoding", "").lower():
+        return Response(gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(gzip.decompress(gz), media_type="application/json", headers=headers)
+
+
+def _pos(v: float) -> float:
+    return round(v, 6)  # 0.1 m: the core's floats carry 17 digits nobody draws
 
 
 def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
@@ -111,12 +127,12 @@ def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
     stats = {**asdict(st), "avg_speed": st.avg_speed}
     quality = {**asdict(a.quality), "alt_source": alt_source}
     stops = [{"start": x.start, "end": x.end, "duration": x.duration_ms // 1000, "manual": x.manual,
-              "lat": x.lat, "lon": x.lon} for x in sorted(a.pauses + a.stops, key=lambda x: x.start)]
+              "lat": _pos(x.lat), "lon": _pos(x.lon)} for x in sorted(a.pauses + a.stops, key=lambda x: x.start)]
     runs = [{"start": s[r.first].time, "end": s[r.last].time, "distance": round(r.distance, 1), "drop": round(r.drop),
              "max_speed": round(r.max_speed, 2), "avg_speed": round(r.avg_speed, 2), "duration": r.duration_ms // 1000,
-             "lat": s[r.first].lat, "lon": s[r.first].lon} for r in a.runs]
+             "lat": _pos(s[r.first].lat), "lon": _pos(s[r.first].lon)} for r in a.runs]
     climbs = [{"start": s[c.first].time, "end": s[c.last].time, "distance": round(c.distance, 1), "gain": round(c.gain),
-               "duration": c.duration_ms // 1000, "lat": s[c.first].lat, "lon": s[c.first].lon} for c in a.climbs]
+               "duration": c.duration_ms // 1000, "lat": _pos(s[c.first].lat), "lon": _pos(s[c.first].lon)} for c in a.climbs]
     out = {"sport": sport.key, "stats": stats, "quality": quality, "stops": stops, "runs": runs, "climbs": climbs,
            "chart": None, "map": None,
            # a GPX without any <time>: its points have stand-in times, the analysis keeps no duration
@@ -139,7 +155,8 @@ def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
     pts = [s[i] for i in idx]
     ski = sport == Sport.SKI
     m = {"lon": _r((p.lon for p in pts), 6), "lat": _r((p.lat for p in pts), 6),
-         "dots": [{"lon": s[0].lon, "lat": s[0].lat, "color": "#00C853"}, {"lon": s[-1].lon, "lat": s[-1].lat, "color": "#FF1744"}]}
+         "dots": [{"lon": _pos(s[0].lon), "lat": _pos(s[0].lat), "color": "#00C853"},
+                  {"lon": _pos(s[-1].lon), "lat": _pos(s[-1].lat), "color": "#FF1744"}]}
     if ski:
         # coloured lines are built in the page from these (descents by speed, climbs in blue), as Windows' map_lines
         lats, lons = [p.lat for p in s], [p.lon for p in s]
@@ -158,9 +175,13 @@ def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
 # ---------------------------------------------------------------- analysis cache
 
 
+SUFFIX = ".json.gz"
+
+
 class AnalysisCache:
-    """The analyses' JSON (bytes), by key: a small LRU in memory (capped by count and by size), backed by files in
-    `directory` (capped too, least recently used removed first). Concurrent requests for one key compute it once."""
+    """The analyses' JSON, gzipped (what most answers send as is; a fifth of the size), by key: a small LRU in memory
+    (capped by count and by size), backed by files in `directory` (capped too, least recently used removed first).
+    Concurrent requests for one key compute it once. `compute` returns the plain JSON bytes."""
 
     def __init__(self, directory: Path, max_items: int = MEMORY_ITEMS, max_bytes: int = MEMORY_BYTES,
                  disk_items: int = 400, disk_bytes: int = 64_000_000):
@@ -195,7 +216,18 @@ class AnalysisCache:
                 self.memory.popitem(last=False)
 
     def _file(self, key: str) -> Path:
-        return self.directory / f"{key}.json"
+        return self.directory / f"{key}{SUFFIX}"
+
+    def put(self, key: str, plain: bytes) -> None:
+        """An analysis computed elsewhere (by an import, an edit): the next open reads it from here."""
+        value = gzip.compress(plain, 6, mtime=0)
+        with self._guard:
+            lock = self._locks.setdefault(key, threading.Lock())
+        with lock:
+            self._write_disk(key, value)
+            self._remember(key, value)
+        with self._guard:
+            self._locks.pop(key, None)
 
     def get(self, key: str, compute) -> bytes:
         with self._guard:
@@ -209,7 +241,7 @@ class AnalysisCache:
                     return self.memory[key]
             value = self._read_disk(key)
             if value is None:
-                value = compute()
+                value = gzip.compress(compute(), 6, mtime=0)
                 self.computed += 1
                 self._write_disk(key, value)
             self._remember(key, value)
@@ -237,8 +269,11 @@ class AnalysisCache:
 
     def purge_disk(self) -> None:
         try:
-            files = sorted((e.stat().st_mtime, e.stat().st_size, e.path) for e in os.scandir(self.directory)
-                           if e.name.endswith(".json"))
+            entries = list(os.scandir(self.directory))
+            for e in entries:  # another version's files (ANALYSIS_VERSION is in the key) would never be read
+                if e.name.endswith(".json") and not e.name.startswith("."):
+                    Path(e.path).unlink(missing_ok=True)
+            files = sorted((e.stat().st_mtime, e.stat().st_size, e.path) for e in entries if e.name.endswith(SUFFIX))
         except OSError:
             return
         total = sum(f[1] for f in files)
@@ -284,6 +319,8 @@ class Activities:
         data.idle_hooks.append(self.cache.drop_memory)
         self.recent = RECENT
         self.answers = Answers(2)
+        self.analysis_wait = ANALYSIS_WAIT
+        self._inflight: dict[str, asyncio.Future] = {}  # analyses being computed, by cache key
 
     def routes(self) -> list[Route]:
         return [
@@ -398,23 +435,39 @@ class Activities:
                 raise not_found("Cette activité n'a pas de tracé")
             return note, self._analysis_key(note)
         note, cache_key = await self.data.read(locate)
-        body = await run_in_threadpool(self.cache.get, cache_key, lambda: self._compute(note.activity))
-        return Response(body, media_type="application/json", headers={"Cache-Control": "no-store"})
+        task = self._inflight.get(cache_key)
+        if task is None:
+            # a task of its own: a request that gives up waiting (or a closed tab) does not stop the computation
+            task = asyncio.ensure_future(run_in_threadpool(self.cache.get, cache_key, lambda: self._compute(note.activity)))
+            self._inflight[cache_key] = task
+
+            def finished(t, k=cache_key):
+                if self._inflight.get(k) is t:
+                    del self._inflight[k]
+                if not t.cancelled():
+                    t.exception()  # retrieved: a failure nobody waits for any more is not logged as unhandled
+            task.add_done_callback(finished)
+        try:
+            body = await asyncio.wait_for(asyncio.shield(task), self.analysis_wait)
+        except asyncio.TimeoutError:
+            return JSONResponse({"pending": True}, status_code=202, headers={"Cache-Control": "no-store"})
+        return gzipped_response(request, body)
+
+    def _size(self, relative: str) -> int:
+        try:
+            return self.data.path(relative).stat().st_size
+        except OSError:
+            raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
+
+    def _track(self, operation: str, size: int, *args: str) -> tuple[dict, bytes]:
+        """A trackwork operation, in a child process for a long file; its failure as the page's error."""
+        try:
+            return trackwork.run(operation, *args, apart=size > self.subprocess_bytes, timeout=TRACK_TIMEOUT)
+        except trackwork.TrackError as error:
+            raise ApiError(404 if error.missing else 422, error.message) from None
 
     def _compute(self, info: act.ActivityInfo) -> bytes:
-        try:
-            size = self.data.path(info.file).stat().st_size
-        except OSError:
-            raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
-        if size > self.subprocess_bytes:
-            return self._analyse_apart(info)
-        try:
-            track = self._locked(self.data.store.read_track, info)
-        except OSError:
-            raise not_found("Le fichier du tracé est introuvable (pas encore synchronisé ?)") from None
-        except Exception as error:  # noqa: BLE001 — an unreadable file is the user's to know about
-            raise ApiError(422, f"Tracé illisible : {error}") from None
-        return analysis_body(track, info)
+        return self._track("analyse", self._size(info.file), str(self.data.root), info.to_json())[1]
 
     def prepare_recent(self, stop=lambda: False) -> int:
         """Computes (or reads back from the disk cache) the analyses of the most recent activities with a track, and
@@ -436,22 +489,6 @@ class Activities:
                 pass
         return done
 
-    def _analyse_apart(self, info: act.ActivityInfo) -> bytes:
-        """A long track is analysed in a child process (memento_web/analyse.py), which gives all its memory back."""
-        env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(PACKAGE_PARENT), os.environ.get("PYTHONPATH")]))}
-        try:
-            done = subprocess.run([sys.executable, "-m", "memento_web.analyse", str(self.data.root), info.to_json()],
-                                  capture_output=True, env=env, timeout=ANALYSIS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            raise ApiError(504, "Analyse du tracé trop longue") from None
-        if done.returncode != 0:
-            lines = done.stderr.decode("utf-8", "replace").strip().splitlines()
-            message = lines[-1] if lines else f"code {done.returncode}"
-            if done.returncode not in (3, 4):
-                _log(f"analysis process failed: {done.stderr.decode('utf-8', 'replace')[-2000:]}")
-            raise ApiError(404 if done.returncode == 4 else 422, message)
-        return done.stdout
-
     # ---- edits ----
 
     async def update(self, request: Request) -> JSONResponse:
@@ -463,7 +500,7 @@ class Activities:
         if unknown:
             raise bad_request(f"Champs inconnus : {', '.join(sorted(unknown))}")
 
-        def run():
+        def check():
             note = self._load_expected(key, expected)
             info = note.activity
             sport = info.sport
@@ -472,6 +509,20 @@ class Activities:
                 allowed = GPS_SPORTS if info.file else [Sport.PLAIN, info.sport]
                 if sport not in allowed:
                     raise bad_request("Sport invalide pour cette activité")
+            return info, sport
+        info, sport = await self.data.read(check)
+        resummarised = None
+        if info.file and sport != info.sport:
+            # another sport means another analysis: computed outside the lock, committed below if nothing changed
+            def resummarise():
+                return self._track("resummarise", self._size(info.file), str(self.data.root), info.to_json(),
+                                   sport.key, info.alt or "")
+            resummarised = await run_in_threadpool(resummarise)
+
+        def run():
+            note = self._load_expected(key, expected)
+            if resummarised is not None:
+                note = note.copy(activity=act.ActivityInfo.parse(resummarised[0]["info"]))
             title = str(body.get("title", note.title))
             description = str(body.get("description", note.body))
             try:
@@ -489,6 +540,8 @@ class Activities:
                     raise bad_request("Distance invalide")
                 info = act.ActivityInfo(**{**saved.activity.__dict__, "distance": metres})
                 saved = self.data.store.save(saved.copy(activity=info, updated=now_ms()))
+            if resummarised is not None:
+                self.cache.put(self._analysis_key(saved), resummarised[1])
             return self._detail(saved.path.split("/", 1)[1])
         return JSONResponse(await self.data.run(run))
 
@@ -538,24 +591,28 @@ class Activities:
         await run_in_threadpool(self._purge_uploads)
         token = secrets.token_urlsafe(12)
         target = self.uploads / f"{token}.upload"
-        await write_stream(target, request.stream(), MAX_ATTACHMENT)
+        # the page gzips the file (a GPX shrinks 5 to 8 times): far less to send over a home connection's upload
+        chunks = request.stream()
+        if request.headers.get("content-encoding", "").strip().lower() == "gzip":
+            chunks = gunzip(chunks, MAX_ATTACHMENT)
+        size = await write_stream(target, chunks, MAX_ATTACHMENT)
 
         def inspect():
             try:
-                track, _ext = self.data.store.read_source(target)
-            except Exception as error:  # noqa: BLE001 — told to the user
+                head, _body = self._track("inspect", size, str(target))
+            except ApiError as error:
                 unlink_quiet(target)
-                raise ApiError(422, f"{name} : fichier illisible ({error})") from None
-            if not track.points and track.session_distance is None:
+                raise ApiError(422, f"{name} : {error.message}") from None
+            if head["empty"]:
                 unlink_quiet(target)
                 raise ApiError(422, f"{name} : aucune position dans ce fichier")
-            existing = self._locked(self.data.store.find_activity, track.start_time)
-            sport = Sport.guess(track.fit_sport)
+            existing = self._locked(self.data.store.find_activity, head["start"])
+            sport = Sport.guess(head["fit_sport"])
             if existing is not None and sport == Sport.GPS and existing.activity:
                 sport = existing.activity.sport
-            title = existing.title if existing else default_title(sport, track.start_time or 0, track.name)
-            return {"token": token, "name": name, "title": title, "sport": sport.key, "start": track.start_time,
-                    "points": len(track.points), "needs_altitude": elevation.missing(track),
+            title = existing.title if existing else default_title(sport, head["start"] or 0, head["name"])
+            return {"token": token, "name": name, "title": title, "sport": sport.key, "start": head["start"],
+                    "points": head["points"], "needs_altitude": head["needs_altitude"],
                     "existing": {"id": existing.id, "path": existing.path, "title": existing.title} if existing else None}
         return JSONResponse(await run_in_threadpool(inspect))
 
@@ -579,14 +636,17 @@ class Activities:
     def _run_import(self, job: Job, plan, loop) -> None:
         for n, (source, name, title, sport, altitude) in enumerate(plan):
             prefix = f"{n + 1}/{len(plan)} · {name}" if len(plan) > 1 else name
-            job.text = f"Import {prefix}…"
+            job.text = f"Import {prefix} · lecture et analyse du tracé…"
             try:
-                track, _ext = self.data.store.read_source(source)
-                start, needs = track.start_time, elevation.missing(track)
-                del track
+                head, analysis = self._track("prepare", source.stat().st_size, str(source), sport.key)
+                needs = head["needs_altitude"]
+                job.text = f"Import {prefix} · enregistrement…"
                 with self.data.lock:
-                    existing = self.data.store.find_activity(start)
-                    note = self.data.store.import_activity(source, title, sport, existing)
+                    existing = self.data.store.find_activity(head["start"])
+                    note = self._commit_import(source, head, title, sport, existing)
+                    key = self._analysis_key(note)
+                self.cache.put(key, analysis)
+                del analysis
                 self._poke(loop)
                 result = {"name": name, "id": note.id, "path": note.path, "title": note.title,
                           "replaced": existing is not None}
@@ -604,37 +664,80 @@ class Activities:
                 unlink_quiet(source)
             job.done = n + 1
 
+    def _commit_import(self, source: Path, head: dict, title: str, sport: Sport, replace: fmt.Note | None) -> fmt.Note:
+        """The light end of the core's Store.import_activity, under the data lock, with the summary computed by
+        trackwork.prepare: copies the file to attachments/ and writes the note (or replaces `replace`'s track,
+        keeping its name, description and photos)."""
+        store = self.data.store
+        start = head["start"] or now_ms()
+        if replace is not None:
+            note_id = replace.id
+            title = (title or "").strip() or replace.title
+        else:
+            title = (title or "").strip() or default_title(sport, start, head["name"])
+            taken = {n.id for n in store.scan()} | {n.id for n in store.scan_activities()}
+            note_id = fmt.generate_id()
+            while note_id in taken:
+                note_id = fmt.generate_id()
+        relative = f"attachments/{fmt.slug(title)}-{note_id}.{head['ext']}"
+        atomic.write_bytes(store.file_path(relative), source.read_bytes())
+        info = act.ActivityInfo(**{**act.ActivityInfo.parse(head["info"]).__dict__, "file": relative})
+        now = now_ms()
+        if replace is None:
+            return store.save(fmt.Note(path=f"{ACTIVITIES_DIR}/{fmt.file_name_for(title, note_id)}", id=note_id,
+                                       title=title, created=now, updated=now, activity=info, attachments=[relative]))
+        old = [replace.activity.file, replace.activity.alt] if replace.activity else []
+        for path in old:
+            if path and path != relative:
+                try:
+                    store.file_path(path).unlink()
+                except OSError:
+                    pass
+        kept = [a for a in replace.attachments if a not in old]
+        return store.save(replace.copy(title=title, activity=info, attachments=[relative] + kept, updated=now))
+
     # ---- altitude from the terrain model ----
 
     def _fill_altitude(self, relative: str, progress) -> fmt.Note:
-        """store.fetch_altitude in three steps, so the data lock is not held during the network lookups (a request
-        a second): read the track; ask the service; then write the .alt file and the new summary onto the note as
-        it is by then (an edit made meanwhile is kept)."""
-        with self.data.lock:
-            note, _version = self._load(relative.split("/", 1)[1])
-            info = note.activity
-            if not info.file or not info.sport.has_gps:
-                raise elevation.ElevationError("Pas de tracé")
-            if info.alt:
-                raise elevation.ElevationError("Ce fichier a déjà une altitude")
-            track = self.data.store.read_track(act.ActivityInfo(**{**info.__dict__, "alt": None}))
-            if not elevation.missing(track):
-                raise elevation.ElevationError("Ce fichier a déjà une altitude")
-            samples = elevation.pick(clean(track))
-            del track
+        """store.fetch_altitude in steps, so the data lock is held for none of the slow ones: read the track (outside
+        the lock, a child process for a long one); ask the service (a request a second); write the .alt file;
+        analyse again with it; then put the new summary onto the note as it is by then (an edit made meanwhile is
+        kept)."""
+        note, _version = self._locked(self._load, relative.split("/", 1)[1])
+        info = note.activity
+        if not info.file or not info.sport.has_gps:
+            raise elevation.ElevationError("Pas de tracé")
+        if info.alt:
+            raise elevation.ElevationError("Ce fichier a déjà une altitude")
+        size = self._size(info.file)
+        root = str(self.data.root)
+        head, _body = self._track("altitude-samples", size, root, info.to_json())
+        if not head["samples"]:
+            raise elevation.ElevationError("Ce fichier a déjà une altitude")
+        samples = [TrackPoint(time=t, lat=lat, lon=lon) for t, lat, lon in head["samples"]]
         alts = elevation.query(samples, get=self.elevation_get, pause=self.elevation_pause, progress=progress)
+        alt_path = info.file.rsplit(".", 1)[0] + ".alt"
         with self.data.lock:
             fresh, _version = self._load(relative.split("/", 1)[1])
             if fresh.activity.file != info.file or fresh.activity.alt:
                 raise ApiError(409, "L'activité a changé pendant la recherche d'altitude")
-            alt_path = info.file.rsplit(".", 1)[0] + ".alt"
             atomic.write_text(self.data.path(alt_path), elevation.encode(alts))
             sport = fresh.activity.sport
-            filled = self.data.store.read_track(act.ActivityInfo(**{**fresh.activity.__dict__, "alt": alt_path}))
-            new_info = act.ActivityInfo.from_analysis(sport, analyze(filled, sport), filled, info.file, alt_path,
-                                                      untimed_start=info.start)
-            attachments = fresh.attachments if alt_path in fresh.attachments else fresh.attachments + [alt_path]
-            return self.data.store.save(fresh.copy(activity=new_info, attachments=attachments, updated=now_ms()))
+        while True:
+            head, analysis = self._track("resummarise", size, root, info.to_json(), sport.key, alt_path)
+            with self.data.lock:
+                fresh, _version = self._load(relative.split("/", 1)[1])
+                if fresh.activity.file != info.file:
+                    raise ApiError(409, "L'activité a changé pendant la recherche d'altitude")
+                if fresh.activity.sport != sport:  # changed meanwhile: its summary is for the new sport
+                    sport = fresh.activity.sport
+                    continue
+                attachments = fresh.attachments if alt_path in fresh.attachments else fresh.attachments + [alt_path]
+                saved = self.data.store.save(fresh.copy(activity=act.ActivityInfo.parse(head["info"]),
+                                                        attachments=attachments, updated=now_ms()))
+                key = self._analysis_key(saved)
+            self.cache.put(key, analysis)
+            return saved
 
     async def complete_altitude(self, request: Request) -> JSONResponse:
         """{"ids": [...]} or {"all": true}: activities whose file has no altitude get it from the terrain model
