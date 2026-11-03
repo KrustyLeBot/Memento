@@ -13,9 +13,10 @@ _MSG_FIELD_DESCRIPTION = 206
 
 # The fields read, per message: anything else is skipped without being decoded (a 60-hour race is 800 000 messages)
 _WANTED = {
-    _MSG_FILE_ID: {1},
-    _MSG_SPORT: {0},
-    _MSG_SESSION: {2, 5, 7, 8, 9},
+    # 253 everywhere: any message's timestamp anchors the compressed-timestamp records that follow it
+    _MSG_FILE_ID: {253, 1},
+    _MSG_SPORT: {253, 0},
+    _MSG_SESSION: {253, 2, 5, 7, 8, 9},
     _MSG_RECORD: {253, 0, 1, 2, 3, 78},
     _MSG_EVENT: {253, 0, 1},
 }

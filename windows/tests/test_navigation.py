@@ -410,3 +410,143 @@ def test_the_chart_finds_the_point_under_the_mouse_by_bisection(app):
         for pos in (x_target / xs[-1] * canvas.width(), (x_target + 0.5) / xs[-1] * canvas.width()):
             target = xs[0] + max(0.0, min(1.0, pos / canvas.width())) * (xs[-1] - xs[0])
             assert canvas.nearest(pos) == min(range(len(xs)), key=lambda k: abs(xs[k] - target))
+
+
+# ---- background jobs and the page on screen ----
+
+@pytest.fixture
+def quiet(monkeypatch):
+    """Message boxes answered at once; what they said is kept."""
+    from PySide6.QtWidgets import QMessageBox
+    said = []
+    for kind in ("information", "warning"):
+        monkeypatch.setattr(QMessageBox, kind, lambda parent, title, text, *a, **k: said.append(title))
+    return said
+
+
+def _blocked_job(acts, then=lambda r, e: None):
+    """A job that runs until the returned event is set."""
+    import threading
+    gate = threading.Event()
+    assert acts._run("Test…", lambda progress: gate.wait(10), then)
+    return gate
+
+
+def test_an_edit_on_a_page_built_before_a_job_saved_the_activity_keeps_the_job_result(window, tmp_path, monkeypatch, quiet):
+    from PySide6.QtWidgets import QFileDialog
+    acts = window.activities
+    note = window.store.import_activity(_long_gpx(tmp_path / "a.gpx"), None, None)
+    window.show_module("activities")
+    acts.open_activity(note)
+    alt = note.activity.file.rsplit(".", 1)[0] + ".alt"
+    (window.store.root / alt).write_text("", encoding="utf-8")
+    window.store.save(note.copy(activity=ActivityInfo(**{**note.activity.__dict__, "alt": alt}),
+                                attachments=note.attachments + [alt]))  # what a background job saves meanwhile
+    photo = tmp_path / "p.png"
+    photo.write_bytes(b"png")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(photo), ""))
+    acts._add_photo(note)  # the page's own, older, copy
+    saved = window.store.current(note)
+    assert saved.activity.alt == alt and alt in saved.attachments and len(saved.attachments) == 3
+
+
+def test_a_finished_job_does_not_pull_the_user_back_to_its_activity(window, quiet):
+    acts = window.activities
+    a, b = add_activity(window.store, 1, 1), add_activity(window.store, 2, 2)
+    window.refresh()
+    window.show_module("activities")
+    acts.open_activity(a)
+    gate = _blocked_job(acts, lambda result, error: acts._reopen_if_shown(a))
+    acts.open_activity(b)  # the user moved on while it ran
+    gate.set()
+    _until(lambda: not acts.busy)
+    assert acts.current.path == b.path
+    acts.show_list()
+    gate = _blocked_job(acts, lambda result, error: acts._reopen_if_shown(a))
+    gate.set()
+    _until(lambda: not acts.busy)
+    assert acts.current is None and acts.stack.currentWidget() is acts.list_page
+
+
+def test_a_sport_change_refused_while_a_job_runs_still_saves_the_text(window, tmp_path, monkeypatch, quiet):
+    from PySide6.QtWidgets import QDialog
+    from memento_win.ui import activities_view
+    acts = window.activities
+    note = window.store.import_activity(_long_gpx(tmp_path / "a.gpx"), None, None)
+    window.show_module("activities")
+    acts.open_activity(note)
+
+    def typed(dialog):
+        dialog.title.setText("Nouveau titre")
+        dialog.description.setPlainText("Une longue description")
+        dialog.sport.setCurrentIndex(dialog.sport.findData(Sport.BIKE))
+        return QDialog.DialogCode.Accepted
+    monkeypatch.setattr(activities_view.EditDialog, "exec", typed)
+    gate = _blocked_job(acts)
+    acts._edit(note)
+    saved = window.store.current(note)
+    assert saved.title == "Nouveau titre" and saved.body == "Une longue description"
+    assert saved.activity.sport == note.activity.sport and "Sport inchangé" in quiet
+    gate.set()
+    _until(lambda: not acts.busy)
+
+
+def test_a_job_finished_after_a_folder_change_is_dropped(window, tmp_path, quiet):
+    acts = window.activities
+    called = []
+    gate = _blocked_job(acts, lambda result, error: called.append(result))
+    other = tmp_path / "other"
+    other.mkdir()
+    window.set_store(Store(other))
+    gate.set()
+    _until(lambda: not acts.busy)
+    QApplication.processEvents()
+    assert called == [] and not acts.busy and acts.import_button.isEnabled()
+
+
+def test_an_activity_reopened_while_its_track_loads_is_loaded_once(window, tmp_path, monkeypatch):
+    import threading
+    acts = window.activities
+    note = window.store.import_activity(_long_gpx(tmp_path / "a.gpx"), None, None)
+    window.store._analyses.clear()
+    real, calls, gate = window.store.analysis, [], threading.Event()
+
+    def slow(info):
+        calls.append(info)
+        gate.wait(10)
+        return real(info)
+    monkeypatch.setattr(window.store, "analysis", slow)
+    window.show_module("activities")
+    acts.open_activity(note)
+    acts.show_list()
+    acts.open_activity(note)
+    gate.set()
+    texts = lambda: [w.text() for w in acts.detail_layout.itemAt(0).widget().findChildren(QLabel)]  # noqa: E731
+    _until(lambda: "Chargement du tracé…" not in texts())
+    assert len(calls) == 1 and "Chargement du tracé…" not in texts() and not acts._loading
+
+
+def test_a_late_track_load_does_not_replace_the_page_of_an_edited_activity(window, tmp_path, monkeypatch):
+    import threading
+    acts = window.activities
+    note = window.store.import_activity(_long_gpx(tmp_path / "a.gpx"), None, None)
+    window.store._analyses.clear()
+    real, gate, done = window.store.analysis, threading.Event(), threading.Event()
+
+    def slow(info):
+        gate.wait(10)
+        try:
+            return real(info)
+        finally:
+            done.set()
+    monkeypatch.setattr(window.store, "analysis", slow)
+    window.show_module("activities")
+    acts.open_activity(note)  # loads the walk
+    edited = window.store.update_activity(note, note.title, "", Sport.BIKE)  # analysed and cached as a ride
+    acts._reopen(edited)
+    page = acts.detail_layout.itemAt(0).widget()
+    gate.set()
+    _until(done.is_set)
+    for _ in range(20):
+        QApplication.processEvents()
+    assert acts.detail_layout.itemAt(0).widget() is page and acts.current.activity.sport == Sport.BIKE
