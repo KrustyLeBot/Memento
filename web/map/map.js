@@ -303,6 +303,8 @@
     if (old) { seen.delete(key); seenBytes -= bitmapBytes(old); }
     seen.set(key, bmp);
     seenBytes += bitmapBytes(bmp);
+    const [z, x, y] = key.split('/').map(Number), parent = `${z - 1}/${x >> 1}/${y >> 1}`;
+    if (z > 0 && coarse.has(parent)) { toSharpen.add(parent); scheduleSharpen(); }
     // never close() an evicted bitmap: MapLibre may not have uploaded it yet; dropping it lets the collector free it
     for (const [k, b] of seen) {
       if (seenBytes <= SEEN_BYTES) break;
@@ -344,20 +346,25 @@
     if (children.length === 4) coarse.delete(key); else coarse.add(key);
     return { data: bmp };
   });
-  /** After a zoom out, the tiles MapLibre kept from the way in are drawn again from the finer ones seen since. */
-  let lastTileZoom = null;
-  function sharpenAfterZoomOut() {
-    const tz = Math.round(map.getZoom());
-    const out = lastTileZoom !== null && tz < lastTileZoom;
-    lastTileZoom = tz;
-    if (!out || !coarse.size) return;
+  // A coarse tile whose children have since been drawn is made again from them: the one on screen is reloaded, the
+  // one MapLibre keeps for later is dropped. Without that, MapLibre brought the coarse tile (IGN's own lower level,
+  // in its slightly different colours) back from its cache when zooming out or when a rotation moved it farther.
+  const toSharpen = new Set();
+  let sharpenTimer = 0;
+  function scheduleSharpen() {
+    if (!sharpenTimer) sharpenTimer = setTimeout(sharpenNow, 250);
+  }
+  function sharpenNow() {
+    sharpenTimer = 0;
+    if (!map || !map.style) return;
+    const keys = new Set(toSharpen);
+    toSharpen.clear();
+    const keyOf = (t) => `${t.tileID.canonical.z}/${t.tileID.canonical.x}/${t.tileID.canonical.y}`;
     for (const id of ['ortho', 'orthosq']) {
-      const cache = map.style && map.style.sourceCaches[id];
+      const cache = map.style.sourceCaches[id];
       if (!cache || !cache._tiles || typeof cache._reloadTile !== 'function') continue;
-      for (const [tileKey, tile] of Object.entries(cache._tiles)) {
-        const c = tile.tileID.canonical;
-        if (coarse.has(`${c.z}/${c.x}/${c.y}`) && seenChildren(c.z, c.x, c.y).length) cache._reloadTile(tileKey, 'reloading');
-      }
+      for (const [tileKey, tile] of Object.entries(cache._tiles)) if (keys.has(keyOf(tile))) cache._reloadTile(tileKey, 'reloading');
+      if (cache._cache && typeof cache._cache.filter === 'function') cache._cache.filter((t) => !keys.has(keyOf(t)));
     }
   }
   maplibregl.addProtocol('dem', async (req, abort) => {
@@ -491,6 +498,23 @@
     report(`map: ${e && e.message ? e.message : e}`);
     return;
   }
+  // MapLibre 4.7 draws the photo of each terrain tile into a texture twice the tile's size (qualityFactor 2) and
+  // meshes each tile 128x128: on a 1x screen that is 4 times the pixels shown, and the relief has no detail to fill
+  // the mesh (a z15 view's terrain tile spans 64 DEM pixels or fewer). Rotating a 3D block at 1x on a software
+  // renderer went from 846 to 288 ms a frame with the texture at the screen's density and a 64x64 mesh.
+  const TERRAIN_MESH = 64;
+  function tuneTerrain() {
+    const t = map.terrain, old = map.painter && map.painter.renderToTexture;
+    if (!t || !old || typeof old.destruct !== 'function') return;
+    const q = Math.max(1, Math.min(2, Math.round(ratio)));
+    if (t.meshSize !== TERRAIN_MESH) { t.meshSize = TERRAIN_MESH; t._mesh = null; }
+    if (t.qualityFactor === q) return;
+    t.qualityFactor = q;
+    old.destruct();
+    map.painter.renderToTexture = new old.constructor(map.painter, t);
+    t.sourceCache.freeRtt();
+    map.triggerRepaint();
+  }
   let frameGaps = [], lastFrame = 0;
   map.on('render', () => {
     const now = performance.now(), gap = now - lastFrame;
@@ -504,6 +528,7 @@
     if (median <= SLOW_FRAME_MS) return;
     ratio = Math.max(1, ratio - 0.5);
     map.setPixelRatio(ratio);
+    tuneTerrain();
     try { localStorage.setItem(RATIO_KEY, String(ratio)); } catch (e) { /* measured again next time */ }
     console.info(`smap: ${Math.round(median)} ms a frame, now drawing at pixel ratio ${ratio}`);
   });
@@ -625,7 +650,7 @@
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
     // setTerrain rebuilds the whole terrain renderer: only when its state really changes
     const want = is3d && shown && !!(SQ || pos) && !!map.getSource('dem'), cur = map.getTerrain();
-    if (want && (!cur || cur.exaggeration !== exag)) map.setTerrain({ source: 'dem', exaggeration: exag });
+    if (want && (!cur || cur.exaggeration !== exag)) { map.setTerrain({ source: 'dem', exaggeration: exag }); tuneTerrain(); }
     else if (!want && cur) map.setTerrain(null);
     scheduleBuildings();
     if (!interactive) return;
@@ -665,7 +690,7 @@
     schedulePeaks();
     return true;
   }
-  map.on('zoomend', () => { if (mode === '3d') updateFrame(); sharpenAfterZoomOut(); });
+  map.on('zoomend', () => { if (mode === '3d') updateFrame(); });
 
   // ---------------------------------------------------------------- camera
 
