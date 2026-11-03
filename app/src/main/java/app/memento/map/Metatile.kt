@@ -30,7 +30,9 @@ object Metatile {
     const val PENDING = 3
     const val TRAILS = "trails"
     val LAYERS = listOf(TileKey.KIND_ORTHO, TileKey.KIND_DEM, TileKey.KIND_BUILDINGS, TRAILS)
-    val FORMATS = mapOf(1 to "image/webp", 2 to "image/png", 3 to "image/jpeg", 4 to "application/json", 5 to "application/vnd.mapbox-vector-tile")
+    val FORMATS = mapOf(
+        1 to "image/webp", 2 to "image/png", 3 to "image/jpeg", 4 to "application/json", 5 to "application/vnd.mapbox-vector-tile", 6 to "image/avif",
+    )
     private const val HEAD = 18
     private const val ENTRY = 17
 

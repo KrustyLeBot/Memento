@@ -188,7 +188,8 @@ def _attribution(doc: dict) -> str:
 
 META_SIDE = 4
 META_LAYERS = ("ortho", "dem", "buildings", "trails")
-META_FORMATS = {1: "image/webp", 2: "image/png", 3: "image/jpeg", 4: "application/json", 5: "application/vnd.mapbox-vector-tile"}
+META_FORMATS = {1: "image/webp", 2: "image/png", 3: "image/jpeg", 4: "application/json", 5: "application/vnd.mapbox-vector-tile",
+                6: "image/avif"}
 META_OK, META_NONE, META_ERROR, META_PENDING = 0, 1, 2, 3
 _HEAD = 18
 _ENTRY = 17
