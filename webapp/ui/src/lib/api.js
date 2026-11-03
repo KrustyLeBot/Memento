@@ -86,11 +86,15 @@ export async function gzipped(file) {
  * POSTs a file as the request body, reporting the upload's progress (fetch cannot), gzipped first when `gzip`
  * (only for endpoints that accept `Content-Encoding: gzip`).
  * @param {string} path @param {File} file
- * @param {{ gzip?: boolean, onProgress?: (fraction: number, stage: 'pack' | 'send' | 'wait') => void }} [options]
+ * @param {{ gzip?: boolean, onProgress?: (fraction: number, stage: 'pack' | 'send' | 'wait') => void,
+ *   signal?: AbortSignal }} [options]
  * @returns {Promise<any>}
  */
 export async function sendFile(path, file, options = {}) {
   const progress = options.onProgress || (() => {});
+  const { signal } = options;
+  const aborted = () => new DOMException('Aborted', 'AbortError');
+  if (signal?.aborted) throw aborted();
   /** @type {Blob} */
   let body = file;
   /** @type {Record<string, string>} */
@@ -103,9 +107,12 @@ export async function sendFile(path, file, options = {}) {
       headers['Content-Encoding'] = 'gzip';
     }
   }
+  if (signal?.aborted) throw aborted();
   progress(0, 'send');
   const { status, text } = await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+    xhr.onabort = () => reject(aborted());
     xhr.open('POST', path);
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) progress(e.loaded / e.total, 'send'); };

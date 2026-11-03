@@ -206,6 +206,31 @@ def test_a_slow_analysis_answers_pending_then_the_result(client):
     assert answer.json()["sport"] == "walk" and activities.cache.computed == 1
 
 
+def test_a_slow_analysis_that_fails_between_two_polls_answers_the_next_one_with_its_error(client):
+    from memento_web.errors import ApiError
+    activities = client.app.state.activities
+    result = import_file(client, tracks.walk(T0, 600).encode(), "w.gpx", sport="walk")
+    url = f"/api/activities/{result['id']}/analysis"
+    clear_cache(client)
+    gate, calls = __import__("threading").Event(), []
+
+    def failing(info):
+        calls.append(info)
+        gate.wait(10)
+        raise ApiError(422, "Analyse impossible : mémoire insuffisante")
+    activities._compute = failing
+    activities.analysis_wait = 0.05
+    assert client.get(url).status_code == 202
+    task = next(iter(activities._inflight.values()))
+    gate.set()
+    deadline = time.monotonic() + 10
+    while not task.done():  # fails while no request waits on it, as in the page's pause between polls
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    answer = client.get(url)
+    assert answer.status_code == 422 and "mémoire" in answer.json()["error"] and len(calls) == 1
+
+
 def test_a_long_file_is_uploaded_and_imported_through_a_child_process_alike(client):
     activities = client.app.state.activities
     text = tracks.walk(T0, 900).encode()
@@ -353,6 +378,24 @@ def test_altitude_completion_is_explicit_and_uses_the_terrain_model(client, data
     assert a["quality"]["has_altitude"] and a["quality"]["alt_source"] == detail["alt"] and a["chart"]["alt"]
     again = wait(client, client.post("/api/activities/altitude", json={"all": True}, headers=HEADERS).json())
     assert again["results"] == [] and again["text"].startswith("0 complétée")
+
+
+def test_a_failed_altitude_fill_leaves_no_orphan_alt_file(client, data_dir):
+    from memento_web.errors import ApiError
+    activities = client.app.state.activities
+    activities.elevation_get, activities.elevation_pause = fake_elevation([]), lambda: None
+    plain = import_file(client, tracks.walk(T0, 600, altitude=False).encode(), "flat.gpx", sport="walk")
+    track = activities._track
+
+    def dying(operation, *args):
+        if operation == "resummarise":
+            raise ApiError(422, "Le processus d'analyse a été arrêté")
+        return track(operation, *args)
+    activities._track = dying
+    job = wait(client, client.post("/api/activities/altitude", json={"ids": [plain["id"]]}, headers=HEADERS).json())
+    assert job["error"] and "arrêté" in job["error"]
+    assert client.get(f"/api/activities/{plain['id']}").json()["activity"]["alt"] is None
+    assert list(data_dir.rglob("*.alt")) == []
 
 
 def test_a_terrain_service_failure_imports_without_altitude(client):

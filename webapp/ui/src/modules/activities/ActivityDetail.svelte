@@ -23,6 +23,8 @@
   /** note id, or file name for a conflict copy */
   export let id;
   const dispatch = createEventDispatcher();
+  // past the server's TRACK_TIMEOUT (15 min) with a margin: an analysis still pending by then will not finish
+  const POLL_LIMIT = 20 * 60 * 1000;
 
   /** @type {import('./api.js').Activity | null} */
   let activity = null;
@@ -86,7 +88,9 @@
     try {
       let result = await api.analysis(id, controller.signal);
       // a very long track on a slow server: the analysis goes on there, asked again until it is ready
+      const deadline = Date.now() + POLL_LIMIT;
       while (result?.pending) {
+        if (Date.now() > deadline) throw new Error('L\'analyse du tracé n\'a pas abouti sur le serveur : réessayez plus tard.');
         slow = true;
         await new Promise((resolve) => setTimeout(resolve, 2000));
         if (controller.signal.aborted) return;

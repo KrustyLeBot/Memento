@@ -2,7 +2,7 @@
   // Import of FIT / GPX files: each is sent and read by the server first (nothing written yet), then the user
   // checks name, sport and whether to look the altitude up; the import itself runs in the background.
   // A file recorded at the same start as an existing activity replaces it (name, description and photos kept).
-  import { createEventDispatcher, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import Modal from '../../lib/components/Modal.svelte';
   import { showError } from '../../lib/ui.js';
   import { activities as api } from './api.js';
@@ -25,13 +25,19 @@
   const STAGES = /** @type {Record<string, string>} */ ({ pack: 'Préparation', send: 'Envoi', wait: 'Lecture par le serveur' });
   $: overall = files.length ? (sent + (current.stage === 'wait' ? 1 : current.fraction * 0.9)) / files.length : 0;
 
+  // closing the dialog stops the uploads: the remaining files are neither packed nor sent
+  const stopped = new AbortController();
+  onDestroy(() => stopped.abort());
+
   onMount(async () => {
     for (const file of files) {
+      if (stopped.signal.aborted) return;
       current = { name: file.name, fraction: 0, stage: 'pack' };
       try {
-        const staged = await api.upload(file, (fraction, stage) => { current = { name: file.name, fraction, stage }; });
+        const staged = await api.upload(file, (fraction, stage) => { current = { name: file.name, fraction, stage }; }, stopped.signal);
         items = [...items, { staged, title: staged.title, sport: GPS_SPORTS.includes(staged.sport) ? staged.sport : 'gps', altitude: false }];
       } catch (error) {
+        if (stopped.signal.aborted) return;
         failed = [...failed, { name: file.name, error: error instanceof Error ? error.message : String(error) }];
       }
       sent += 1;

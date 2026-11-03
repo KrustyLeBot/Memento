@@ -61,6 +61,7 @@ UPLOAD_TTL = 3600
 SUBPROCESS_BYTES = 1_000_000
 TRACK_TIMEOUT = 900  # s: only stops a runaway child; a slow NAS takes ~30 s for a 200 000-point race
 ANALYSIS_WAIT = 25.0  # s: an analysis request answers "pending" after this, well under Cloudflare's 100 s
+FAILURE_KEPT = 60.0  # s: a failed analysis answers the next poll (one ANALYSIS_WAIT plus the page's pause) as its error
 JOB_TTL = 600
 MEMORY_ITEMS = 40
 MEMORY_BYTES = 24_000_000
@@ -463,10 +464,14 @@ class Activities:
             self._inflight[cache_key] = task
 
             def finished(t, k=cache_key):
-                if self._inflight.get(k) is t:
-                    del self._inflight[k]
-                if not t.cancelled():
-                    t.exception()  # retrieved: a failure nobody waits for any more is not logged as unhandled
+                def drop():
+                    if self._inflight.get(k) is t:
+                        del self._inflight[k]
+                if not t.cancelled() and t.exception() is not None:  # retrieved: not logged as unhandled
+                    # kept a while: a failure between two polls reaches the next one instead of restarting the run
+                    asyncio.get_running_loop().call_later(FAILURE_KEPT, drop)
+                else:
+                    drop()
             task.add_done_callback(finished)
         try:
             body = await asyncio.wait_for(asyncio.shield(task), self.analysis_wait)
@@ -744,21 +749,32 @@ class Activities:
                 raise ApiError(409, "L'activité a changé pendant la recherche d'altitude")
             atomic.write_text(self.data.path(alt_path), elevation.encode(alts))
             sport = fresh.activity.sport
-        while True:
-            head, analysis = self._track("resummarise", size, root, info.to_json(), sport.key, alt_path)
-            with self.data.lock:
-                fresh, _version = self._load(relative.split("/", 1)[1])
-                if fresh.activity.file != info.file:
-                    raise ApiError(409, "L'activité a changé pendant la recherche d'altitude")
-                if fresh.activity.sport != sport:  # changed meanwhile: its summary is for the new sport
-                    sport = fresh.activity.sport
-                    continue
-                attachments = fresh.attachments if alt_path in fresh.attachments else fresh.attachments + [alt_path]
-                saved = self.data.store.save(fresh.copy(activity=act.ActivityInfo.parse(head["info"]),
-                                                        attachments=attachments, updated=now_ms()))
-                key = self._analysis_key(saved)
-            self.cache.put(key, analysis)
-            return saved
+        try:
+            while True:
+                head, analysis = self._track("resummarise", size, root, info.to_json(), sport.key, alt_path)
+                with self.data.lock:
+                    fresh, _version = self._load(relative.split("/", 1)[1])
+                    if fresh.activity.file != info.file:
+                        raise ApiError(409, "L'activité a changé pendant la recherche d'altitude")
+                    if fresh.activity.sport != sport:  # changed meanwhile: its summary is for the new sport
+                        sport = fresh.activity.sport
+                        continue
+                    attachments = fresh.attachments if alt_path in fresh.attachments else fresh.attachments + [alt_path]
+                    saved = self.data.store.save(fresh.copy(activity=act.ActivityInfo.parse(head["info"]),
+                                                            attachments=attachments, updated=now_ms()))
+                    key = self._analysis_key(saved)
+                self.cache.put(key, analysis)
+                return saved
+        except BaseException:
+            self._drop_unreferenced(alt_path)
+            raise
+
+    def _drop_unreferenced(self, alt_path: str) -> None:
+        """An .alt written for a fill that then failed: removed unless a note took it, or it would outlive its activity."""
+        with self.data.lock:
+            notes = self.data.store.scan() + self.data.store.scan_activities()
+            if not any(alt_path in n.attachments or (n.activity and n.activity.alt == alt_path) for n in notes):
+                unlink_quiet(self.data.path(alt_path))
 
     async def complete_altitude(self, request: Request) -> JSONResponse:
         """{"ids": [...]} or {"all": true}: activities whose file has no altitude get it from the terrain model

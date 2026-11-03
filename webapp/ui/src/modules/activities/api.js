@@ -31,8 +31,9 @@ export const activities = {
   /** @returns {Promise<{ undo: string }>} */
   remove: (/** @type {string} */ id, /** @type {string} */ version) => request('DELETE', `/api/activities/${key(id)}`, { version }),
   /** @returns {Promise<Staged>} */
-  upload: (/** @type {File} */ file, /** @type {((fraction: number, stage: 'pack' | 'send' | 'wait') => void) | undefined} */ onProgress = undefined) =>
-    sendFile(`/api/activities/uploads?${new URLSearchParams({ name: file.name })}`, file, { gzip: true, onProgress }),
+  upload: (/** @type {File} */ file, /** @type {((fraction: number, stage: 'pack' | 'send' | 'wait') => void) | undefined} */ onProgress = undefined,
+    /** @type {AbortSignal | undefined} */ signal = undefined) =>
+    sendFile(`/api/activities/uploads?${new URLSearchParams({ name: file.name })}`, file, { gzip: true, onProgress, signal }),
   /** @returns {Promise<Job>} */
   importStaged: (/** @type {{ token: string, name: string, title: string, sport: string, altitude: boolean }[]} */ items) =>
     request('POST', '/api/activities/imports', { json: { items } }),
