@@ -20,7 +20,7 @@ export function photoMaxZoom(/** @type {unknown} */ value) {
 export function pageQuery(photomax, tiles) {
   let q = `&photomax=${photomax}`;
   if (tiles?.source === 'tuileries') {
-    q += `&trails=1&demmax=${tiles.dem_max_zoom ?? 13}`;
+    q += `&demmax=${tiles.dem_max_zoom ?? 13}`;  // no trails: Tuileries dropped them
     if (tiles.attribution) q += `&attrib=${encodeURIComponent(tiles.attribution)}`;
   }
   return q;

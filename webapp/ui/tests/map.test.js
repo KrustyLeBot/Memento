@@ -5,9 +5,9 @@ import { pageQuery, photoMaxZoom, tilesStatus } from '../src/modules/settings/ma
 test('page query: trails and credit only with Tuileries', () => {
   assert.equal(pageQuery(17, null), '&photomax=17');
   assert.equal(pageQuery(16, { source: 'direct' }), '&photomax=16');
-  assert.equal(pageQuery(17, { source: 'tuileries', attribution: '' }), '&photomax=17&trails=1&demmax=13');
+  assert.equal(pageQuery(17, { source: 'tuileries', attribution: '' }), '&photomax=17&demmax=13');
   assert.equal(pageQuery(17, { source: 'tuileries', attribution: 'Sentinel-2 cloudless & EOX', dem_max_zoom: 15 }),
-    '&photomax=17&trails=1&demmax=15&attrib=Sentinel-2%20cloudless%20%26%20EOX');
+    '&photomax=17&demmax=15&attrib=Sentinel-2%20cloudless%20%26%20EOX');
 });
 
 test('photo max zoom: 14..19, 17 by default', () => {

@@ -218,9 +218,9 @@ class TuileriesTest {
         MapConfig.set(null, 16)
         assertEquals("&photomax=16", MapConfig.pageQuery())
         MapConfig.set(source(), 16)
-        assertEquals("&photomax=16&trails=1&demmax=13", MapConfig.pageQuery())
+        assertEquals("&photomax=16&demmax=13", MapConfig.pageQuery())
         MapConfig.attribution = "Sentinel-2 cloudless & EOX"
-        assertEquals("&photomax=16&trails=1&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX", MapConfig.pageQuery())
+        assertEquals("&photomax=16&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX", MapConfig.pageQuery())
         MapConfig.set(null, 16)
         assertEquals("", MapConfig.attribution)
         // the page's side of it
@@ -246,11 +246,11 @@ class TuileriesTest {
             TileServer.initCache(dir)
             MapConfig.set(source(), 17)
             TileServer.applyInfo(info)
-            assertEquals("&photomax=17&trails=1&demmax=15", MapConfig.pageQuery())
+            assertEquals("&photomax=17&demmax=15", MapConfig.pageQuery())
             MapConfig.set(null, 17)
             assertEquals("&photomax=17", MapConfig.pageQuery())  // without Tuileries: the page's own default
             MapConfig.set(source(), 17)
-            assertEquals("&photomax=17&trails=1&demmax=13", MapConfig.pageQuery())  // a new server: its info read again
+            assertEquals("&photomax=17&demmax=13", MapConfig.pageQuery())  // a new server: its info read again
         } finally {
             dir.deleteRecursively()
         }

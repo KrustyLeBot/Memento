@@ -272,9 +272,9 @@ def test_configure_reaches_the_live_store_and_the_page_url():
     try:
         maphost.configure(source(), 15, fetch_info=False)
         assert maphost.tile_store().source == source()
-        assert mapview.page_url("2d", "light").endswith("&photomax=15&trails=1&demmax=13")  # /api/info not read yet
+        assert mapview.page_url("2d", "light").endswith("&photomax=15&demmax=13")  # /api/info not read yet
         maphost.set_attribution("Sentinel-2 cloudless & EOX")
-        assert mapview.page_url("2d", "light").endswith("&trails=1&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX")
+        assert mapview.page_url("2d", "light").endswith("&demmax=13&attrib=Sentinel-2%20cloudless%20%26%20EOX")
         maphost.configure(tuileries.Tuileries(""), 99)
         assert maphost.tile_store().source is None and maphost.photo_max_zoom() == 19
         assert mapview.page_url("3d", "dark").endswith("&interactive=1&photomax=19")  # no trails, no credit
@@ -313,11 +313,11 @@ def test_page_query_takes_the_relief_zoom_from_api_info(tmp_path, monkeypatch):
     try:
         maphost.configure(source(), 17, fetch_info=False)
         maphost._apply_info(tuileries.parse_info(b'{"version":"2","dem":{"version":2,"max_zoom":15}}'), tmp_path)
-        assert maphost.page_query() == "&photomax=17&trails=1&demmax=15"
+        assert maphost.page_query() == "&photomax=17&demmax=15"
         maphost.configure(None, 17)
         assert maphost.page_query() == "&photomax=17"  # without Tuileries: the page's own default
         maphost.configure(source(), 17, fetch_info=False)
-        assert maphost.page_query() == "&photomax=17&trails=1&demmax=13"  # a new server: its info read again
+        assert maphost.page_query() == "&photomax=17&demmax=13"  # a new server: its info read again
     finally:
         maphost.configure(None, tuileries.PHOTO_MAX_ZOOM_DEFAULT)
 

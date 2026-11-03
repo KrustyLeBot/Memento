@@ -153,11 +153,11 @@ def photo_max_zoom() -> int:
 
 
 def page_query() -> str:
-    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its trails, relief top
+    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its relief top
     zoom and credit."""
     query = f"&photomax={_photo_max_zoom}"
     if _source is not None:
-        query += f"&trails=1&demmax={_dem_max_zoom}" + (f"&attrib={quote(_attribution)}" if _attribution else "")
+        query += f"&demmax={_dem_max_zoom}" + (f"&attrib={quote(_attribution)}" if _attribution else "")
     return query
 
 

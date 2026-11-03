@@ -234,7 +234,7 @@ object MapConfig {
     fun pageQuery(): String {
         var q = "&photomax=$photoMaxZoom"
         if (tuileries != null) {
-            q += "&trails=1&demmax=$demMaxZoom"
+            q += "&demmax=$demMaxZoom"  // no trails: Tuileries dropped them
             if (attribution.isNotEmpty()) q += "&attrib=" + java.net.URLEncoder.encode(attribution, "UTF-8").replace("+", "%20")
         }
         return q
