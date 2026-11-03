@@ -137,7 +137,8 @@ object Analyzer {
             }
         }
 
-        val alt = smoothAltitude(kept)
+        // the smoothing window is in time: over stand-in times it would average points kilometres apart on a route
+        val alt = if (track.untimed) kept.map { it.alt } else smoothAltitude(kept)
         val speed = smoothSpeed(kept, seg, cum)
         val hasAlt = alt.any { it != null }
 
@@ -261,6 +262,15 @@ object Analyzer {
             medianIntervalSec = if (intervals.isEmpty()) 0.0 else intervals[intervals.size / 2],
             manufacturer = track.manufacturer,
         )
+        if (track.untimed) {
+            // stand-in times one second apart: on a file recorded at 1 Hz (most watches) the stops above still keep
+            // the jitter of standing still out of the distance, but their durations mean nothing and are not shown
+            return Analysis(
+                samples.map { it.copy(speed = 0.0) }, emptyList(), pauseStops, runs, climbs,
+                stats.copy(elapsedMs = 0, movingMs = 0, maxSpeed = 0.0, runMaxSpeed = 0.0, runAvgSpeed = 0.0),
+                quality.copy(medianIntervalSec = 0.0),
+            )
+        }
         return Analysis(samples, stops, pauseStops, runs, climbs, stats, quality)
     }
 
@@ -293,7 +303,8 @@ object Analyzer {
             if (prev != null) {
                 val dt = (p.time - prev.time) / 1000.0
                 if (dt <= 0) continue
-                if (Geo.distance(prev, p) / dt > MAX_SPEED) continue
+                // stand-in times: a route's points can be far apart, which is no GPS jump
+                if (!track.untimed && Geo.distance(prev, p) / dt > MAX_SPEED) continue
             }
             out.add(p)
         }

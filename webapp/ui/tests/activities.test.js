@@ -22,6 +22,8 @@ const base = { path: 'activities/x.md', id: 'x', title: 'x', conflict: false, st
 test('summary line: walk with pace, ski with descents', () => {
   assert.equal(summaryLine({ ...base, sport: 'walk', distance: 6000, ascent: 120 }), '6,00 km · 1 h 00 · 10:00 /km · ↑ 120 m');
   assert.equal(summaryLine({ ...base, sport: 'bike', distance: 36000 }), '36,00 km · 1 h 00 · 36,0 km/h');
+  // an untimed GPX: no duration, no speed
+  assert.equal(summaryLine({ ...base, sport: 'walk', distance: 6000, elapsed: 0, moving: 0, ascent: 120 }), '6,00 km · ↑ 120 m');
   assert.equal(summaryLine({ ...base, sport: 'ski', distance: 30000, runs: 6, drop: 3600, climbs: 6 }), '1 h 00 · 6 descentes · 3600 m · 6 montées');
   assert.equal(summaryLine({ ...base, sport: 'plain', moving: 0 }), '1 h 06');
 });

@@ -294,7 +294,8 @@ fun summaryLine(i: ActivityInfo): String {
         return parts.joinToString(" · ")
     }
     if (i.distance > 0) parts.add(Fmt.distance(i.distance))
-    parts.add(Fmt.duration(if (i.moving > 0) i.moving else i.elapsed))
+    // an untimed GPX (no <time> in the file) has no duration to show
+    if (i.moving > 0 || i.elapsed > 0) parts.add(Fmt.duration(if (i.moving > 0) i.moving else i.elapsed))
     if (i.sport.hasGps && i.moving > 0 && i.distance > 0) parts.add(Fmt.speedFor(i.sport, i.distance / i.moving))
     if (i.ascent > 0) parts.add("↑ ${i.ascent} m")
     return parts.joinToString(" · ")

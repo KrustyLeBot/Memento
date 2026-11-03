@@ -72,6 +72,10 @@ class Track:
     hr_avg: int | None = None
     hr_max: int | None = None
     manufacturer: int | None = None
+    # A GPX without any <time> (a Strava export of a route or of someone else's activity): the points carry
+    # stand-in times gpx.UNTIMED_STEP_MS apart, only to keep them in order. Distance, climb and the map are real;
+    # durations and speeds are not and are left at zero.
+    untimed: bool = False
 
     def copy(self, **changes) -> "Track":
         return replace(self, **changes)

@@ -1,4 +1,5 @@
-"""GPX reader. A new <trkseg> after the first is taken as a pause (the timer was stopped there)."""
+"""GPX reader. A new <trkseg> after the first is taken as a pause (the timer was stopped there). A file with no <time>
+at all is read as an untimed track (Track.untimed)."""
 from __future__ import annotations
 
 import re
@@ -15,6 +16,7 @@ _ELE = re.compile(r"<ele>\s*([^<\s]+)\s*</ele>")
 _TIME = re.compile(r"<time>\s*([^<\s]+)\s*</time>")
 _HR = re.compile(r"<(?:\w+:)?hr>\s*(\d+)\s*</(?:\w+:)?hr>")
 _TRK = re.compile(r"<trk\b[^>]*>")
+UNTIMED_STEP_MS = 1000
 
 
 def looks_like_gpx(text: str) -> bool:
@@ -69,6 +71,7 @@ def read(text: str) -> Track:
     if not looks_like_gpx(text):
         raise FitError("Ce n'est pas un fichier GPX")
     points: list[TrackPoint] = []
+    untimed: list[TrackPoint] = []
     seg_starts: list[int] = []
     seg_pos = [m.start() for m in _SEG.finditer(text)]
     seg_idx = -1
@@ -77,16 +80,14 @@ def read(text: str) -> Track:
             seg_idx += 1
             seg_starts.append(len(points))
         la, lo = _LAT.search(attrs), _LON.search(attrs)
-        tm = _TIME.search(inner)
-        if not (la and lo and tm):
+        if not (la and lo):
             continue
         try:
             lat, lon = float(la.group(1)), float(lo.group(1))
         except ValueError:
             continue
-        t = parse_time(tm.group(1))
-        if t is None:
-            continue
+        tm = _TIME.search(inner)
+        t = parse_time(tm.group(1)) if tm else None
         ele = _ELE.search(inner)
         hr = _HR.search(inner)
         alt = None
@@ -95,7 +96,15 @@ def read(text: str) -> Track:
                 alt = float(ele.group(1))
             except ValueError:
                 pass
+        if t is None:
+            untimed.append(TrackPoint(len(untimed) * UNTIMED_STEP_MS, lat, lon, alt, int(hr.group(1)) if hr else None, gps_alt=alt))
+            continue
         points.append(TrackPoint(t, lat, lon, alt, int(hr.group(1)) if hr else None, gps_alt=alt))
+    # timed points win: a file with a few untimed ones among them is a normal activity
+    if not points and untimed:
+        hrs = [q.hr for q in untimed if q.hr is not None]
+        return Track(points=untimed, name=_name(text), untimed=True,
+                     hr_avg=round(sum(hrs) / len(hrs)) if hrs else None, hr_max=max(hrs) if hrs else None)
     pauses = []
     for s in seg_starts[1:]:
         if 0 < s < len(points):

@@ -68,6 +68,12 @@ data class Track(
     val hrMax: Int? = null,
     /** Who wrote the file, when it says (FIT manufacturer code). */
     val manufacturer: Int? = null,
+    /**
+     * A GPX without any `<time>` (a Strava export of a route or of someone else's activity): the points carry
+     * stand-in times [Gpx.UNTIMED_STEP_MS] apart, only to keep them in order. Distance, climb and the map are real;
+     * durations and speeds are not and are left at zero.
+     */
+    val untimed: Boolean = false,
 )
 
 object Geo {

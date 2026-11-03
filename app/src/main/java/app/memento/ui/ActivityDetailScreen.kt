@@ -127,9 +127,10 @@ fun ActivityDetailScreen(vm: MainViewModel, detail: ActivityDetail) {
                     val items = ArrayList<Pair<String, String>>()
                     val moving = info.moving
                     if (info.distance > 0 || info.sport.hasGps) items.add("Distance" to Fmt.distance(info.distance))
-                    items.add("Durée" to Fmt.duration(info.elapsed))
+                    val untimed = detail.track?.untimed == true
+                    items.add("Durée" to if (untimed) "inconnue (fichier sans heures)" else Fmt.duration(info.elapsed))
                     if (info.sport.hasGps) {
-                        items.add("En mouvement" to Fmt.duration(moving))
+                        if (!untimed) items.add("En mouvement" to Fmt.duration(moving))
                         if (moving > 0 && info.distance > 0) {
                             items.add((if (info.sport == Sport.WALK) "Allure moyenne" else "Vitesse moyenne") to Fmt.speedFor(info.sport, info.distance / moving))
                         }

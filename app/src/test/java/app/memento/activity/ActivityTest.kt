@@ -101,6 +101,42 @@ class GpxTest {
         assertEquals(1, t.pauses.size)
         assertEquals((30 * 60 - 10) * 1000L + 500L, t.pauses[0].end - t.pauses[0].start)
     }
+    @Test
+    fun aGpxWithoutTimesIsAnUntimedTrackWithDistanceAndClimbButNoDuration() {
+        // a Strava export of a route: no <time>, points far apart (no GPS jump), the first one climbing
+        val pts = (0 until 20).joinToString("\n") { i ->
+            "<trkpt lat=\"${-21.0 - i * 0.005}\" lon=\"55.5\"><ele>${100 + i * 50}</ele></trkpt>"
+        }
+        val gpx = "<?xml version=\"1.0\"?><gpx creator=\"StravaGPX\"><trk><name>Diagonale</name><trkseg>$pts</trkseg></trk></gpx>"
+        val t = Gpx.read(gpx)
+        assertTrue(t.untimed)
+        assertEquals(20, t.points.size)
+        assertNull(t.startTime)
+        val a = Analyzer.analyze(t, Sport.WALK)
+        assertEquals(20, a.samples.size)  // ~556 m apart: kept, not dropped as jumps
+        assertEquals(19 * 0.005 * M_PER_DEG, a.stats.distance, 50.0)
+        assertTrue(a.stats.ascent > 900)
+        assertEquals(0L, a.stats.elapsedMs)
+        assertEquals(0L, a.stats.movingMs)
+        assertEquals(0.0, a.stats.maxSpeed, 0.0)
+        assertTrue(a.stops.isEmpty() && a.samples.all { it.speed == 0.0 })
+        val info = ActivityInfo.from(Sport.WALK, a, t, "attachments/x.gpx", untimedStart = T0)
+        assertEquals(T0, info.start)
+        assertEquals(0L, info.elapsed)
+        assertNull(info.vmax)
+    }
+
+    @Test
+    fun timedPointsWinOverAFewUntimedOnes() {
+        val gpx = """<gpx><trk><trkseg>
+<trkpt lat="45.0" lon="6.0"><time>2024-01-01T10:00:00Z</time></trkpt>
+<trkpt lat="45.0001" lon="6.0"></trkpt>
+<trkpt lat="45.0002" lon="6.0"><time>2024-01-01T10:00:10Z</time></trkpt>
+</trkseg></trk></gpx>"""
+        val t = Gpx.read(gpx)
+        assertTrue(!t.untimed)
+        assertEquals(2, t.points.size)
+    }
 }
 
 class AnalysisTest {

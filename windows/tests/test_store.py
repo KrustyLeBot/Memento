@@ -163,6 +163,39 @@ def test_importing_a_gpx_file(tmp_path):
     assert note.activity.ascent >= 100
 
 
+def test_a_gpx_without_times_is_imported_with_distance_and_climb_but_no_duration(tmp_path):
+    # a Strava export of a route: no <time>, points far apart (no GPS jump), climbing
+    from memento_win.core.analysis import analyze
+    from memento_win.core.store import Store
+    from memento_win.core.track import Sport
+    gpx = tmp_path / "route.gpx"
+    pts = "".join(f'<trkpt lat="{-21.0 - i * 0.005:.4f}" lon="55.5"><ele>{100 + i * 50}</ele></trkpt>' for i in range(20))
+    gpx.write_text(f'<?xml version="1.0"?><gpx creator="StravaGPX"><trk><name>Diagonale</name><trkseg>{pts}</trkseg></trk></gpx>',
+                   encoding="utf-8")
+    store = Store(tmp_path / "notes")
+    before = now_ms()
+    note = store.import_activity(gpx, None, Sport.WALK)
+    info = note.activity
+    assert note.title == "Diagonale" and info.start >= before
+    assert abs(info.distance - 19 * 0.005 * 111320) < 50 and info.ascent > 900
+    assert info.elapsed == 0 and info.moving == 0 and info.vmax is None
+    track = store.read_track(info)
+    assert track.untimed and len(track.points) == 20
+    a = analyze(track, Sport.WALK)
+    assert a.stops == [] and all(s.speed == 0 for s in a.samples)
+    # a new sport recomputes the figures: the date stays the import's
+    again = store.update_activity(note, note.title, "", Sport.BIKE)
+    assert again.activity.start == info.start and again.activity.sport == Sport.BIKE
+
+
+def test_timed_points_win_over_a_few_untimed_ones():
+    from memento_win.core import gpx
+    t = gpx.read('<gpx><trk><trkseg><trkpt lat="45.0" lon="6.0"><time>2024-01-01T10:00:00Z</time></trkpt>'
+                 '<trkpt lat="45.0001" lon="6.0"></trkpt>'
+                 '<trkpt lat="45.0002" lon="6.0"><time>2024-01-01T10:00:10Z</time></trkpt></trkseg></trk></gpx>')
+    assert not t.untimed and len(t.points) == 2
+
+
 def test_reimporting_the_same_recording_replaces_the_activity_and_keeps_the_photos(tmp_path):
     from pathlib import Path
     from memento_win.core.store import Store

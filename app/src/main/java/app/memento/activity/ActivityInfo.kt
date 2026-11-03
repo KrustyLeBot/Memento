@@ -74,11 +74,15 @@ data class ActivityInfo(
             )
         }
 
-        fun from(sport: Sport, a: Analysis, track: Track, file: String?, alt: String? = null): ActivityInfo {
+        /** [untimedStart]: the date of an untimed track, which has none (the import, or the date it already has). */
+        fun from(
+            sport: Sport, a: Analysis, track: Track, file: String?, alt: String? = null,
+            untimedStart: Long = System.currentTimeMillis(),
+        ): ActivityInfo {
             val s = a.stats
             return ActivityInfo(
                 sport = sport,
-                start = track.startTime ?: a.samples.firstOrNull()?.time ?: 0L,
+                start = if (track.untimed) untimedStart else track.startTime ?: a.samples.firstOrNull()?.time ?: 0L,
                 elapsed = s.elapsedMs / 1000,
                 moving = s.movingMs / 1000,
                 distance = s.distance,

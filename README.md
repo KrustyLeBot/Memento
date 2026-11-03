@@ -55,7 +55,9 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   `attachments/`, listed in `attachments:` with the photos. Everything shown (map, figures, charts) is recomputed
   from that file, so the analysis can improve without touching old activities.
 - Import: any FIT (Coros and other watches, Strava's "original file" export) or GPX file, one at a time, from the
-  "Importer FIT / GPX" button. Recording (Android only): GPS in a foreground service, a log written as it goes
+  "Importer FIT / GPX" button. A GPX without any time (Strava's GPX export of a route or of someone else's
+  activity) is imported too, dated the day of the import: map, distance, climb and profile, no duration or speed.
+  Recording (Android only): GPS in a foreground service, a log written as it goes
   (a crash loses nothing), turned into a FIT file when the activity ends. A time-only sport has no file; its
   distance can be typed afterwards (treadmill).
 - Analysis (same algorithms in Kotlin and Python, tested on synthetic tracks): GPS jumps dropped; **stops** found

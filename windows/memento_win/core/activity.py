@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 
 from .analysis import Analysis
@@ -72,11 +73,17 @@ class ActivityInfo:
         )
 
     @staticmethod
-    def from_analysis(sport: Sport, a: Analysis, track: Track, file: str | None, alt: str | None = None) -> "ActivityInfo":
+    def from_analysis(sport: Sport, a: Analysis, track: Track, file: str | None, alt: str | None = None,
+                      untimed_start: int | None = None) -> "ActivityInfo":
+        """untimed_start: the date of an untimed track, which has none (the import, or the date it already has)."""
         s = a.stats
         first = a.samples[0].time if a.samples else 0
+        if track.untimed:
+            start = untimed_start if untimed_start is not None else int(time.time() * 1000)
+        else:
+            start = track.start_time or first
         return ActivityInfo(
-            sport=sport, start=track.start_time or first, elapsed=s.elapsed_ms // 1000, moving=s.moving_ms // 1000,
+            sport=sport, start=start, elapsed=s.elapsed_ms // 1000, moving=s.moving_ms // 1000,
             distance=s.distance, ascent=round(s.ascent), descent=round(s.descent), hr=s.hr_avg,
             vmax=(s.run_max_speed if sport == Sport.SKI and s.runs > 0 else (s.max_speed or None)),
             runs=s.runs, file=file, alt=alt, climbs=s.climbs, drop=round(s.run_drop),

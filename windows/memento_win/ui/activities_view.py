@@ -62,7 +62,8 @@ def summary_line(i: act.ActivityInfo) -> str:
         return " · ".join(parts)
     if i.distance > 0:
         parts.append(act.fmt_distance(i.distance))
-    parts.append(act.fmt_duration(i.moving if i.moving > 0 else i.elapsed))
+    if i.moving > 0 or i.elapsed > 0:  # an untimed GPX (no <time> in the file) has no duration to show
+        parts.append(act.fmt_duration(i.moving if i.moving > 0 else i.elapsed))
     if i.sport.has_gps and i.moving > 0 and i.distance > 0:
         parts.append(act.fmt_speed_for(i.sport, i.distance / i.moving))
     if i.ascent > 0:
@@ -677,9 +678,12 @@ class ActivitiesScreen(QWidget):
         items = []
         if info.distance > 0 or info.sport.has_gps:
             items.append(("Distance", act.fmt_distance(info.distance)))
-        items.append(("Durée", act.fmt_duration(info.elapsed)))
+        # a GPX without any <time>: its points have stand-in times, the analysis keeps no duration
+        untimed = analysis is not None and len(analysis.samples) >= 2 and analysis.stats.elapsed_ms == 0
+        items.append(("Durée", "inconnue (fichier sans heures)" if untimed else act.fmt_duration(info.elapsed)))
         if info.sport.has_gps:
-            items.append(("En mouvement", act.fmt_duration(info.moving)))
+            if not untimed:
+                items.append(("En mouvement", act.fmt_duration(info.moving)))
             if info.moving > 0 and info.distance > 0:
                 items.append(("Allure moyenne" if info.sport == Sport.WALK else "Vitesse moyenne",
                               act.fmt_speed_for(info.sport, info.distance / info.moving)))

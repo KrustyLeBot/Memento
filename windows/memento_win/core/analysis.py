@@ -132,7 +132,8 @@ def clean(track: Track) -> list[TrackPoint]:
         if out:
             prev = out[-1]
             dt = (p.time - prev.time) / 1000
-            if dt <= 0 or distance_between(prev, p) / dt > MAX_SPEED:
+            # stand-in times: a route's points can be far apart, which is no GPS jump
+            if dt <= 0 or (not track.untimed and distance_between(prev, p) / dt > MAX_SPEED):
                 continue
         out.append(p)
     return out
@@ -180,7 +181,8 @@ def analyze(track: Track, sport: Sport) -> Analysis:
             cum[k] += distance_between(kept[k - 1], kept[k])
             moving += kept[k].time - kept[k - 1].time
 
-    alt = _smooth_altitude(kept)
+    # the smoothing window is in time: over stand-in times it would average points kilometres apart on a route
+    alt = [p.alt for p in kept] if track.untimed else _smooth_altitude(kept)
     speed = _smooth_speed(kept, seg, cum)
     has_alt = any(a is not None for a in alt)
 
@@ -314,6 +316,15 @@ def analyze(track: Track, sport: Sport) -> Analysis:
         points=total, dropped=total - n, has_altitude=has_alt, has_hr=bool(hrs) or track.hr_avg is not None,
         median_interval_sec=intervals[len(intervals) // 2] if intervals else 0.0, manufacturer=track.manufacturer,
     )
+    if track.untimed:
+        # stand-in times one second apart: on a file recorded at 1 Hz (most watches) the stops above still keep the
+        # jitter of standing still out of the distance, but their durations mean nothing and are not shown
+        stops = []
+        for s in samples:
+            s.speed = 0.0
+        stats.elapsed_ms = stats.moving_ms = 0
+        stats.max_speed = stats.run_max_speed = stats.run_avg_speed = 0.0
+        quality.median_interval_sec = 0.0
     return Analysis(samples, stops, pause_stops, runs, climbs, stats, quality)
 
 

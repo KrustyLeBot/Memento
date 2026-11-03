@@ -229,9 +229,10 @@
     const out = [];
     const gps = hasGps(a.sport);
     if (a.distance > 0 || gps) out.push(['Distance', fmtDistance(a.distance)]);
-    out.push(['Durée', fmtDuration(a.elapsed)]);
+    const untimed = !!an?.untimed;
+    out.push(['Durée', untimed ? 'inconnue (fichier sans heures)' : fmtDuration(a.elapsed)]);
     if (gps) {
-      out.push(['En mouvement', fmtDuration(a.moving)]);
+      if (!untimed) out.push(['En mouvement', fmtDuration(a.moving)]);
       if (a.moving > 0 && a.distance > 0) out.push([a.sport === 'walk' ? 'Allure moyenne' : 'Vitesse moyenne', fmtSpeedFor(a.sport, a.distance / a.moving)]);
       if (a.vmax && a.sport !== 'ski') out.push([a.sport === 'walk' ? 'Allure max' : 'Vitesse max', fmtSpeedFor(a.sport, a.vmax)]);
       if ((!an || an.quality.has_altitude) && a.sport !== 'ski') {

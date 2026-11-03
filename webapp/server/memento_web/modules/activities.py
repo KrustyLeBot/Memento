@@ -118,7 +118,9 @@ def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
     climbs = [{"start": s[c.first].time, "end": s[c.last].time, "distance": round(c.distance, 1), "gain": round(c.gain),
                "duration": c.duration_ms // 1000, "lat": s[c.first].lat, "lon": s[c.first].lon} for c in a.climbs]
     out = {"sport": sport.key, "stats": stats, "quality": quality, "stops": stops, "runs": runs, "climbs": climbs,
-           "chart": None, "map": None}
+           "chart": None, "map": None,
+           # a GPX without any <time>: its points have stand-in times, the analysis keeps no duration
+           "untimed": len(s) >= 2 and st.elapsed_ms == 0}
     if len(s) < 2:
         return out
     idx = _thin(len(s), CHART_POINTS)
@@ -629,7 +631,8 @@ class Activities:
             atomic.write_text(self.data.path(alt_path), elevation.encode(alts))
             sport = fresh.activity.sport
             filled = self.data.store.read_track(act.ActivityInfo(**{**fresh.activity.__dict__, "alt": alt_path}))
-            new_info = act.ActivityInfo.from_analysis(sport, analyze(filled, sport), filled, info.file, alt_path)
+            new_info = act.ActivityInfo.from_analysis(sport, analyze(filled, sport), filled, info.file, alt_path,
+                                                      untimed_start=info.start)
             attachments = fresh.attachments if alt_path in fresh.attachments else fresh.attachments + [alt_path]
             return self.data.store.save(fresh.copy(activity=new_info, attachments=attachments, updated=now_ms()))
 

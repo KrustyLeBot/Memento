@@ -61,7 +61,7 @@ export function summaryLine(/** @type {ActivitySummary} */ a) {
     return parts.join(' · ');
   }
   if (a.distance > 0) parts.push(fmtDistance(a.distance));
-  parts.push(time);
+  if (a.moving > 0 || a.elapsed > 0) parts.push(time);  // an untimed GPX (no <time> in the file) has no duration
   if (hasGps(a.sport) && a.moving > 0 && a.distance > 0) parts.push(fmtSpeedFor(a.sport, a.distance / a.moving));
   if (a.ascent > 0) parts.push(`↑ ${a.ascent} m`);
   return parts.join(' · ');

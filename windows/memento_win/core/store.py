@@ -303,7 +303,8 @@ class Store:
         relative = (info.file.rsplit(".", 1)[0]) + ".alt"
         atomic.write_text(self.file_path(relative), elevation.encode(alts))
         filled = elevation.apply(track, alts)
-        new_info = ActivityInfo.from_analysis(info.sport, analyze(filled, info.sport), filled, info.file, relative)
+        new_info = ActivityInfo.from_analysis(info.sport, analyze(filled, info.sport), filled, info.file, relative,
+                                              untimed_start=info.start)
         attachments = note.attachments if relative in note.attachments else note.attachments + [relative]
         return self.save(note.copy(activity=new_info, attachments=attachments, updated=now_ms()))
 
@@ -336,7 +337,8 @@ class Store:
         if info is not None and info.sport != sport:
             if info.file:
                 track = self.read_track(info)
-                info = ActivityInfo.from_analysis(sport, analyze(track, sport), track, info.file, info.alt)
+                info = ActivityInfo.from_analysis(sport, analyze(track, sport), track, info.file, info.alt,
+                                                  untimed_start=info.start)
             else:
                 info = ActivityInfo(**{**info.__dict__, "sport": sport})
         return self.save(note.copy(title=title.strip() or note.title, body=description.strip(), activity=info, updated=now_ms()))

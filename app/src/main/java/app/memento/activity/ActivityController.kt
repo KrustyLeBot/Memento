@@ -273,7 +273,7 @@ class ActivityController(
                 val sidecar = file.substringBeforeLast('.') + ".alt"
                 repo.fs.writeText(sidecar, Elevation.encode(alts))
                 val filled = Elevation.apply(track, alts)
-                val newInfo = ActivityInfo.from(info.sport, Analyzer.analyze(filled, info.sport), filled, file, sidecar)
+                val newInfo = ActivityInfo.from(info.sport, Analyzer.analyze(filled, info.sport), filled, file, sidecar, untimedStart = info.start)
                 LookUp(
                     repo.save(note.copy(activity = newInfo, attachments = if (sidecar in note.attachments) note.attachments else note.attachments + sidecar, updated = System.currentTimeMillis())),
                     Outcome.DONE, null,
@@ -367,7 +367,7 @@ class ActivityController(
                 val current = detail?.takeIf { it.note.path == note.path }
                 if (info != null && info.sport != sport) {
                     val track = current?.track
-                    info = if (track != null) ActivityInfo.from(sport, Analyzer.analyze(track, sport), track, info.file, info.alt) else info.copy(sport = sport)
+                    info = if (track != null) ActivityInfo.from(sport, Analyzer.analyze(track, sport), track, info.file, info.alt, untimedStart = info.start) else info.copy(sport = sport)
                 }
                 repo.save(note.copy(title = title.trim().ifEmpty { note.title }, body = description.trim(), activity = info, updated = System.currentTimeMillis()))
             }
