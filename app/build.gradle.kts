@@ -67,6 +67,8 @@ android {
         // Robolectric renders the screenshot tests (ui/screenshots) with the real resources.
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            // the default 512 MB ran out on CI once the long-track tests joined the tile-plan ones in the same JVM
+            it.maxHeapSize = "2g"
             // ScreenshotAudit only runs on demand: ./gradlew testDebugUnitTest -PuiAudit=<output dir>
             val audit = project.findProperty("uiAudit")?.toString()
             if (audit == null) it.exclude("**/screenshots/**")
