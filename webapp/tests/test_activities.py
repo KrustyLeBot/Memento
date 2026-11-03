@@ -329,8 +329,11 @@ def test_a_conflict_copy_is_opened_by_its_file_name(client, data_dir):
     assert client.get("/api/activities/..%2Fcourses-abc123.md").status_code in (400, 404)
 
 
-def test_altitude_completion_is_explicit_and_uses_the_terrain_model(client, data_dir):
+@pytest.mark.parametrize("apart", [False, True])
+def test_altitude_completion_is_explicit_and_uses_the_terrain_model(client, data_dir, apart):
     activities = client.app.state.activities
+    if apart:  # the track read in child processes, as a long one is
+        activities.subprocess_bytes = 0
     calls = []
     activities.elevation_get, activities.elevation_pause = fake_elevation(calls), lambda: None
     flat = tracks.walk(T0, 1500, altitude=False).encode()
@@ -362,6 +365,14 @@ def test_a_terrain_service_failure_imports_without_altitude(client):
     result = import_file(client, tracks.walk(T0, 600, altitude=False).encode(), "f.gpx", sport="walk", altitude=True)
     assert "hors ligne" in result["warning"]
     assert client.get(f"/api/activities/{result['id']}").json()["activity"]["alt"] is None
+
+
+def test_a_thinned_chart_draws_the_mean_around_each_point_not_one_sample():
+    from memento_web.modules.activities import _bucket_means
+    assert _bucket_means([1, 2, 3], [0, 1, 2]) == [1, 2, 3]  # nothing thinned: as is
+    means = _bucket_means([0.0, 10.0] * 50 + [None] * 10, [0, 50, 109])
+    assert means == [5.0, 5.0, 5.0]  # a comb's mean, Nones skipped
+    assert _bucket_means([None, None, 4.0], [0, 2]) == [None, 4.0]
 
 
 @pytest.mark.parametrize("path", ["/api/activities/inconnu", "/api/activities/inconnu/analysis",

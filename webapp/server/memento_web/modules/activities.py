@@ -52,7 +52,7 @@ from memento_win.core.store import default_title  # noqa: E402
 from memento_win.core.track import TrackPoint  # noqa: E402
 
 # Bump when the analysis JSON changes shape: cached files of another version are never read.
-ANALYSIS_VERSION = 2
+ANALYSIS_VERSION = 3
 CHART_POINTS = 400   # charts: enough for a smooth curve and a precise hover on a wide screen
 MAP_POINTS = 5000    # the map: as the Android and Windows hosts send it
 GPS_SPORTS = [Sport.WALK, Sport.BIKE, Sport.EBIKE, Sport.SKI, Sport.GPS]
@@ -104,6 +104,22 @@ def _thin(n: int, limit: int) -> list[int]:
     return mapdata.thin_indices(n, limit)
 
 
+def _bucket_means(values: list, idx: list[int]) -> list:
+    """For each kept index, the mean of the values (None skipped) from halfway to the previous kept index to
+    halfway to the next: every sample counts once. Kept as is when nothing was thinned."""
+    total, count = [0.0], [0]
+    for v in values:
+        total.append(total[-1] + (v or 0.0))
+        count.append(count[-1] + (v is not None))
+    out = []
+    for k, i in enumerate(idx):
+        lo = 0 if k == 0 else (idx[k - 1] + i) // 2 + 1
+        hi = len(values) if k == len(idx) - 1 else (i + idx[k + 1]) // 2 + 1
+        n = count[hi] - count[lo]
+        out.append((total[hi] - total[lo]) / n if n else None)
+    return out
+
+
 def dumps(value) -> bytes:
     return json.dumps(value, separators=(",", ":")).encode()
 
@@ -142,14 +158,19 @@ def analysis_json(a: Analysis, sport: Sport, alt_source: str | None) -> dict:
     idx = _thin(len(s), CHART_POINTS)
     pts = [s[i] for i in idx]
     walk = sport == Sport.WALK
+    # speed and heart rate: the mean around each drawn point. One sample in 500 (a 60-hour race) caught whatever
+    # instant it fell on, a stop or a sprint, and drew a comb instead of a curve.
+    speeds = _bucket_means([p.speed for p in s], idx)
+    hrs = _bucket_means([p.hr for p in s], idx)
     out["chart"] = {
         "dist": _r((p.dist for p in pts), 1),
         "lon": _r((p.lon for p in pts), 6), "lat": _r((p.lat for p in pts), 6),
         "alt": _r((p.alt for p in pts), 1) if a.quality.has_altitude and all(p.alt is not None for p in pts) else None,
-        "speed": _r((p.speed for p in pts), 2) if st.max_speed > 0 else None,
+        "speed": _r(speeds, 2) if st.max_speed > 0 else None,
         # walking: pace in s/km, capped (core activity.chart_pace) so a stop does not flatten the curve
-        "pace": _r((act.chart_pace(p.speed) for p in pts), 1) if walk and st.max_speed > 0 else None,
-        "hr": [p.hr for p in pts] if a.quality.has_hr and sum(p.hr is not None for p in pts) >= 2 else None,
+        "pace": _r((act.chart_pace(v) for v in speeds), 1) if walk and st.max_speed > 0 else None,
+        "hr": [None if v is None else round(v) for v in hrs]
+        if a.quality.has_hr and sum(v is not None for v in hrs) >= 2 else None,
     }
     idx = _thin(len(s), MAP_POINTS)
     pts = [s[i] for i in idx]
