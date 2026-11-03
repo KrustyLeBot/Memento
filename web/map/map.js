@@ -307,13 +307,24 @@
     };
   }
 
+  // A laptop's integrated GPU falls under 30 fps in 3D at the screen's full pixel density (1.5 at 150 % scaling draws
+  // 2.25 times the pixels of 1): the page times its own frames while the map moves and, when too slow, draws fewer
+  // pixels (2, then 1.5, then 1), remembered for the next visit. A fast GPU never gets there.
+  const RATIO_KEY = 'smap-pixel-ratio', SLOW_FRAME_MS = 28, FRAME_SAMPLES = 40;
+  const nativeRatio = Math.min(2, window.devicePixelRatio || 1);
+  let ratio = nativeRatio;
+  try {
+    const kept = parseFloat(localStorage.getItem(RATIO_KEY));
+    if (kept >= 1 && kept < ratio) ratio = kept;
+  } catch (e) { /* no storage (private window): measured again */ }
+
   document.documentElement.dataset.theme = theme;
   let map;
   try {
     map = new maplibregl.Map({
       container: 'map', style: style(), center: [2.5, 46.5], zoom: 5, pitch: 0,
       maxPitch: 80, fadeDuration: 0, maxTileCacheSize: 120, antialias: false, refreshExpiredTiles: false,
-      pixelRatio: Math.min(2, window.devicePixelRatio || 1), renderWorldCopies: false, validateStyle: false,
+      pixelRatio: ratio, renderWorldCopies: false, validateStyle: false,
       interactive, attributionControl: { compact: true, customAttribution: ATTRIBUTION },
     });
   } catch (e) {
@@ -323,6 +334,22 @@
     report(`map: ${e && e.message ? e.message : e}`);
     return;
   }
+  let frameGaps = [], lastFrame = 0;
+  map.on('render', () => {
+    const now = performance.now(), gap = now - lastFrame;
+    lastFrame = now;
+    // only frames drawn back to back while the camera moves: an idle map renders once in a while
+    if (ratio <= 1 || !map.isMoving() || gap > 400) return;
+    frameGaps.push(gap);
+    if (frameGaps.length < FRAME_SAMPLES) return;
+    const median = frameGaps.sort((a, b) => a - b)[FRAME_SAMPLES >> 1];
+    frameGaps = [];
+    if (median <= SLOW_FRAME_MS) return;
+    ratio = Math.max(1, ratio - 0.5);
+    map.setPixelRatio(ratio);
+    try { localStorage.setItem(RATIO_KEY, String(ratio)); } catch (e) { /* measured again next time */ }
+    console.info(`smap: ${Math.round(median)} ms a frame, now drawing at pixel ratio ${ratio}`);
+  });
   // Added on demand: also after a style rebuild, which drops images added earlier.
   map.on('styleimagemissing', (e) => {
     if (e.id === 'smap-arrow' && !map.hasImage('smap-arrow')) map.addImage('smap-arrow', arrowImage(), { pixelRatio: 2 });
@@ -753,16 +780,16 @@
     declutterFrame = requestAnimationFrame(() => {
       declutterFrame = 0;
       const box = map.getContainer().getBoundingClientRect();
+      // every position read first, then every visibility written: interleaved, each read waits for a fresh layout
+      const rects = peakMarkers.map((m) => m.getElement().querySelector('.label').getBoundingClientRect());
       const kept = [];
-      for (const m of peakMarkers) {
-        const root = m.getElement();
-        root.style.visibility = 'visible';
-        const r = root.querySelector('.label').getBoundingClientRect();
+      peakMarkers.forEach((m, i) => {
+        const r = rects[i];
         const off = r.top < box.top + TOP_RESERVED || r.left < box.left || r.right > box.right || r.bottom > box.bottom;
         const hit = kept.some((k) => !(r.right + 4 < k.left || r.left - 4 > k.right || r.bottom + 4 < k.top || r.top - 4 > k.bottom));
-        if (off || hit) root.style.visibility = 'hidden';
-        else kept.push(r);
-      }
+        m.getElement().style.visibility = off || hit ? 'hidden' : 'visible';
+        if (!off && !hit) kept.push(r);
+      });
     });
   }
   map.on('move', declutter);
