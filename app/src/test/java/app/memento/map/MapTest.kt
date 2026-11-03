@@ -433,6 +433,22 @@ class JsonTest {
         assertEquals("0", Json.num(-0.0000001))
     }
 
+    @Test
+    fun fastNumbersMatchTheExactRounding() {
+        val r = java.util.Random(7)
+        val values = ArrayList<Double>()
+        repeat(200_000) {
+            values.add((r.nextDouble() - 0.5) * 360)
+            values.add(r.nextDouble() * 10_000)
+            values.add((r.nextInt(2_000_000) - 1_000_000) / 1e6) // decimal values, the ones near ties after scaling
+            values.add(r.nextInt(100_000) / 64.0) // exact binary ties
+        }
+        values.addAll(listOf(0.0, -0.0, 0.5, -0.5, 1.5, 2.5, 0.0078125, -0.0078125, 0.0000005, 1e12, -1e12, 123456789.123, 5e-7, -5e-7))
+        for (v in values) for (d in intArrayOf(0, 1, 2, 6, 7, 8)) {
+            assertEquals("$v at $d", Json.exactNum(v, d), Json.num(v, d))
+        }
+    }
+
     @Test(expected = Json.JsonException::class)
     fun rejectsTruncated() {
         Json.parse("""{"a":[1,2""")

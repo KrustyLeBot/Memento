@@ -94,13 +94,19 @@ class RouteProgress(val route: Route) {
 
     private class Hit(val seg: Int, val t: Double, val dist: Double, val along: Double)
 
+    /** The legs (see [scan]) of some segments and the nearest of them. */
+    private class Scan(val legs: List<Hit>, val nearest: Hit?)
+
     fun update(lat: Double, lon: Double): RouteStatus {
         if (route.size < 2) return status
-        val hit = if (lastSeg < 0) firstMatch(lat, lon) else windowMatch(lat, lon) ?: rejoin(lat, lon)
+        // one pass over the whole route at most per fix: it runs on the main thread, once a second, on routes of 200 000 points
+        var whole: Scan? = null
+        fun whole(): Scan = whole ?: scan(0, route.size - 2, lat, lon).also { whole = it }
+        val hit = if (lastSeg < 0) firstMatch(whole()) else windowMatch(lat, lon) ?: rejoin(whole())
         if (hit == null || hit.dist > OFF_ROUTE_M) {
             offFixes++
             val off = status.offRoute || offFixes >= OFF_ROUTE_FIXES
-            status = status.copy(offRoute = off, distanceToRoute = hit?.dist ?: nearestDistance(lat, lon))
+            status = status.copy(offRoute = off, distanceToRoute = hit?.dist ?: whole().nearest?.dist ?: Double.NaN)
             return status
         }
         offFixes = 0
@@ -118,10 +124,7 @@ class RouteProgress(val route: Route) {
     }
 
     /** The first position: the earliest point of the route within reach, so a loop starts at its start. */
-    private fun firstMatch(lat: Double, lon: Double): Hit? {
-        val hits = (0 until route.size - 1).map { project(it, lat, lon) }
-        return legs(hits).minByOrNull { it.along } ?: hits.minByOrNull { it.dist }
-    }
+    private fun firstMatch(all: Scan): Hit? = all.legs.minByOrNull { it.along } ?: all.nearest
 
     /**
      * Segments from [BACK_WINDOW_M] behind to [FORWARD_WINDOW_M] ahead of the last match. Each leg of the
@@ -135,46 +138,119 @@ class RouteProgress(val route: Route) {
         while (from > 0 && c[from] > lastAlong - BACK_WINDOW_M) from--
         var to = lastSeg
         while (to < route.size - 2 && c[to + 1] < lastAlong + FORWARD_WINDOW_M) to++
-        val hits = (from..to).map { project(it, lat, lon) }
-        val best = hits.minByOrNull { it.dist } ?: return null
+        val window = scan(from, to, lat, lon)
+        val best = window.nearest ?: return null
         if (best.dist > OFF_ROUTE_M) return null
-        return legs(hits).filter { it.dist <= best.dist + AMBIGUITY_M }.minByOrNull { orderCost(it.along) } ?: best
+        return window.legs.filter { it.dist <= best.dist + AMBIGUITY_M }.minByOrNull { orderCost(it.along) } ?: best
     }
 
-    /** Where each leg passes closest: local minima of the distance, within reach. */
-    private fun legs(hits: List<Hit>): List<Hit> = hits.filterIndexed { k, h ->
-        h.dist <= OFF_ROUTE_M && (k == 0 || h.dist <= hits[k - 1].dist) && (k == hits.lastIndex || h.dist <= hits[k + 1].dist)
+    /**
+     * Segments [from]..[to] in one pass that allocates only for what it returns: where each leg passes closest
+     * (local minima of the distance, within reach) and the first nearest segment.
+     */
+    private fun scan(from: Int, to: Int, lat: Double, lon: Double): Scan {
+        val k = cos(Math.toRadians(lat)) * MapSquare.M_PER_DEG_LON
+        val legs = ArrayList<Hit>()
+        var best = -1
+        var bestDist = 0.0
+        // a segment whose box is out of reach and farther than the nearest so far can be neither a leg nor the nearest:
+        // its box's distance stands in for its own (a neighbour within reach compares the same against either)
+        var chunk = -1
+        var chunkBound = 0.0
+        fun dist(i: Int): Double {
+            if (best >= 0) {
+                // the same test for a whole run of segments first: far from the route, it is all a fix costs
+                val c = i / CHUNK
+                if (c != chunk) { chunk = c; chunkBound = chunkDistance(c, lat, lon, k) }
+                if (chunkBound > OFF_ROUTE_M + 1e-6 && chunkBound > bestDist + 1e-6) return chunkBound
+                val bound = boxDistance(i, lat, lon, k)
+                if (bound > OFF_ROUTE_M + 1e-6 && bound > bestDist + 1e-6) return bound
+            }
+            return distance(i, lat, lon, k)
+        }
+        var prev = 0.0
+        var cur = dist(from)
+        for (i in from..to) {
+            val next = if (i < to) dist(i + 1) else 0.0
+            if (best < 0 || cur < bestDist) { best = i; bestDist = cur }
+            if (cur <= OFF_ROUTE_M && (i == from || cur <= prev) && (i == to || cur <= next)) legs.add(project(i, lat, lon, k))
+            prev = cur
+            cur = next
+        }
+        return Scan(legs, if (best >= 0) project(best, lat, lon, k) else null)
     }
 
     private fun orderCost(along: Double) = if (along >= lastAlong) along - lastAlong else (lastAlong - along) * BACKWARD_COST
 
     /** Back on the route after a detour or a pause: the first reachable segment ahead, else the earliest one. */
-    private fun rejoin(lat: Double, lon: Double): Hit? {
-        val close = legs((0 until route.size - 1).map { project(it, lat, lon) })
+    private fun rejoin(all: Scan): Hit? {
+        val close = all.legs
         if (close.isEmpty()) return null
         return close.filter { it.along >= lastAlong - BACK_WINDOW_M }.minByOrNull { it.along } ?: close.minByOrNull { it.along }
     }
 
-    private fun nearestDistance(lat: Double, lon: Double): Double =
-        (0 until route.size - 1).minOfOrNull { project(it, lat, lon).dist } ?: Double.NaN
-
-    /** Projection on segment [i] in a local flat frame (metres), fine at segment scale. */
-    private fun project(i: Int, lat: Double, lon: Double): Hit {
+    /** Position on segment [i] (0..1) in a local flat frame (metres), fine at segment scale; [k]: metres per degree of longitude. */
+    private fun param(i: Int, lat: Double, lon: Double, k: Double): Double {
         val r = route
-        val k = cos(Math.toRadians(lat)) * MapSquare.M_PER_DEG_LON
         val ax = (r.lons[i] - lon) * k
         val ay = (r.lats[i] - lat) * MapSquare.M_PER_DEG_LAT
-        val bx = (r.lons[i + 1] - lon) * k
-        val by = (r.lats[i + 1] - lat) * MapSquare.M_PER_DEG_LAT
-        val dx = bx - ax
-        val dy = by - ay
+        val dx = (r.lons[i + 1] - lon) * k - ax
+        val dy = (r.lats[i + 1] - lat) * MapSquare.M_PER_DEG_LAT - ay
         val len2 = dx * dx + dy * dy
-        val t = if (len2 < 1e-9) 0.0 else (-(ax * dx + ay * dy) / len2).coerceIn(0.0, 1.0)
-        val px = ax + dx * t
-        val py = ay + dy * t
-        val dist = kotlin.math.sqrt(px * px + py * py)
-        val segLen = r.cumDist[i + 1] - r.cumDist[i]
-        return Hit(i, t, dist, r.cumDist[i] + segLen * t)
+        return if (len2 < 1e-9) 0.0 else (-(ax * dx + ay * dy) / len2).coerceIn(0.0, 1.0)
+    }
+
+    /** Bounding boxes (min lat, max lat, min lon, max lon) of the segments [CHUNK] by [CHUNK]. */
+    private val chunks: DoubleArray = run {
+        val segs = (route.size - 1).coerceAtLeast(0)
+        val count = (segs + CHUNK - 1) / CHUNK
+        DoubleArray(count * 4).also { b ->
+            for (c in 0 until count) {
+                var minLat = Double.MAX_VALUE; var maxLat = -Double.MAX_VALUE
+                var minLon = Double.MAX_VALUE; var maxLon = -Double.MAX_VALUE
+                for (p in c * CHUNK..minOf((c + 1) * CHUNK, route.size - 1)) {
+                    minLat = minOf(minLat, route.lats[p]); maxLat = maxOf(maxLat, route.lats[p])
+                    minLon = minOf(minLon, route.lons[p]); maxLon = maxOf(maxLon, route.lons[p])
+                }
+                b[c * 4] = minLat; b[c * 4 + 1] = maxLat; b[c * 4 + 2] = minLon; b[c * 4 + 3] = maxLon
+            }
+        }
+    }
+
+    /** Distance to the box of chunk [c]: never more than the distance to any of its segments. */
+    private fun chunkDistance(c: Int, lat: Double, lon: Double, k: Double): Double {
+        val b = chunks
+        val gx = if (b[c * 4 + 2] > lon) (b[c * 4 + 2] - lon) * k else if (b[c * 4 + 3] < lon) (lon - b[c * 4 + 3]) * k else 0.0
+        val gy = if (b[c * 4] > lat) (b[c * 4] - lat) * MapSquare.M_PER_DEG_LAT else if (b[c * 4 + 1] < lat) (lat - b[c * 4 + 1]) * MapSquare.M_PER_DEG_LAT else 0.0
+        return maxOf(gx, gy)
+    }
+
+    /** Distance to the bounding box of segment [i]: never more than the distance to the segment itself. */
+    private fun boxDistance(i: Int, lat: Double, lon: Double, k: Double): Double {
+        val r = route
+        val ax = (r.lons[i] - lon) * k
+        val bx = (r.lons[i + 1] - lon) * k
+        val ay = (r.lats[i] - lat) * MapSquare.M_PER_DEG_LAT
+        val by = (r.lats[i + 1] - lat) * MapSquare.M_PER_DEG_LAT
+        val gx = if (ax > 0 && bx > 0) minOf(ax, bx) else if (ax < 0 && bx < 0) -maxOf(ax, bx) else 0.0
+        val gy = if (ay > 0 && by > 0) minOf(ay, by) else if (ay < 0 && by < 0) -maxOf(ay, by) else 0.0
+        return maxOf(gx, gy)
+    }
+
+    private fun distance(i: Int, lat: Double, lon: Double, k: Double): Double {
+        val r = route
+        val t = param(i, lat, lon, k)
+        val ax = (r.lons[i] - lon) * k
+        val ay = (r.lats[i] - lat) * MapSquare.M_PER_DEG_LAT
+        val px = ax + ((r.lons[i + 1] - lon) * k - ax) * t
+        val py = ay + ((r.lats[i + 1] - lat) * MapSquare.M_PER_DEG_LAT - ay) * t
+        return kotlin.math.sqrt(px * px + py * py)
+    }
+
+    private fun project(i: Int, lat: Double, lon: Double, k: Double): Hit {
+        val segLen = route.cumDist[i + 1] - route.cumDist[i]
+        val t = param(i, lat, lon, k)
+        return Hit(i, t, distance(i, lat, lon, k), route.cumDist[i] + segLen * t)
     }
 
     companion object {
@@ -184,6 +260,7 @@ class RouteProgress(val route: Route) {
         const val FORWARD_WINDOW_M = 2000.0
         const val AMBIGUITY_M = 20.0
         const val BACKWARD_COST = 3.0
+        private const val CHUNK = 64
 
         /** Estimated arrival in epoch ms at the moving average speed, or null when not moving yet. */
         fun eta(now: Long, remaining: Double, movingAvgSpeed: Double): Long? {

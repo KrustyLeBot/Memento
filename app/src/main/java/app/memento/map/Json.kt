@@ -36,8 +36,46 @@ object Json {
     /** A number as JSON: no exponent, no trailing ".0", [decimals] at most. */
     fun num(v: Double, decimals: Int = 6): String {
         if (v.isNaN() || v.isInfinite()) return "null"
+        return fastNum(v, decimals) ?: exactNum(v, decimals)
+    }
+
+    /** The reference rounding (the exact binary value, half up), kept for near ties: several times slower. */
+    internal fun exactNum(v: Double, decimals: Int): String {
         val s = java.math.BigDecimal(v).setScale(decimals, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
         return if (s == "-0") "0" else s
+    }
+
+    private val POW10 = LongArray(10).also { p -> p[0] = 1; for (i in 1 until p.size) p[i] = p[i - 1] * 10 }
+
+    /**
+     * [exactNum]'s digits without a BigDecimal (a 200 000-point track is a million numbers), or null when the value is
+     * too large or so close to a tie that the double product could round the other way.
+     */
+    private fun fastNum(v: Double, decimals: Int): String? {
+        if (decimals !in 0 until POW10.size) return null
+        val scaled = kotlin.math.abs(v) * POW10[decimals]
+        // below 1e9 the product is off by less than 2e-7: only a fraction within 1e-6 of one half can round differently
+        if (scaled >= 1e9) return null
+        val whole = kotlin.math.floor(scaled)
+        val frac = scaled - whole
+        if (kotlin.math.abs(frac - 0.5) < 1e-6) return null
+        val units = whole.toLong() + if (frac > 0.5) 1 else 0
+        if (units == 0L) return "0"
+        val p = POW10[decimals]
+        val intPart = units / p
+        var fracPart = units % p
+        val sb = StringBuilder(24)
+        if (v < 0) sb.append('-')
+        sb.append(intPart)
+        if (fracPart != 0L) {
+            var digits = decimals
+            while (fracPart % 10 == 0L) { fracPart /= 10; digits-- }
+            sb.append('.')
+            val f = fracPart.toString()
+            for (i in f.length until digits) sb.append('0')
+            sb.append(f)
+        }
+        return sb.toString()
     }
 
     private class Parser(val s: String) {
