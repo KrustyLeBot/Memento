@@ -53,6 +53,7 @@ import app.memento.record.Recorder
 import app.memento.record.RecordingService
 import app.memento.map.NetState
 import app.memento.map.OfflinePacks
+import app.memento.record.StartRoute
 import app.memento.record.StartZone
 import app.memento.record.StartZones
 import app.memento.suite.ConfirmDialog
@@ -82,7 +83,7 @@ fun RecordScreen(vm: MainViewModel) {
             showMap = true
             val pack = f.packId?.let { id -> OfflinePacks.packs.value.firstOrNull { it.id == id } }
             when {
-                pack == null -> prepareRoute(vm, scope, f.route) { if (Recorder.active) Recorder.routePack = it }
+                pack == null -> startRoutePack(vm, scope, f.route, vm.settings.zone3d)
                 !pack.complete && !OfflinePacks.isRunning(pack.id) -> try {
                     OfflinePacks.resume(pack.id)
                 } catch (e: OfflinePacks.PackException) {
@@ -251,6 +252,7 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
             color = if (l.paused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
         )
         if (l.sport.hasGps && l.route == null && !l.finished) ZoneQuestion()
+        if (l.sport.hasGps && l.route != null && !l.finished) RouteQuestionCard()
         if (l.sport.hasGps) {
             if (l.route != null) {
                 RouteFigures(l, elapsed)
@@ -302,21 +304,34 @@ private fun LiveView(vm: MainViewModel, l: Live, showMap: Boolean, setMap: (Bool
 @Composable
 private fun ZoneQuestion() {
     val zone by StartZones.state.collectAsState()
-    val cellular by NetState.cellular.collectAsState()
     val z = zone?.takeIf { it.answer == StartZone.Answer.PENDING } ?: return
+    ThreeDQuestion("Télécharger aussi la 3D hors ligne autour de toi ?", z.extraBytes, StartZones::answer)
+}
+
+/** The same question for a route not prepared before the start: its 2D pack is on its way. */
+@Composable
+private fun RouteQuestionCard() {
+    val q by StartRoute.state.collectAsState()
+    val r = q ?: return
+    ThreeDQuestion("Télécharger aussi la 3D hors ligne le long du parcours ?", r.extraBytes, StartRoute::answer)
+}
+
+@Composable
+private fun ThreeDQuestion(title: String, extraBytes: Long, onAnswer: (Boolean) -> Unit) {
+    val cellular by NetState.cellular.collectAsState()
     androidx.compose.material3.Card(
         colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Télécharger aussi la 3D hors ligne autour de toi ?", fontWeight = FontWeight.SemiBold)
+            Text(title, fontWeight = FontWeight.SemiBold)
             Text(
-                "Environ ${(z.extraBytes + 500_000) / 1_000_000} Mo" + (if (cellular) " en 4G/5G" else "") + ", gardée 24 h",
+                "Environ ${(extraBytes + 500_000) / 1_000_000} Mo" + (if (cellular) " en 4G/5G" else "") + ", gardée 24 h",
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { StartZones.answer(true) }) { Text("Oui") }
-                OutlinedButton(onClick = { StartZones.answer(false) }) { Text("Non") }
+                Button(onClick = { onAnswer(true) }) { Text("Oui") }
+                OutlinedButton(onClick = { onAnswer(false) }) { Text("Non") }
             }
         }
     }

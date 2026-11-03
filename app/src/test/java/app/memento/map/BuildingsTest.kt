@@ -133,7 +133,7 @@ class BuildingsTest {
         val zone = TilePlans.forZone3d(6.5, 45.5)
         assertEquals(Buildings.MAX_PACK_CELLS, zone.buildingCells.size)
         assertTrue(Pack.KIND_BUILDINGS in Zones.KINDS_3D)
-        val pack = Pack("z-1", "Zone", 0, zone.square, zone.orthoZooms.last, Zones.KINDS_3D, 0, false, false, relief = zone.demSquare)
+        val pack = Pack("z-1", "Zone", 0, zone.square, zone.orthoZooms.last, Zones.KINDS_3D, 0, false, false, corridor = zone.corridor, relief = zone.demSquare)
         assertEquals(zone.tileCount, Pack.parse(pack.toJson()).plan().tileCount)
         assertTrue(pack.copy(kinds = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM)).plan().buildingCells.isEmpty()) // packs from before
     }

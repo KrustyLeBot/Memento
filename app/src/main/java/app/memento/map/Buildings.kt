@@ -68,7 +68,8 @@ object Buildings {
             all.forEach { x, y -> out[i++] = Corridors.pack(x, y) }
             return out.also { it.sort() }
         }
-        val pool = if (corridor != null && corridor.lons.isNotEmpty()) {
+        // a zone's one-point corridor (its high-definition disc) is no line to follow: nearest the start, as without
+        val pool = if (corridor != null && corridor.lons.size > 1) {
             Corridors.select(corridor.lons, corridor.lats, PACK_CORRIDOR_M, Z).filter {
                 Corridors.x(it) in all.x0..all.x1 && Corridors.y(it) in all.y0..all.y1
             }

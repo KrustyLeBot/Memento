@@ -37,9 +37,29 @@ class ZoneTest {
         assertEquals(40_000.0, p.square.heightM, 1.0)
         assertEquals(8..13, p.orthoZooms)
         assertNull(p.demZooms)
-        assertNull(p.corridor)
-        assertTrue("${p.tileCount}", p.tileCount in 150..350)
-        assertTrue("${p.estimatedBytes}", p.estimatedBytes in 2 * mb..6 * mb)
+        val square = p.copy(corridor = null)
+        assertTrue("${square.tileCount}", square.tileCount in 150..350)
+        assertTrue("${square.estimatedBytes}", square.estimatedBytes in 2 * mb..6 * mb)
+    }
+
+    @Test
+    fun theZoneHasZ14To19AroundTheStartZ18And19OnASmallerDisc() {
+        val p = TilePlans.forZone(lon, lat)
+        val c = p.corridor!!
+        assertEquals(listOf(lon), c.lons)
+        assertEquals(14..19, c.zooms)
+        assertEquals(TilePlans.ZONE_HD_M, c.bufferAt(17), 0.0)
+        assertEquals(TilePlans.ZONE_FINE_M, c.bufferAt(18), 0.0)
+        assertEquals(TilePlans.ZONE_FINE_M, c.bufferAt(19), 0.0)
+        val disc = p.corridorCount * TilePlans.ORTHO_TILE_BYTES
+        assertTrue("$disc", disc in 20 * mb..60 * mb)
+        // the start's own z19 tile is in, one 2 km away is not
+        val n = 1 shl 19
+        val x = ((lon + 180) / 360 * n).toInt()
+        val y = ((1 - Math.log(Math.tan(Math.toRadians(lat)) + 1 / Math.cos(Math.toRadians(lat))) / Math.PI) / 2 * n).toInt()
+        assertTrue(c.contains(19, x, y))
+        assertTrue(!c.contains(19, x + 40, y))
+        assertTrue(p.detailLabel(), p.detailLabel().startsWith("Autour du départ : zoom 19 à 1 km, zoom 17 à 3 km"))
     }
 
     @Test
@@ -49,7 +69,7 @@ class ZoneTest {
         assertEquals(p2.square, p3.square)
         assertEquals(p2.orthoRanges, p3.orthoRanges)
         assertEquals(TilePlans.DEM_ZOOMS, p3.demZooms)
-        assertNull(p3.corridor)
+        assertEquals(p2.corridor, p3.corridor)
         val dem = p3.demRanges.sumOf { it.count }
         assertTrue("$dem", dem in 200..320)
         val extra = TilePlans.zone3dExtraBytes(lon, lat)

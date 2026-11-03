@@ -63,14 +63,18 @@ data class TilePlan(
 
     /** What the pack holds, said to the user before downloading. */
     fun detailLabel(): String {
-        val c = corridor
-        return if (c != null && c.lons.size == 1 && !c.zooms.isEmpty()) {
-            "Haute définition à ${TilePlans.distanceLabel(c.bufferM)} autour du départ, moyenne ailleurs"
-        } else if (c == null || c.zooms.isEmpty()) {
-            if (orthoZooms.last >= TilePlans.ORTHO_MAX_Z) "Haute définition sur toute la zone" else "Définition moyenne sur toute la zone"
-        } else {
-            "Haute définition le long du tracé (±${TilePlans.distanceLabel(c.bufferM)}), moyenne ailleurs"
+        val c = corridor?.takeIf { !it.zooms.isEmpty() }
+        val d = TilePlans::distanceLabel
+        val square = if (orthoZooms.last >= TilePlans.HD_Z) "Haute définition sur toute la zone" else "Définition moyenne sur toute la zone"
+        if (c == null) return square
+        val fine = if (c.zooms.last > TilePlans.HD_Z) "zoom ${c.zooms.last} à ${d(c.bufferAt(c.zooms.last))}" else null
+        if (c.lons.size == 1) {
+            val hd = if (c.zooms.first <= TilePlans.HD_Z) "zoom ${minOf(c.zooms.last, TilePlans.HD_Z)} à ${d(c.bufferM)}" else null
+            return "Autour du départ : " + listOfNotNull(fine, hd).joinToString(", ") + " ; moyenne ailleurs"
         }
+        if (c.zooms.first > TilePlans.HD_Z) return "$square, $fine du tracé"
+        if (fine == null) return "Haute définition le long du tracé (±${d(c.bufferM)}), moyenne ailleurs"
+        return "Le long du tracé : $fine, zoom ${TilePlans.HD_Z} à ±${d(c.bufferM)} ; moyenne ailleurs"
     }
 }
 
@@ -84,23 +88,35 @@ object TilePlans {
     const val DEM_TILE_BYTES = 130L * 1024  // Terrarium tiles measured at z10–13 in the Alps: 124–148 KB
     const val ROUTE_BUDGET = 500L * 1024 * 1024
     const val ORTHO_MIN_Z = 8
-    const val ORTHO_MAX_Z = 17
+    /** IGN's deepest photo level: what the map shows at its closest. */
+    const val ORTHO_MAX_Z = 19
+    /** "High definition": z17 (1.2 m a pixel); z18–19 come along a narrower band ([Corridor.fineM]). */
+    const val HD_Z = 17
     val DEM_ZOOMS = 6..13
     /** Route packs: the whole square up to this zoom, higher zooms only along the route. */
     const val MID_Z = 14
     const val CORRIDOR_M = 1000.0
 
+    /** One way to fit the corridor: [bufferM] up to z17, [fineM] for z18–19, up to [top]. */
+    data class CorridorStep(val bufferM: Double, val fineM: Double, val top: Int)
+
     /**
-     * What gives way when the corridor does not fit the budget, in order: z17 first, then the buffer narrows. Past the
-     * last step the square's zoom goes down.
+     * What gives way when the corridor does not fit the budget, in order: the z18–19 band narrows, z19 then z18 go,
+     * then z17, then the buffer narrows (each step lighter than the one before on a long route). Past the last step the square's zoom goes down. At 15 KB a tile, z19 along a
+     * 50 km route weighs about 130 MB at ±150 m, z17 at ±1 km about 30 MB.
      */
-    val CORRIDOR_STEPS = listOf(1000.0 to 17, 1000.0 to 16, 500.0 to 16, 500.0 to 15)
+    val CORRIDOR_STEPS = listOf(
+        CorridorStep(1000.0, 300.0, 19), CorridorStep(1000.0, 150.0, 19), CorridorStep(500.0, 150.0, 19),
+        CorridorStep(500.0, 75.0, 19), CorridorStep(1000.0, 150.0, 18), CorridorStep(500.0, 75.0, 18),
+        CorridorStep(500.0, 500.0, 17), CorridorStep(1000.0, 1000.0, 16), CorridorStep(500.0, 500.0, 16),
+        CorridorStep(500.0, 500.0, 15),
+    )
 
     /**
      * The zone pack recorded around the start without a route: the photo z8–13 over a square whose side is a setting
-     * ([ZONE_2D_KM], 40 km by default). The owner zooms in for the relief, not the photo: deeper zooms show the z13
-     * photo enlarged (the tile server's overzoom, up to the map's z19), and the relief keeps its full precision (it
-     * stops at z13 anyway). Each zoom level is four times the previous one: z14–15 would be 15 times the size.
+     * ([ZONE_2D_KM], 40 km by default), z14–19 on a disc around the start ([hdDisc]). Elsewhere deeper zooms show the
+     * z13 photo enlarged (the tile server's overzoom). Each zoom level is four times the previous one: z14–15 over the
+     * whole square would be 15 times the size.
      */
     val ZONE_ZOOMS = 8..13
     const val ZONE_KM_DEFAULT = 40
@@ -113,19 +129,22 @@ object TilePlans {
 
     /**
      * The optional 3D zone: relief ([DEM_ZOOMS]) and peaks over its own square (a setting, [ZONE_3D_KM]), the photo
-     * z8–15 over both squares (3D is never drawn without imagery, even when larger than the 2D zone), and the photo at
-     * [ZONE_HD_Z] within [ZONE_HD_M] of the start (a one-point corridor, stored in the manifest, so a resume fetches
-     * the same tiles).
+     * of [ZONE_ZOOMS] over both squares (3D is never drawn without imagery, even when larger than the 2D zone), and the
+     * photo up to [ZONE_HD_Z] around the start: z14–17 within [ZONE_HD_M], z18–19 within [ZONE_FINE_M] (a one-point
+     * corridor, stored in the manifest, so a resume fetches the same tiles).
      */
-    const val ZONE_HD_Z = 16
-    const val ZONE_HD_M = 5_000.0
+    const val ZONE_HD_Z = ORTHO_MAX_Z
+    /** The disc's radius up to z17 (about 25 MB at z14–17)… */
+    const val ZONE_HD_M = 3_000.0
+    /** …and at z18–19 (about 20 MB). */
+    const val ZONE_FINE_M = 1_000.0
 
     /**
-     * Ceiling on a zone pack, estimated and real. The largest settings (80 km both) are estimated at about 230 MB, so
-     * the plan rarely gives way; when it does, the z16 disc goes first, then the square's top zoom (z15, then z14…).
+     * Ceiling on a zone pack, estimated and real. The largest settings (80 km both) are estimated at about 230 MB plus
+     * the disc's 45 MB, so the plan rarely gives way; when it does, the disc goes first, then the square's top zoom.
      * The real bytes are held to it as for a route.
      */
-    const val ZONE_BUDGET = 250L * 1024 * 1024
+    const val ZONE_BUDGET = 300L * 1024 * 1024
 
     fun range(b: Bbox, z: Int): TileRange {
         val max = MapMath.tileCount(z) - 1
@@ -141,35 +160,48 @@ object TilePlans {
 
     /**
      * The route pack for [route]: the aerial photo of its square from z8 to [MID_Z] and, within [CORRIDOR_M] of the
-     * track, up to z17; relief z6–13 over the square. When that outgrows [budget], [CORRIDOR_STEPS] are tried, then a
-     * lower square zoom, then the square alone. A route small enough to get its whole square at z17 gets that. Null
+     * track, up to z19 (z18–19 on a narrower band); relief z6–13 over the square. When that outgrows [budget],
+     * [CORRIDOR_STEPS] are tried, then a lower square zoom, then the square alone. A route small enough to get its whole
+     * square at z17 gets that, with z18–19 along the track. Without [with3d], no relief nor buildings: the photo gets
+     * the whole budget. Null
      * when even the square at z8 does not fit (a route the size of a country).
      */
-    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET): TilePlan? {
+    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET, with3d: Boolean = true): TilePlan? {
         val box = route.bbox ?: return null
         val square = MapSquare.of(box)
-        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
         val line = Corridors.of(route, 0.0, IntRange.EMPTY)
         val counts = HashMap<Pair<Double, Int>, Long>()
         fun count(buf: Double, z: Int) = counts.getOrPut(buf to z) { Corridors.select(line.lons, line.lats, buf, z).size.toLong() }
+        fun fineBytes(fine: Double) = (Corridors.FINE_Z..ORTHO_MAX_Z).sumOf { count(fine, it) } * ORTHO_TILE_BYTES
+        val dem = DEM_ZOOMS.takeIf { with3d }
+        TilePlan(square, ORTHO_MIN_Z..HD_Z, dem, buildings = with3d).let { whole ->
+            for (fine in listOf(300.0, 150.0, 75.0)) {
+                if (whole.estimatedBytes + fineBytes(fine) <= budget) {
+                    return whole.copy(corridor = line.copy(bufferM = fine, fineM = fine, zooms = Corridors.FINE_Z..ORTHO_MAX_Z))
+                }
+            }
+            if (whole.estimatedBytes <= budget) return whole
+        }
         for (mid in MID_Z downTo ORTHO_MIN_Z) {
-            val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS, buildings = true)
+            val base = TilePlan(square, ORTHO_MIN_Z..mid, dem, buildings = with3d)
             if (base.estimatedBytes > budget) continue
-            for ((buf, top) in CORRIDOR_STEPS) {
-                if (top <= mid) continue
-                val extra = (mid + 1..top).sumOf { count(buf, it) } * ORTHO_TILE_BYTES
-                if (base.estimatedBytes + extra <= budget) return base.copy(corridor = line.copy(bufferM = buf, zooms = mid + 1..top))
+            for (step in CORRIDOR_STEPS) {
+                if (step.top <= mid) continue
+                val zooms = mid + 1..step.top
+                val c = line.copy(bufferM = step.bufferM, fineM = step.fineM, zooms = zooms)
+                val extra = zooms.sumOf { count(c.bufferAt(it), it) } * ORTHO_TILE_BYTES
+                if (base.estimatedBytes + extra <= budget) return base.copy(corridor = c)
             }
         }
-        return squareOnly(square, budget)
+        return squareOnly(square, budget, with3d)
     }
 
     /**
      * The square alone, from z8 up to the highest zoom ≤ [MID_Z] that fits; when even the relief does not fit (a route
      * spanning a few hundred km), a 2D-only plan rather than none: offline, the map is then drawn flat.
      */
-    fun squareOnly(square: Bbox, budget: Long = ROUTE_BUDGET): TilePlan? {
-        for (dem in listOf(DEM_ZOOMS, null)) {
+    fun squareOnly(square: Bbox, budget: Long = ROUTE_BUDGET, with3d: Boolean = true): TilePlan? {
+        for (dem in if (with3d) listOf(DEM_ZOOMS, null) else listOf(null)) {
             var best: TilePlan? = null
             for (zmax in ORTHO_MIN_Z..MID_Z) {
                 val p = TilePlan(square, ORTHO_MIN_Z..zmax, dem, buildings = dem != null)
@@ -194,7 +226,11 @@ object TilePlans {
     fun zoneSquare(lon: Double, lat: Double, sideKm: Int): Bbox = MapSquare.centered(lon, lat, sideKm * 500.0)
 
     fun forZone(lon: Double, lat: Double, sideKm: Int = ZONE_KM_DEFAULT): TilePlan =
-        fitZone(TilePlan(zoneSquare(lon, lat, sideKm), ZONE_ZOOMS, null))
+        fitZone(TilePlan(zoneSquare(lon, lat, sideKm), ZONE_ZOOMS, null, hdDisc(lon, lat)))
+
+    /** The photo z14–19 around the start: a one-point corridor, z18–19 on a smaller disc. */
+    fun hdDisc(lon: Double, lat: Double): Corridor =
+        Corridor(listOf(round6(lon)), listOf(round6(lat)), ZONE_HD_M, ZONE_ZOOMS.last + 1..ZONE_HD_Z, ZONE_FINE_M)
 
     /**
      * The 3D zone with the 2D one it completes: photo over both squares, relief and peaks over the 3D square
@@ -203,15 +239,14 @@ object TilePlans {
     fun forZone3d(lon: Double, lat: Double, side2dKm: Int = ZONE_KM_DEFAULT, side3dKm: Int = ZONE_KM_DEFAULT): TilePlan {
         val sq2 = zoneSquare(lon, lat, side2dKm)
         val sq3 = zoneSquare(lon, lat, side3dKm)
-        // no high-definition photo around the start: the owner zooms in for the relief, not the photo
-        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, null, sq3, buildings = true))
+        return fitZone(TilePlan(union(sq2, sq3), ZONE_ZOOMS, DEM_ZOOMS, hdDisc(lon, lat), sq3, buildings = true))
     }
 
     /** What answering yes to the 3D zone adds to the 2D zone already on its way: the figure asked about. */
     fun zone3dExtraBytes(lon: Double, lat: Double, side2dKm: Int = ZONE_KM_DEFAULT, side3dKm: Int = ZONE_KM_DEFAULT): Long =
         (forZone3d(lon, lat, side2dKm, side3dKm).estimatedBytes - forZone(lon, lat, side2dKm).estimatedBytes).coerceAtLeast(0)
 
-    /** Within [ZONE_BUDGET]: without the z16 disc, then with a lower top zoom over the square. */
+    /** Within [ZONE_BUDGET]: without the high-definition disc, then with a lower top zoom over the square. */
     private fun fitZone(p: TilePlan): TilePlan {
         if (p.estimatedBytes <= ZONE_BUDGET) return p
         var q = p.copy(corridor = null)

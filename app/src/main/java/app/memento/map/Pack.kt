@@ -54,6 +54,7 @@ data class Pack(
         relief?.let { r -> append(",\"relief\":[").append(r.toList().joinToString(",") { Json.num(it, 7) }).append(']') }
         corridor?.let { c ->
             append(",\"corridor\":{\"buffer\":").append(Json.num(c.bufferM, 1))
+            if (c.fineM != c.bufferM) append(",\"fine\":").append(Json.num(c.fineM, 1))
             append(",\"zooms\":[").append(c.zooms.first).append(',').append(c.zooms.last).append(']')
             append(",\"line\":[")
             for (i in c.lons.indices) {
@@ -97,7 +98,7 @@ data class Pack(
             return Corridor(
                 line.filterIndexed { i, _ -> i % 2 == 0 }, line.filterIndexed { i, _ -> i % 2 == 1 },
                 c["buffer"].asDouble() ?: return null, z[0]..z[1],
-            )
+            ).let { k -> c["fine"].asDouble()?.let { k.copy(fineM = it) } ?: k }
         }
 
         /** Packs to delete at [now]: expired ones, whatever their state. */

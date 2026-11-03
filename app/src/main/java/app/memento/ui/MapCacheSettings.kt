@@ -114,7 +114,7 @@ private fun StartZoneSettings(settings: Settings) {
     val plan2d = remember(side2d) { TilePlans.forZone(0.0, lat, side2d) }
     val plan3d = remember(side2d, side3d) { TilePlans.forZone3d(0.0, lat, side2d, side3d) }
     SettingsCard {
-        Text("3D hors ligne au démarrage d'un enregistrement sans parcours", fontWeight = FontWeight.SemiBold)
+        Text("3D hors ligne au démarrage d'un enregistrement (sans parcours, ou parcours non préparé)", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Zone3dPolicy.values().forEach { p ->
                 FilterChip(selected = policy == p, onClick = { policy = p; settings.zone3d = p }, label = { Text(p.label) })
@@ -138,7 +138,7 @@ private fun StartZoneSettings(settings: Settings) {
 }
 
 /** The estimate gave way to [TilePlans.ZONE_BUDGET]: the zone is downloaded with a coarser photo. */
-private fun reduced(p: TilePlan) = p.orthoZooms.last < TilePlans.ZONE_ZOOMS.last || (p.demZooms != null && p.corridor == null)
+private fun reduced(p: TilePlan) = p.orthoZooms.last < TilePlans.ZONE_ZOOMS.last || p.corridor == null
 
 @Composable
 private fun KmSlider(label: String, km: Int, range: IntRange, estimate: String, reduced: Boolean, onChange: (Int) -> Unit) {

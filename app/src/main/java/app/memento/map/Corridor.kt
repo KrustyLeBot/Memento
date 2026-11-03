@@ -11,13 +11,22 @@ import kotlin.math.pow
 
 /**
  * The high-definition band of a route pack: the tiles at [zooms] whose rectangle comes within [bufferM] metres of
- * the polyline ([lons]/[lats], already simplified). Stored in the pack manifest, so the tile list can be computed
- * again identically on resume.
+ * the polyline ([lons]/[lats], already simplified), narrowed to [fineM] from [Corridors.FINE_Z] (z18–19 weigh 4 and 16
+ * times z17 for the same band). Stored in the pack manifest, so the tile list can be computed again identically on
+ * resume.
  */
-data class Corridor(val lons: List<Double>, val lats: List<Double>, val bufferM: Double, val zooms: IntRange) {
+data class Corridor(
+    val lons: List<Double>,
+    val lats: List<Double>,
+    val bufferM: Double,
+    val zooms: IntRange,
+    val fineM: Double = bufferM,
+) {
     init {
         require(lons.size == lats.size) { "lons/lats" }
     }
+
+    fun bufferAt(z: Int): Double = if (z >= Corridors.FINE_Z) minOf(bufferM, fineM) else bufferM
 
     private val cache = HashMap<Int, LongArray>()
 
@@ -25,7 +34,7 @@ data class Corridor(val lons: List<Double>, val lats: List<Double>, val bufferM:
     fun tiles(z: Int): LongArray {
         if (z !in zooms || lons.isEmpty()) return LongArray(0)
         synchronized(cache) {
-            return cache.getOrPut(z) { Corridors.select(lons, lats, bufferM, z) }
+            return cache.getOrPut(z) { Corridors.select(lons, lats, bufferAt(z), z) }
         }
     }
 
@@ -37,6 +46,9 @@ data class Corridor(val lons: List<Double>, val lats: List<Double>, val bufferM:
 object Corridors {
     /** Earth circumference at the equator in Web Mercator metres. */
     private const val EQUATOR_M = 40_075_016.686
+
+    /** The first zoom held to a corridor's [Corridor.fineM]. */
+    const val FINE_Z = 18
 
     /** Simplification tolerance: far below any buffer, so the band moves by a few metres at most. */
     const val SIMPLIFY_M = 15.0
@@ -51,10 +63,10 @@ object Corridors {
     fun tileMetres(z: Int, lat: Double): Double = EQUATOR_M * cos(Math.toRadians(lat)) / 2.0.pow(z)
 
     /** The corridor of [route] at [zooms]: the route simplified with [SIMPLIFY_M] (a 10 000-point track shrinks a lot). */
-    fun of(route: Route, bufferM: Double, zooms: IntRange): Corridor {
+    fun of(route: Route, bufferM: Double, zooms: IntRange, fineM: Double = bufferM): Corridor {
         val keep = simplify(route.lons, route.lats, SIMPLIFY_M)
         // rounded as the manifest writes them, so a resumed pack computes the very same tiles
-        return Corridor(keep.map { round6(route.lons[it]) }, keep.map { round6(route.lats[it]) }, bufferM, zooms)
+        return Corridor(keep.map { round6(route.lons[it]) }, keep.map { round6(route.lats[it]) }, bufferM, zooms, fineM)
     }
 
     private fun round6(v: Double) = Math.round(v * 1e6) / 1e6

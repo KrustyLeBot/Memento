@@ -35,23 +35,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.memento.MainViewModel
 import app.memento.Note
 import app.memento.Snack
+import app.memento.Zone3dPolicy
 import app.memento.map.OfflinePacks
 import app.memento.map.Pack
 import app.memento.map.Route
 import app.memento.map.RouteFile
 import app.memento.map.TilePlan
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import app.memento.record.Recorder
+import app.memento.record.StartRoute
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** A route chosen to follow; [packId] when it comes from a prepared pack, null when it still has to be prepared. */
 class RouteChoice(val route: Route, val packId: String?)
@@ -158,6 +162,32 @@ fun prepareRoute(vm: MainViewModel, scope: CoroutineScope, route: Route, plan: T
     }
 }
 
+/**
+ * The pack of a route followed from the start of a recording without being prepared: 2D + 3D or 2D as the "3D hors
+ * ligne" setting says; on "Demander", 2D at once and the question under the recording ([StartRoute]).
+ */
+fun startRoutePack(vm: MainViewModel, scope: CoroutineScope, route: Route, policy: Zone3dPolicy) {
+    scope.launch {
+        try {
+            val plan3d = withContext(Dispatchers.Default) { OfflinePacks.planRoute(route, with3d = true) }
+            val plan2d = if (policy == Zone3dPolicy.ALWAYS) null else withContext(Dispatchers.Default) { OfflinePacks.planRoute(route, with3d = false) }
+            val id = withContext(Dispatchers.IO) { OfflinePacks.prepareRoute(route, plan2d ?: plan3d) }
+            if (!Recorder.active) return@launch
+            Recorder.routePack = id
+            if (policy == Zone3dPolicy.ASK && plan2d != null && plan3d.demZooms != null) {
+                StartRoute.ask(id, plan3d.estimatedBytes - plan2d.estimatedBytes)
+            }
+        } catch (e: OfflinePacks.PackException) {
+            vm.say(Snack(e.message ?: "Préparation impossible"))
+        } catch (e: java.io.IOException) {
+            vm.say(Snack("Préparation impossible : ${e.message}"))
+        }
+    }
+}
+
+/** The two plans of a route being prepared, for the choice between them. */
+private class RoutePlans(val route: Route, val with3d: TilePlan, val flat: TilePlan)
+
 /** "Préparer un parcours": the prepared routes, their size and expiry, and the button to add one. */
 @Composable
 fun PreparedRoutesSection(vm: MainViewModel) {
@@ -165,11 +195,13 @@ fun PreparedRoutesSection(vm: MainViewModel) {
     val packs by OfflinePacks.packs.collectAsState()
     val progress by OfflinePacks.progress.collectAsState()
     var choosing by remember { mutableStateOf(false) }
-    var pending by remember { mutableStateOf<Pair<Route, TilePlan>?>(null) }
+    var pending by remember { mutableStateOf<RoutePlans?>(null) }
     val picker = rememberRoutePicker(vm) { route ->
         scope.launch {
             try {
-                pending = route to withContext(Dispatchers.Default) { OfflinePacks.planRoute(route) }
+                pending = withContext(Dispatchers.Default) {
+                    RoutePlans(route, OfflinePacks.planRoute(route, with3d = true), OfflinePacks.planRoute(route, with3d = false))
+                }
             } catch (e: OfflinePacks.PackException) {
                 vm.say(Snack(e.message ?: "Préparation impossible"))
             }
@@ -193,21 +225,29 @@ fun PreparedRoutesSection(vm: MainViewModel) {
             onSource = { s -> choosing = false; if (s == Source.FILE) picker.pickFile() else picker.pickActivity() },
         )
     }
-    pending?.let { (route, plan) ->
+    pending?.let { p ->
+        val has3d = p.with3d.demZooms != null
         AlertDialog(
             onDismissRequest = { pending = null },
-            title = { Text("Préparer « ${route.name.ifBlank { "Parcours" }} »") },
+            title = { Text("Préparer « ${p.route.name.ifBlank { "Parcours" }} »") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Taille estimée : environ ${megabytes(plan.estimatedBytes)} Mo")
-                    Text(plan.detailLabel() + ", relief et sommets sur toute la zone.")
+                    Text("Télécharger aussi la 3D hors ligne (relief, bâtiments) ?", fontWeight = FontWeight.SemiBold)
+                    if (has3d) Text("2D + 3D : environ ${megabytes(p.with3d.estimatedBytes)} Mo. ${p.with3d.detailLabel()}.")
+                    else Text("Parcours trop étendu pour la 3D hors ligne.")
+                    Text("2D seule : environ ${megabytes(p.flat.estimatedBytes)} Mo. ${p.flat.detailLabel()}.")
                     Text(
                         "Gardé 24 h sur le téléphone, puis supprimé. Mieux vaut le télécharger en Wi-Fi.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             },
-            confirmButton = { TextButton(onClick = { pending = null; prepareRoute(vm, scope, route, plan) }) { Text("Télécharger") } },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, p.flat) }) { Text("2D seule") }
+                    if (has3d) TextButton(onClick = { pending = null; prepareRoute(vm, scope, p.route, p.with3d) }) { Text("2D + 3D") }
+                }
+            },
             dismissButton = { TextButton(onClick = { pending = null }) { Text("Annuler") } },
         )
     }

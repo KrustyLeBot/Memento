@@ -131,9 +131,40 @@ object OfflinePacks {
     fun route(id: String): Route = RouteFile.fromJson(File(dir, "$id/route.json").readText())
 
     /** What [route] would download, for the confirmation shown before it starts. CPU work: call it off the main thread. */
-    fun planRoute(route: Route): TilePlan {
+    fun planRoute(route: Route, with3d: Boolean = true): TilePlan {
         if (route.bbox == null) throw PackException("Parcours vide")
-        return TilePlans.forRoute(route) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+        return TilePlans.forRoute(route, with3d = with3d) ?: throw PackException("Parcours trop étendu pour une carte hors ligne")
+    }
+
+    /**
+     * Turns the 2D pack of a prepared route into a 2D + 3D one (the "yes" to the 3D question asked after a recording
+     * started on a route not prepared): its manifest is rewritten with the 3D plan and the download resumed, so the
+     * photo tiles already there are kept. Runs in the background; a problem is logged, the 2D pack stays.
+     */
+    fun upgradeRoute(id: String) {
+        if (!::dir.isInitialized) return
+        scope.launch {
+            try {
+                val pack = _packs.value.firstOrNull { it.id == id } ?: return@launch
+                if (pack.has3d || !pack.hasRoute) return@launch
+                val plan = planRoute(route(id), with3d = true)
+                if (plan.demZooms == null) return@launch  // too wide for relief: it stays 2D
+                val more = plan.estimatedBytes - pack.bytes
+                if (dir.usableSpace < more + SPARE_BYTES) throw PackException("Espace insuffisant : environ ${(more + SPARE_BYTES) / 1_000_000} Mo nécessaires")
+                val up = pack.copy(
+                    zmax = plan.orthoZooms.last, kinds = setOf(Pack.KIND_ORTHO, Pack.KIND_DEM, Pack.KIND_PEAKS, Pack.KIND_BUILDINGS),
+                    complete = false, corridor = plan.corridor,
+                )
+                jobs[id]?.cancelAndJoin()
+                writeManifest(up)
+                refresh()
+                start(up)
+            } catch (e: PackException) {
+                Log.w(TAG, "route 3D: ${e.message}")
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "route 3D: ${e.message}")
+            }
+        }
     }
 
     /**

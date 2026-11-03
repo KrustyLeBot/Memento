@@ -99,16 +99,21 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   identifying User-Agent and keeps a disk cache (300 MB, least recently used purged), so what was seen once works
   offline. Where IGN has no photo (it answers 404 abroad and at sea, and a uniform white JPEG at the edge of its coverage) the
   OpenStreetMap tile is served instead. Offline route packs (Android) hold the photo of the route's square up to
-  z14 and, within 1 km of the track, up to z17, within 500 MB (z17 then the band's width then z14 give way when it
-  does not fit; a route so wide that even its relief does not fit gets a flat 2D pack), estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). A recording without
+  z14 and, along the track, up to z19: z15–17 within 1 km, z18–19 on a narrower band (300 m down to 75 m), within
+  500 MB (the z18–19 band narrows, then z19, z18, z17 and the band's width give way, then z14, when it does not fit; a
+  short route gets its whole square at z17; a route so wide that even its relief does not fit gets a flat 2D pack),
+  estimated at 15 KB a tile (measured 10–20 KB in the Alps, 17–23 KB in towns). Preparing a route asks whether to
+  download the 3D too (relief, buildings, peaks) or the 2D alone, with the size of each; a recording started on a
+  route not prepared downloads its 2D pack at once and asks the same question under the recording, as without a
+  route (Réglages → Cartes: asked, always or never). A recording without
   route always downloads a 2D zone pack around its start (Wi-Fi or mobile data): the photo z8–13 over a square whose
-  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps); the map still zooms to z19,
-  showing that photo enlarged (blurry) while the relief keeps its full precision. An optional 3D zone adds relief z6–13 (130 KB a
+  side is set in Réglages → Cartes (10–80 km, 40 km by default, about 4 MB in the Alps), plus z14–17 within 3 km of
+  the start and z18–19 within 1 km (about 45 MB). An optional 3D zone adds relief z6–13 (130 KB a
   tile, the full precision of the elevation data), buildings and peaks over its own square (5–80 km, 40 km by default; about
   40 MB more at 40 km); the photo also covers the 3D square when it is the larger, so 3D is never drawn
   without imagery. Réglages → Cartes says whether it is asked (default: an inline question once the recording has
   started, never delaying it; unanswered means no), always or never downloaded, with the live estimate of each size.
-  A 2D zone pack is turned into the 3D one in place (its tiles kept). Zone packs are capped at 250 MB (the plan lowers
+  A 2D zone pack is turned into the 3D one in place (its tiles kept). Zone packs are capped at 300 MB (the disc around the start goes first, then the plan lowers
   the photo's top zoom past it; the real bytes are held to it while downloading), kept 24 h and pinned while
   the recording runs; offline, the live map stays 3D inside the relief square and falls back to 2D outside. Offline, a photo tile
   missing from the packs is cut from its nearest ancestor and enlarged, so zooming in off the band shows the
@@ -119,9 +124,8 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   roof's top minus the ground, else 3 m a floor, else 6 m. The host serves them one z15 cell at a time
   (`buildings/15/{x}/{y}`: footprints rounded to 1e-6°, heights, a few tens of KB for a town's cell), fetched on demand
   and kept in the same disk cache as the tiles; offline and not cached, there are none (404). The page draws the 16
-  cells nearest the camera's centre (15 000 buildings at most), only inside the block, light stone walls, and gives
-  each roof the colour of the aerial photo under it (the median of its sunlit half, sampled on the z17 tiles in idle
-  time; neutral until then). Route packs and 3D zone packs hold the cells of their relief square, at most 600 (past
+  cells nearest the camera's centre (15 000 buildings at most), only inside the block, all in one light stone colour
+  (one extrusion layer, nothing computed per building). Route packs and 3D zone packs hold the cells of their relief square, at most 600 (past
   that, those within 1 km of the route or nearest the start), estimated at 16 KB a cell (measured 33 KB around
   Annecy, 14 KB around Chamonix, 3 KB in the Vanoise).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
