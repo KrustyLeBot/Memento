@@ -328,11 +328,14 @@
     layout: { 'symbol-placement': 'line', 'symbol-spacing': 140, 'icon-image': 'smap-arrow', 'icon-size': 0.8,
               'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
   });
+  // Images drawn to be read back (getImageData) are drawn on the CPU: reading a GPU canvas waits for every frame the GPU
+  // still has to draw, seconds each for the 3D block on a slow one (the race's peaks took 13 s on a software renderer)
+  const READ_BACK = { willReadFrequently: true };
   // Pointing east: line placement turns the icon along the line, in the line's direction.
   function arrowImage() {
     const n = 48, c = document.createElement('canvas');
     c.width = c.height = n;
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', READ_BACK);
     g.lineCap = 'round'; g.lineJoin = 'round';
     const chevron = () => { g.beginPath(); g.moveTo(15, 12); g.lineTo(33, 24); g.lineTo(15, 36); g.stroke(); };
     g.strokeStyle = '#ffffff'; g.lineWidth = 13; chevron();
@@ -866,7 +869,7 @@
     const w = chipW + 2 * m, h = m + chipH + stemH;
     const canvas = document.createElement('canvas');
     canvas.width = Math.ceil(w * ratio); canvas.height = Math.ceil(h * ratio);
-    const g = canvas.getContext('2d');
+    const g = canvas.getContext('2d', READ_BACK);
     g.scale(ratio, ratio);
     // stem: white fading down, outlined in black, legible on snow as on forest
     const sx = w / 2 - 1, sy = m + chipH;
