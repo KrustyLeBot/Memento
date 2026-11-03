@@ -346,6 +346,32 @@
     if (children.length === 4) coarse.delete(key); else coarse.add(key);
     return { data: bmp };
   });
+  // MapLibre 4.7 on terrain: when a tile of the view is not loaded yet (one coming into sight as the map turns), it
+  // draws that tile's nearest loaded ancestor instead and hides every loaded tile under it, so the z19 tile under the
+  // camera fell back to a z13 one until the whole view had loaded. The loaded tiles are kept here, drawn over the
+  // ancestor (raster tiles of several zooms are stencilled, the finest wins): only the missing part shows it.
+  function keepLoadedOnTerrain(cache) {
+    const orig = cache && cache._updateCoveredAndRetainedTiles;
+    if (typeof orig !== 'function' || cache.__keepLoaded || typeof cache.findLoadedParent !== 'function') return;
+    cache.__keepLoaded = true;
+    cache._updateCoveredAndRetainedTiles = function (retain, minZ, maxZ, zoom, ideal, terrain) {
+      orig.call(this, retain, minZ, maxZ, zoom, ideal, undefined);
+      if (!terrain) return;
+      const shown = {};
+      const missing = [];
+      for (const id of ideal) {
+        const t = this._tiles[id.key];
+        if (t && t.hasData()) shown[id.key] = id; else missing.push(id);
+      }
+      for (const id of missing) {
+        const kids = id.children(this._source.maxzoom);
+        if (kids.every((k) => this._tiles[k.key])) { for (const k of kids) shown[k.key] = retain[k.key] = k; continue; }
+        const fallback = this.findLoadedParent(id, this._source.minzoom) || this.findLoadedSibling(id);
+        if (fallback) shown[fallback.tileID.key] = retain[fallback.tileID.key] = fallback.tileID;
+      }
+      for (const key in this._tiles) if (!shown[key]) this._coveredTiles[key] = true;
+    };
+  }
   // A coarse tile whose children have since been drawn is made again from them: the one on screen is reloaded, the
   // one MapLibre keeps for later is dropped. Without that, MapLibre brought the coarse tile (IGN's own lower level,
   // in its slightly different colours) back from its cache when zooming out or when a rotation moved it farther.
@@ -503,6 +529,8 @@
   // the mesh (a z15 view's terrain tile spans 64 DEM pixels or fewer). Rotating a 3D block at 1x on a software
   // renderer went from 846 to 288 ms a frame with the texture at the screen's density and a 64x64 mesh.
   const TERRAIN_MESH = 64;
+  // the photo drawn on terrain without a block (3D around the position) too; the block's own source is patched when added
+  map.on('styledata', () => { if (map.style && map.style.sourceCaches) keepLoadedOnTerrain(map.style.sourceCaches.ortho); });
   function tuneTerrain() {
     const t = map.terrain, old = map.painter && map.painter.renderToTexture;
     if (!t || !old || typeof old.destruct !== 'function') return;
@@ -603,6 +631,7 @@
       // step (the whole view when zooming out). A second pass of the same update finds it in place and draws it.
       const cache = map.style.sourceCaches.orthosq, update = cache.update;
       cache.update = function (...args) { update.apply(this, args); update.apply(this, args); };
+      keepLoadedOnTerrain(cache);
     }
     map.addSource('dem', { type: 'raster-dem', tiles: ['dem://{z}/{x}/{y}'], tileSize: 256, maxzoom: 13, encoding: 'terrarium', bounds });
   }
