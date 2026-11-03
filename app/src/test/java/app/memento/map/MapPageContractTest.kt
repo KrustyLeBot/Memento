@@ -1,7 +1,6 @@
 package app.memento.map
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,19 +26,12 @@ class MapPageContractTest {
 
     @Test
     fun tileUrlsThePageBuildsAreServed() {
-        assertTrue(page.contains("tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: PHOTO_MAX_Z }"))
-        // the photo's top zoom is the host's setting, passed in the page URL
-        assertTrue(page.contains("params.get('photomax')"))
-        assertTrue(MapHost.pageUrl(true, false).endsWith("&photomax=${MapConfig.photoMaxZoom}"))
+        assertTrue(page.contains("tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19"))
         assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${z}/\${x}/\${y}`, { signal })"))
         assertTrue(page.contains("`\${BASE}t/dem/\${z}/\${x}/\${y}`"))
         // what MapLibre and the DEM protocol make of them, as TileServer sees the path
         assertEquals(TileKey("ortho", 19, 272042, 187212), TileKey.parse("/t/ortho/19/272042/187212"))
         assertEquals(TileKey("dem", 12, 2120, 1460), TileKey.parse("/t/dem/12/2120/1460"))
-        // the relief's top zoom: 13 unless the host passes Tuileries' (15 with the IGN relief)
-        assertTrue(page.contains("maxzoom: DEM_MAX_Z, encoding: 'terrarium'") && page.contains("params.get('demmax')"))
-        assertFalse(MapHost.pageUrl(true, false).contains("demmax"))
-        assertEquals(TileKey("dem", 15, 16941, 11670), TileKey.parse("/t/dem/15/16941/11670"))
     }
 
     @Test
@@ -60,7 +52,7 @@ class MapPageContractTest {
         assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${BLD_SAMPLE_Z}/\${tx}/\${ty}`)"))
         assertEquals(TileKey("ortho", 17, 68012, 46818), TileKey.parse("/t/ortho/17/68012/46818"))
         // the compact cell format the page decodes
-        for (field in listOf("doc.o", "doc.b", "doc.c", "doc.v === 2")) assertTrue(field, page.contains(field))
+        for (field in listOf("doc.o", "doc.b")) assertTrue(field, page.contains(field))
     }
 
     @Test

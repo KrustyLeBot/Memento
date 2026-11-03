@@ -88,7 +88,7 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   altitude and the pressure are kept as developer fields (`gps_altitude`, `pressure`).
 - GPS rate while recording: 5 s walking, 2 s cycling and skiing, 3 s other; "Économie de batterie" uses 12 s.
 - The map is one web page shared by both apps (`web/map/`, MapLibre GL JS 4.7.1 vendored): the IGN aerial
-  photo (orthophotos, WMTS `ORTHOIMAGERY.ORTHOPHOTOS`, JPEG, never filtered, in either theme) on the Terrarium
+  photo (orthophotos, WMTS `ORTHOIMAGERY.ORTHOPHOTOS`, JPEG, up to z19, never filtered, in either theme) on the Terrarium
   elevation model, in 3D (default) as a square block cut out of the relief around the track (side = the
   track's larger side + 25 %, at least 1 km), or flat in 2D; the switch is a native control and is remembered. The
   track is coloured by its speed relative to the mean (red slow, yellow mean, green fast), ski days keep their
@@ -124,33 +124,6 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   time; neutral until then). Route packs and 3D zone packs hold the cells of their relief square, at most 600 (past
   that, those within 1 km of the route or nearest the start), estimated at 16 KB a cell (measured 33 KB around
   Annecy, 14 KB around Chamonix, 3 KB in the Vanoise).
-- Photo zoom: the photo is drawn up to a top zoom set on each platform, "Zoom maximal de la photo aérienne", 14 to 19,
-  17 by default (1.2 m a pixel; 19 is IGN's 30 cm). Past it the map enlarges that level. The host passes it to the page
-  (`map/index.html?…&photomax=17`), and Android's route packs stop at it too.
-- Optional tile server, **Tuileries** (the owner's own, self-hosted, behind Cloudflare Access). Left unset, everything
-  above holds: IGN, OpenStreetMap and AWS are asked directly. Set, the hosts ask Tuileries, and only Tuileries, for
-  every photo, relief tile, buildings cell, summits list and offline pack tile. Its trails overlay and credit come
-  only with it. The hosts add HTTP Basic auth and the optional Cloudflare Access service-token headers
-  (`CF-Access-Client-Id` / `-Secret`). The page never sees them, and they are never sent anywhere else: a redirect,
-  such as Access's login page, is not followed. Answers go through the same disk caches. A photo can be WebP or AVIF
-  (cached as `orthow/…webp`, `orthoa/…avif` beside the JPEGs), and the content type is passed through. A missing
-  photo is asked for with its 4×4 block (`/meta/{z}/{x}/{y}?layers=ortho,dem,buildings,trails`). That one request
-  fills the cache with the block's photos and the relief, buildings cell and trails under it. Entries not ready yet
-  are asked for alone, and a server without `/meta` gets single requests. Unreachable means no new tiles, as offline;
-  nothing falls back to IGN. With Tuileries the page also draws its hiking trails (`trails/{z}/{x}/{y}`, vector
-  tiles z10–15): waymarked routes solid, paths dashed, purple on a white halo, in 2D and on the 3D block. Its credit
-  (`/api/info` attributions, e.g. Sentinel-2 by EOX abroad) joins the map's. Roofs come coloured in its v2 buildings
-  cells, so the page skips its own photo sampling there. Its relief (`/api/info` `dem`: version, top zoom) sets
-  the page's relief zoom (`&demmax=`, 13 to 15; 13 without Tuileries or before a server says), and a new version
-  deletes the cached relief tiles (recorded in `dem-version.txt` beside them; Android's offline packs keep theirs).
-  Android asks it to prepare a route's area (`POST /api/prepare`) when a route is loaded or a pack prepared. Settings:
-  - Android: Réglages → Cartes → "Serveur de cartes (Tuileries)": URL, identifiant, mot de passe, Cloudflare Access
-    client id and secret, "Enregistrer", "Tester la connexion" (shows the version and the photo zoom the server
-    archives, or the error). Kept in the app's private preferences (`tuileries`, no backup).
-  - Windows: Paramètres → Carte, the same fields, kept with the other settings of this PC (registry).
-  - Web: `MEMENTO_TILES_URL`, `MEMENTO_TILES_USER`, `MEMENTO_TILES_PASSWORD`, `MEMENTO_TILES_CF_ID`,
-    `MEMENTO_TILES_CF_SECRET` in `.env` (see `.env.example`). Réglages → Carte shows the source in use and, for
-    Tuileries, its version or the error ("Tester la connexion" asks again). The photo zoom there is per browser.
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
 
@@ -526,10 +499,6 @@ secret, each entry checked against its file's time and size), so a restart re-re
 by the folder poll is parsed before it is pushed to the pages. In the browser, the modules' lists are kept in memory
 and refreshed in the background on a change, and pointing at a rail entry fetches its page and list ahead of the
 click. About 50–60 MB of memory for a folder of a few thousand files (`MEMENTO_WARM=false` turns the warm-up off).
-
-Map tiles: from IGN, OpenStreetMap and AWS directly, or, with `MEMENTO_TILES_URL` (and its login,
-`MEMENTO_TILES_*`), from the Tuileries server only (see Activities). The container checks these settings at
-startup and stops with a message when the URL is not http(s) or the Cloudflare id comes without its secret.
 
 Deployment: `webapp/docker-compose.example.yml` and `webapp/.env.example`. The CI tests both halves and publishes
 `ghcr.io/krustylebot/memento-web:latest` (and `:<build>`) from `main`. Development: `python -m memento_web` in

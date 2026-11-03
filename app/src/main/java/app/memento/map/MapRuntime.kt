@@ -1,7 +1,6 @@
 package app.memento.map
 
 import android.content.Context
-import app.memento.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,11 +16,8 @@ object MapRuntime {
         if (started) return
         started = true
         val app = context.applicationContext
-        // before anything fetches or plans: the tile source and the photo's top zoom chosen in the settings
-        Settings(app).let { MapConfig.set(it.tuileries, it.photoMaxZoom) }
         NetState.init(app)
         TileServer.init(app)
-        TileServer.refreshInfo()
         OfflinePacks.onDownloadStarted = { PackDownloadService.start(app) }
         OfflinePacks.init(app)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {

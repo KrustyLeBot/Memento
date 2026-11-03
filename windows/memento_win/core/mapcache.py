@@ -3,8 +3,6 @@ URLs and when the IGN aerial photo is replaced by the OpenStreetMap tile. Pure P
 from __future__ import annotations
 
 import os
-import shutil
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -12,16 +10,11 @@ from urllib.parse import parse_qs
 CACHE_LIMIT = 300 * 1024 * 1024
 PURGE_TARGET = int(CACHE_LIMIT * 0.8)  # purge down to this so the next purge is not one tile away
 MAX_ZOOM = {"ortho": 19, "dem": 15}
-# "orthow" / "orthoa": an aerial photo Tuileries re-encoded as WebP / AVIF, each in its own folder so a file's type
-# follows its folder
-MIME = {"ortho": "image/jpeg", "orthow": "image/webp", "orthoa": "image/avif", "dem": "image/png", "osmfb2": "image/png"}
-EXT = {"ortho": "jpg", "orthow": "webp", "orthoa": "avif", "dem": "png", "osmfb2": "png"}
+MIME = {"ortho": "image/jpeg", "dem": "image/png", "osmfb2": "image/png"}
+EXT = {"ortho": "jpg", "dem": "png", "osmfb2": "png"}
 OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer; OSM stand-ins of IGN errors (build 73)
 # and of white sea tiles (build 80)
 BUILDINGS_Z = 15  # core/buildings.py's cells
-TRAILS_MAX_Z = 15  # Tuileries' trails pyramid; the page overzooms past it
-TRAILS_MIME = "application/x-protobuf"
-DEM_VERSION_FILE = "dem-version.txt"  # next to the tile folders: the relief version the cached dem tiles come from
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
 IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
@@ -49,21 +42,6 @@ class TileRequest:
         """Where the photo's OpenStreetMap stand-in is cached: its own folder, so the file type follows the folder."""
         return TileRequest("osmfb2", self.z, self.x, self.y)
 
-    def variants(self) -> tuple["TileRequest", ...]:
-        """Every cache entry that answers this request: a photo is a JPEG, a WebP (Tuileries) or the PNG stand-in."""
-        if self.kind != "ortho":
-            return (self,)
-        return (self, TileRequest("orthow", self.z, self.x, self.y), TileRequest("orthoa", self.z, self.x, self.y),
-                self.fallback())
-
-    def typed(self, content_type: str) -> "TileRequest | None":
-        """Where an answer of this type is cached, None for a type this request never takes."""
-        mime = (content_type or "").split(";")[0].strip().lower()
-        for v in self.variants():
-            if MIME[v.kind] == mime:
-                return v
-        return None
-
 
 @dataclass(frozen=True)
 class PeaksRequest:
@@ -80,18 +58,11 @@ class BuildingsRequest:
 
 
 @dataclass(frozen=True)
-class TrailsRequest:
-    z: int
-    x: int
-    y: int  # a hiking-trails vector tile (Tuileries only)
-
-
-@dataclass(frozen=True)
 class FileRequest:
     path: str  # relative to web/, e.g. "map/index.html"
 
 
-def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | BuildingsRequest | TrailsRequest | FileRequest | None:
+def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | BuildingsRequest | FileRequest | None:
     """`path` is the URL path under the base (`/t/ortho/12/2120/1460`, `/peaks`, `/buildings/15/16941/11670`,
     `/map/map.js`); None = not served."""
     parts = [p for p in path.split("/") if p]
@@ -106,9 +77,6 @@ def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | Bu
     if len(parts) == 4 and parts[0] == "buildings" and all(p.isdigit() and len(p) <= 7 for p in parts[1:]):
         z, x, y = (int(p) for p in parts[1:])
         return BuildingsRequest(x, y) if z == BUILDINGS_Z and x < 2 ** z and y < 2 ** z else None
-    if len(parts) == 4 and parts[0] == "trails" and all(p.isdigit() and len(p) <= 7 for p in parts[1:]):
-        z, x, y = (int(p) for p in parts[1:])
-        return TrailsRequest(z, x, y) if z <= TRAILS_MAX_Z and x < 2 ** z and y < 2 ** z else None
     if parts == ["peaks"]:
         q = parse_qs(query)
         try:
@@ -125,38 +93,6 @@ def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | Bu
 
 def tile_path(root: Path, tile: TileRequest) -> Path:
     return root / tile.kind / str(tile.z) / str(tile.x) / f"{tile.y}.{EXT[tile.kind]}"
-
-
-def trails_path(root: Path, req: TrailsRequest) -> Path:
-    return root / "trails" / str(req.z) / str(req.x) / f"{req.y}.pbf"
-
-
-def drop_stale_dem(root: Path, version: int) -> bool:
-    """Deletes every cached relief tile (single and metatile entries share `dem/`) when they come from another relief
-    version than `version`, then records it. Blocking: run it off the UI thread. True when the version changed. A cache
-    without the marker predates it and holds version 1 (AWS Terrarium, directly or through Tuileries)."""
-    marker = root / DEM_VERSION_FILE
-    try:
-        recorded = marker.read_text(encoding="ascii").strip()
-    except FileNotFoundError:
-        recorded = "1"
-    if recorded == str(version):
-        return False
-    dem = root / "dem"
-    if dem.exists():
-        doomed = root / f".dem-stale-{uuid.uuid4().hex}"
-        try:
-            os.replace(dem, doomed)  # at once: tiles of the new relief written meanwhile land in a fresh dem/
-        except OSError:
-            doomed = dem  # a tile open right now (Windows): deleted in place
-        shutil.rmtree(doomed, ignore_errors=True)
-        if dem.exists() and doomed == dem:
-            return True  # not all gone: the marker is left as it was, so the next check tries again
-    root.mkdir(parents=True, exist_ok=True)
-    tmp = root / f".{DEM_VERSION_FILE}.{uuid.uuid4().hex}.tmp"
-    tmp.write_text(str(version), encoding="ascii")
-    os.replace(tmp, marker)
-    return True
 
 
 def upstream_url(tile: TileRequest) -> str:
@@ -222,7 +158,7 @@ def _cached_files(top: str):
                         stack.append(entry.path)
                     continue
                 name = entry.name
-                if not (name.endswith((".png", ".jpg", ".webp", ".avif", ".pbf")) or cells and name.endswith(".json")):
+                if not (name.endswith((".png", ".jpg")) or cells and name.endswith(".json")):
                     continue
                 try:
                     st = entry.stat()  # follows a link like os.stat did; a plain file's date is the listing's

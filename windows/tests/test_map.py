@@ -503,13 +503,11 @@ def test_every_function_the_windows_host_calls_is_in_the_page_api():
 def test_urls_the_page_requests_are_served():
     page = _page()
     assert "fetch(`${BASE}t/ortho/${z}/${x}/${y}`, { signal })" in page  # through the page's ortho:// protocol
-    assert "maxzoom: PHOTO_MAX_Z }" in page and "params.get('photomax')" in page
+    assert "maxzoom: 19" in page
     assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
     assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
     assert mapcache.parse_request("/t/ortho/14/8501/5850") == mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.parse_request("/t/dem/13/4253/2915") == mapcache.TileRequest("dem", 13, 4253, 2915)
-    assert "maxzoom: DEM_MAX_Z, encoding: 'terrarium'" in page and "params.get('demmax')" in page
-    assert mapcache.parse_request("/t/dem/15/16941/11670") == mapcache.TileRequest("dem", 15, 16941, 11670)  # IGN relief
     assert mapcache.parse_request("/peaks", "w=6.80000&s=45.90000&e=6.90000&n=46.00000") == mapcache.PeaksRequest(6.8, 45.9, 6.9, 46.0)
     # buildings: the cells and the photo the roofs are sampled on
     assert "const BLD_Z = 15;" in page and "fetch(`${BASE}buildings/${BLD_Z}/${x}/${y}`)" in page

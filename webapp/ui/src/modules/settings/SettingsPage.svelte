@@ -9,7 +9,6 @@
   import { MODULES } from '../index.js';
   import Icon from '../../lib/components/Icon.svelte';
   import AgendaSettings from '../agenda/AgendaSettings.svelte';
-  import { PHOTO_ZOOMS, photoMaxZoom, tilesStatus } from './map.js';
   /** @type {import('../../lib/router.js').Route} */
   export let route;
   $: void route;
@@ -20,17 +19,6 @@
   let conflicts = [];
   /** @type {{ user: string, expires: number, build?: string } | null} */
   let me = null;
-  /** @type {Parameters<typeof tilesStatus>[0]} */
-  let tiles = null;
-
-  async function loadTiles(fresh = false) {
-    try {
-      tiles = await api.mapTiles(fresh);
-    } catch (error) {
-      tiles = { source: 'tuileries', url: '?', error: error instanceof Error ? error.message : String(error) };
-    }
-  }
-  onMount(loadTiles);
 
   async function load() {
     try {
@@ -127,25 +115,6 @@
 
     {#if !$prefs.hidden.includes('agenda')}<AgendaSettings />{/if}
 
-    {#if !$prefs.hidden.includes('activities')}
-      <h2 class="section-title">Carte</h2>
-      <div class="card">
-        <div class="row">
-          <span>Zoom maximal de la photo aérienne (ce navigateur)</span>
-          <select aria-label="Zoom maximal de la photo aérienne" value={photoMaxZoom($prefs['map.photoMaxZoom'])}
-            on:change={(e) => setPref('map.photoMaxZoom', photoMaxZoom(e.currentTarget.value))}>
-            {#each PHOTO_ZOOMS as z}<option value={z}>{z}</option>{/each}
-          </select>
-        </div>
-        <p class="muted">Au-delà, la carte agrandit ce niveau (17 : 1,2 m par pixel, 19 : 30 cm).</p>
-        <p><strong>Serveur de cartes (Tuileries)</strong></p>
-        <p class="muted">{tilesStatus(tiles)}</p>
-        <p class="muted">Réglé sur le serveur, dans le fichier .env (MEMENTO_TILES_URL, MEMENTO_TILES_USER, MEMENTO_TILES_PASSWORD,
-          MEMENTO_TILES_CF_ID, MEMENTO_TILES_CF_SECRET).</p>
-        <button class="btn tonal" on:click={() => { tiles = null; loadTiles(true); }}>Tester la connexion</button>
-      </div>
-    {/if}
-
     {#if activity}
       <h2 class="section-title">Activités (synchronisé avec le téléphone)</h2>
       <div class="card">
@@ -214,7 +183,6 @@
   .segmented button { border: none; background: transparent; padding: 7px 16px; cursor: pointer; font-weight: 600; }
   .segmented button + button { border-left: 1px solid var(--outline); }
   .segmented button.on { background: var(--secondary-container); color: var(--on-secondary-container); }
-  select { padding: 6px 10px; border-radius: 12px; border: 1px solid var(--outline); background: transparent; color: inherit; }
   .check { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; }
   .check input { width: 18px; height: 18px; accent-color: var(--primary); flex: none; }
   .sports { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 12px; }

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QScrollArea, QSpinBox, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from ..core.agenda.frdates import alert_label
-from ..core import tuileries
 from ..core.settings import ActivitySettings
 from ..core.track import Sport
 from ..services import updater
@@ -23,8 +22,6 @@ class SettingsScreen(QWidget):
     module_visibility = Signal(str, bool)
     contacts_order = Signal(bool)  # True: first name first
     agenda_changed = Signal(dict)  # one key of: week_start, event_zone_times, default_alerts, default_calendar, birthdays
-    map_changed = Signal(object, int)  # Tuileries (url "" = none), photo max zoom
-    test_tiles = Signal(object)  # Tuileries: "Tester la connexion"
 
     def __init__(self):
         super().__init__()
@@ -127,50 +124,6 @@ class SettingsScreen(QWidget):
         self.refine_box.toggled.connect(lambda _=False: self._activity_edited())
         body.addWidget(self.refine_box)
 
-        section("Carte")
-        zoom_row = QHBoxLayout()
-        zoom_row.addWidget(QLabel("Zoom maximal de la photo aérienne"))
-        self.photo_zoom = QSpinBox()
-        self.photo_zoom.setRange(*tuileries.PHOTO_MAX_ZOOM_RANGE)
-        self.photo_zoom.setValue(tuileries.PHOTO_MAX_ZOOM_DEFAULT)
-        self.photo_zoom.valueChanged.connect(lambda _=0: self._map_edited())
-        zoom_row.addWidget(self.photo_zoom)
-        zoom_row.addStretch()
-        body.addLayout(zoom_row)
-        self.photo_zoom_hint = QLabel("Au-delà, la carte agrandit ce niveau (17 : 1,2 m par pixel, 19 : 30 cm).")
-        self.photo_zoom_hint.setWordWrap(True)
-        body.addWidget(self.photo_zoom_hint)
-        body.addWidget(QLabel("Serveur de cartes (Tuileries)"))
-        tiles_hint = QLabel("Facultatif. Renseigné, toutes les cartes viennent de ce serveur (et seulement de lui) ; "
-                            "vide, de l'IGN, d'OpenStreetMap et d'AWS directement.")
-        tiles_hint.setWordWrap(True)
-        body.addWidget(tiles_hint)
-        form = QFormLayout()
-        self.tiles_url = QLineEdit()
-        self.tiles_url.setPlaceholderText("https://tuileries.example.org/")
-        self.tiles_user = QLineEdit()
-        self.tiles_password = QLineEdit()
-        self.tiles_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.tiles_cf_id = QLineEdit()
-        self.tiles_cf_secret = QLineEdit()
-        self.tiles_cf_secret.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Adresse", self.tiles_url)
-        form.addRow("Identifiant", self.tiles_user)
-        form.addRow("Mot de passe", self.tiles_password)
-        form.addRow("Cloudflare Access : identifiant client", self.tiles_cf_id)
-        form.addRow("Cloudflare Access : secret client", self.tiles_cf_secret)
-        for edit in (self.tiles_url, self.tiles_user, self.tiles_password, self.tiles_cf_id, self.tiles_cf_secret):
-            edit.editingFinished.connect(self._map_edited)
-        body.addLayout(form)
-        tiles_row = QHBoxLayout()
-        test = QPushButton("Tester la connexion")
-        test.clicked.connect(lambda: self.test_tiles.emit(self.tuileries_value()))
-        tiles_row.addWidget(test)
-        self.tiles_status = QLabel("")
-        self.tiles_status.setWordWrap(True)
-        tiles_row.addWidget(self.tiles_status, 1)
-        body.addLayout(tiles_row)
-
         section("Contacts")
         self.first_name_box = QCheckBox("Prénom d'abord (trie et regroupe la liste par prénom plutôt que par nom)")
         self.first_name_box.toggled.connect(lambda on: None if self._loading else self.contacts_order.emit(on))
@@ -238,47 +191,12 @@ class SettingsScreen(QWidget):
             label.setStyleSheet(f"color: {s.primary}; font-weight: 600;")
         self.folder.setStyleSheet(f"color: {s.on_surface_variant};")
         self.update_status.setStyleSheet(f"color: {s.on_surface_variant};")
-        self.photo_zoom_hint.setStyleSheet(f"color: {s.on_surface_variant};")
-        self.tiles_status.setStyleSheet(f"color: {s.on_surface_variant};")
 
     def _activity_edited(self) -> None:
         if self._loading:
             return
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
                                                     {s for s, b in self.total_boxes.items() if b.isChecked()}))
-
-    def tuileries_value(self) -> tuileries.Tuileries:
-        return tuileries.Tuileries(self.tiles_url.text().strip(), self.tiles_user.text().strip(), self.tiles_password.text(),
-                                   self.tiles_cf_id.text().strip(), self.tiles_cf_secret.text().strip())
-
-    def _map_edited(self) -> None:
-        if self._loading:
-            return
-        value = self.tuileries_value()
-        if value.url and not value.configured:
-            self.tiles_status.setText("Adresse invalide : https://… attendu")
-            return
-        self.map_changed.emit(value, self.photo_zoom.value())
-
-    def load_map(self, source: tuileries.Tuileries, photo_max_zoom: int) -> None:
-        self._loading = True
-        self.photo_zoom.setValue(photo_max_zoom)
-        for edit, value in ((self.tiles_url, source.url), (self.tiles_user, source.user), (self.tiles_password, source.password),
-                            (self.tiles_cf_id, source.cf_id), (self.tiles_cf_secret, source.cf_secret)):
-            edit.setText(value)
-        self.tiles_status.setText("")
-        self._loading = False
-
-    def show_tiles_test(self, result) -> None:
-        """The answer of "Tester la connexion": an Info, or the error to show."""
-        if isinstance(result, tuileries.Info):
-            zoom = f" · photos archivées jusqu'au zoom {result.max_zoom}" if result.max_zoom is not None else ""
-            self.tiles_status.setText(f"Connecté : {result.name} {result.version}{zoom}")
-            if result.max_zoom is not None:
-                self.photo_zoom_hint.setText(f"Au-delà, la carte agrandit ce niveau. Le serveur archive les photos "
-                                             f"jusqu'au zoom {result.max_zoom} (plus haut, il les demande à l'IGN).")
-        else:
-            self.tiles_status.setText(f"Échec : {result}")
 
     def _alerts(self) -> list[int]:
         return sorted(m for m, b in self.alert_buttons.items() if b.isChecked())

@@ -12,7 +12,7 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "windows"))
     import memento_win.core  # noqa: F401
 
-from memento_win.core import atomic, drawing, mapcache, peaks, tuileries  # noqa: E402,F401
+from memento_win.core import atomic, drawing, mapcache, peaks  # noqa: E402,F401
 from memento_win.core import note as fmt  # noqa: E402,F401
 from memento_win.core.settings import PATH as SETTINGS_PATH, ActivitySettings  # noqa: E402,F401
 from memento_win.core.store import ACTIVITIES_DIR, MAX_ATTACHMENT, Store, now_ms  # noqa: E402,F401

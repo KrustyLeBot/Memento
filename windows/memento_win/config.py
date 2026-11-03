@@ -4,12 +4,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings
 
-from .core import tuileries
-
 
 class Config:
-    def __init__(self, settings: QSettings | None = None):
-        self._settings = settings or QSettings("Memento", "MementoWindows")  # Windows registry
+    def __init__(self):
+        self._settings = QSettings("Memento", "MementoWindows")  # Windows registry
 
     @property
     def workdir(self) -> Path | None:
@@ -146,29 +144,4 @@ class Config:
     @agenda_view.setter
     def agenda_view(self, value: str) -> None:
         self._settings.setValue("agenda_view", value)
-        self._settings.sync()
-
-    # ---- map (settings of this PC) ----
-
-    @property
-    def tuileries(self) -> tuileries.Tuileries:
-        """The Tuileries tile server; its URL left empty means IGN, OpenStreetMap and AWS directly. The password and
-        the Cloudflare secret sit with the other settings of this Windows account (HKCU), never in the synced folder."""
-        get = lambda key: str(self._settings.value(f"tuileries/{key}", "") or "")  # noqa: E731
-        return tuileries.Tuileries(get("url"), get("user"), get("password"), get("cf_id"), get("cf_secret"))
-
-    @tuileries.setter
-    def tuileries(self, value: tuileries.Tuileries) -> None:
-        for key in ("url", "user", "password", "cf_id", "cf_secret"):
-            self._settings.setValue(f"tuileries/{key}", getattr(value, key).strip())
-        self._settings.sync()
-
-    @property
-    def photo_max_zoom(self) -> int:
-        """Top zoom of the aerial photo on the map (past it the map enlarges that level)."""
-        return tuileries.clamp_photo_max_zoom(self._settings.value("photo_max_zoom", tuileries.PHOTO_MAX_ZOOM_DEFAULT))
-
-    @photo_max_zoom.setter
-    def photo_max_zoom(self, value: int) -> None:
-        self._settings.setValue("photo_max_zoom", str(tuileries.clamp_photo_max_zoom(value)))
         self._settings.sync()

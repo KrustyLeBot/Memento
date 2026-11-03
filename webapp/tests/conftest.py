@@ -57,15 +57,13 @@ class FakeNet:
 
     def __init__(self):
         self.calls: list[str] = []
-        self.headers: list[dict | None] = []  # what each call carried (Tuileries' credentials, or None)
         self.answers: dict[str, tuple[int, str, bytes]] = {}
         self.default = (200, "image/png", b"\x89PNG fake")
         self.offline = False
 
-    def __call__(self, url: str, headers: dict | None = None):
+    def __call__(self, url: str):
         from memento_web.modules.maphost import Offline
         self.calls.append(url)
-        self.headers.append(headers)
         if self.offline:
             raise Offline("no network in tests")
         for prefix, answer in self.answers.items():

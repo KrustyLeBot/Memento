@@ -29,36 +29,7 @@ data class TilePlan(
     val demSquare: Bbox? = null,
     /** With the buildings cells of the 3D area (packs with relief only). */
     val buildings: Boolean = false,
-    /**
-     * The relief zooms beyond [demZooms] fetched along the [corridor] only (Tuileries' fine IGN relief, to z15): over
-     * a large square they would weigh 20 times the z13 relief. A plan without corridor takes its whole square.
-     */
-    val demFineZooms: IntRange = IntRange.EMPTY,
 ) {
-    private val fineCache = HashMap<Int, LongArray>()
-
-    /** The relief tiles of zoom [z] in [demFineZooms] along the corridor, packed as [Corridors.pack]. */
-    fun demFineTiles(z: Int): LongArray {
-        if (z !in demFineZooms || demZooms == null) return LongArray(0)
-        synchronized(fineCache) {
-            return fineCache.getOrPut(z) {
-                val c = corridor
-                if (c != null && c.lons.isNotEmpty()) return@getOrPut Corridors.select(c.lons, c.lats, c.bufferM, z)
-                // no corridor: a pack small enough for its whole square at z17, so its whole relief square too
-                val r = TilePlans.range(demSquare ?: square, z)
-                val out = ArrayList<Long>()
-                r.forEach { x, y -> out.add(Corridors.pack(x, y)) }
-                out.toLongArray().also { it.sort() }
-            }
-        }
-    }
-
-    val demFineCount: Long get() = demFineZooms.sumOf { demFineTiles(it).size.toLong() }
-
-    /** This plan with the relief beyond z13 along its corridor (its square without one), up to [demMax] (13: none). */
-    fun withFineRelief(demMax: Int): TilePlan =
-        if (demZooms == null || demMax <= demZooms.last) this else copy(demFineZooms = demZooms.last + 1..demMax)
-
     /** The z15 cells of buildings, packed as [Corridors.pack]; computed once (a long route's corridor takes a while). */
     val buildingCells: LongArray by lazy {
         if (buildings && demZooms != null) Buildings.packCells(demSquare ?: square, corridor) else LongArray(0)
@@ -66,18 +37,15 @@ data class TilePlan(
     val orthoRanges: List<TileRange> get() = orthoZooms.map { TilePlans.range(square, it) }
     val demRanges: List<TileRange> get() = demZooms?.map { TilePlans.range(demSquare ?: square, it) }.orEmpty()
     val corridorCount: Long get() = corridor?.tileCount ?: 0L
-    val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count } + demFineCount + buildingCells.size
+    val tileCount: Long get() = orthoRanges.sumOf { it.count } + corridorCount + demRanges.sumOf { it.count } + buildingCells.size
     val estimatedBytes: Long
-        get() = (orthoRanges.sumOf { it.count } + corridorCount) * TilePlans.ORTHO_TILE_BYTES +
-            (demRanges.sumOf { it.count } + demFineCount) * TilePlans.DEM_TILE_BYTES + buildingCells.size * Buildings.CELL_BYTES
+        get() = (orthoRanges.sumOf { it.count } + corridorCount) * TilePlans.ORTHO_TILE_BYTES + demRanges.sumOf { it.count } * TilePlans.DEM_TILE_BYTES +
+            buildingCells.size * Buildings.CELL_BYTES
 
     /** The highest aerial-photo zoom anywhere in the pack. */
     val topZoom: Int get() = corridor?.zooms?.takeIf { !it.isEmpty() }?.last ?: orthoZooms.last
 
-    /**
-     * Relief first (the 3D view needs it), the buildings, then the photo over the square, then the corridor, zoom by
-     * zoom, then the fine relief along the corridor.
-     */
+    /** Relief first (the 3D view needs it), the buildings, then the photo over the square, then the corridor, zoom by zoom. */
     fun groups(): List<TileGroup> {
         val out = ArrayList<TileGroup>()
         for (r in demRanges) out.add(TileGroup(TileKey.KIND_DEM, r.z, false, r.count) { f -> r.forEach(f) })
@@ -89,11 +57,6 @@ data class TilePlan(
                 val t = c.tiles(z)
                 out.add(TileGroup(TileKey.KIND_ORTHO, z, true, t.size.toLong()) { f -> for (v in t) f(Corridors.x(v), Corridors.y(v)) })
             }
-        }
-        // the fine relief last: past the budget it is the one dropped, never the photo
-        for (z in demFineZooms) {
-            val t = demFineTiles(z)
-            if (t.isNotEmpty()) out.add(TileGroup(TileKey.KIND_DEM, z, true, t.size.toLong()) { f -> for (v in t) f(Corridors.x(v), Corridors.y(v)) })
         }
         return out
     }
@@ -180,22 +143,19 @@ object TilePlans {
      * The route pack for [route]: the aerial photo of its square from z8 to [MID_Z] and, within [CORRIDOR_M] of the
      * track, up to z17; relief z6–13 over the square. When that outgrows [budget], [CORRIDOR_STEPS] are tried, then a
      * lower square zoom, then the square alone. A route small enough to get its whole square at z17 gets that. Null
-     * when even the square at z8 does not fit (a route the size of a country). No photo zoom above [photoMax] (the
-     * map's setting): the map shows that level enlarged beyond it, so a finer tile would never be drawn.
+     * when even the square at z8 does not fit (a route the size of a country).
      */
-    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET, photoMax: Int = ORTHO_MAX_Z): TilePlan? {
+    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET): TilePlan? {
         val box = route.bbox ?: return null
         val square = MapSquare.of(box)
-        val zTop = minOf(ORTHO_MAX_Z, photoMax)
-        TilePlan(square, ORTHO_MIN_Z..zTop, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
+        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
         val line = Corridors.of(route, 0.0, IntRange.EMPTY)
         val counts = HashMap<Pair<Double, Int>, Long>()
         fun count(buf: Double, z: Int) = counts.getOrPut(buf to z) { Corridors.select(line.lons, line.lats, buf, z).size.toLong() }
-        for (mid in minOf(MID_Z, zTop) downTo ORTHO_MIN_Z) {
+        for (mid in MID_Z downTo ORTHO_MIN_Z) {
             val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS, buildings = true)
             if (base.estimatedBytes > budget) continue
-            for ((buf, stepTop) in CORRIDOR_STEPS) {
-                val top = minOf(stepTop, zTop)
+            for ((buf, top) in CORRIDOR_STEPS) {
                 if (top <= mid) continue
                 val extra = (mid + 1..top).sumOf { count(buf, it) } * ORTHO_TILE_BYTES
                 if (base.estimatedBytes + extra <= budget) return base.copy(corridor = line.copy(bufferM = buf, zooms = mid + 1..top))

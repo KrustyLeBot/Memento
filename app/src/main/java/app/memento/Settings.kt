@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import app.memento.map.TilePlans
-import app.memento.map.Tuileries
 import app.memento.scan.ScanFormat
 import java.io.File
 
@@ -30,23 +29,6 @@ sealed class StorageConfig {
 
 class Settings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    // the tile server's login on its own: app-private like the rest (no backup, allowBackup="false"), never synced
-    private val tilesPrefs = context.getSharedPreferences("tuileries", Context.MODE_PRIVATE)
-
-    /** The Tuileries tile server; an empty URL means IGN, OpenStreetMap and AWS directly. */
-    var tuileries: Tuileries
-        get() = Tuileries(
-            tilesPrefs.getString("url", "").orEmpty(), tilesPrefs.getString("user", "").orEmpty(),
-            tilesPrefs.getString("password", "").orEmpty(), tilesPrefs.getString("cf_id", "").orEmpty(),
-            tilesPrefs.getString("cf_secret", "").orEmpty(),
-        )
-        set(v) = tilesPrefs.edit().putString("url", v.url.trim()).putString("user", v.user.trim()).putString("password", v.password)
-            .putString("cf_id", v.cfId.trim()).putString("cf_secret", v.cfSecret.trim()).apply()
-
-    /** Top zoom of the aerial photo on the map and in offline packs (past it the map enlarges that level). */
-    var photoMaxZoom: Int
-        get() = Tuileries.clampPhotoMaxZoom(prefs.getInt("photo_max_zoom", Tuileries.PHOTO_MAX_ZOOM_DEFAULT))
-        set(v) = prefs.edit().putInt("photo_max_zoom", Tuileries.clampPhotoMaxZoom(v)).apply()
 
     var storageUri: String?
         get() = prefs.getString("storage_uri", null)

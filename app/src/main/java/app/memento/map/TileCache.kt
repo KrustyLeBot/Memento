@@ -85,7 +85,7 @@ class TileCache(private val dir: File, private val maxBytes: Long, private val t
         if (!dir.isDirectory) return files
         Files.walkFileTree(dir.toPath(), object : SimpleFileVisitor<Path>() {
             override fun visitFile(p: Path, a: BasicFileAttributes): FileVisitResult {
-                if (a.isRegularFile && p != marker) files.add(Entry(p.toFile(), a.size(), a.lastModifiedTime().toMillis()))
+                if (a.isRegularFile) files.add(Entry(p.toFile(), a.size(), a.lastModifiedTime().toMillis()))
                 return FileVisitResult.CONTINUE
             }
 
@@ -102,43 +102,16 @@ class TileCache(private val dir: File, private val maxBytes: Long, private val t
     /** Bytes on disk now (walks the folder: off the main thread). */
     fun sizeBytes(): Long = synchronized(lock) { size().also { total.set(it) } }
 
-    /** Deletes every cached file (tiles and peaks answers); the relief version marker stays true of what comes next. */
+    /** Deletes every cached file (tiles and peaks answers). */
     fun clear() {
         synchronized(lock) {
-            dir.listFiles()?.forEach { if (it.toPath() != marker) it.deleteRecursively() }
+            dir.listFiles()?.forEach { it.deleteRecursively() }
             total.set(size())
-        }
-    }
-
-    private val marker: Path get() = File(dir, DEM_VERSION_FILE).toPath()
-
-    /**
-     * Deletes every cached relief tile (single and metatile entries share `dem/`) when they come from another relief
-     * version than [version], then records it. Blocking: off the main thread. True when the version changed. A cache
-     * without the marker predates it and holds version 1 (AWS Terrarium, directly or through Tuileries).
-     */
-    fun dropStaleDem(version: Int): Boolean {
-        return synchronized(lock) {
-            val m = marker.toFile()
-            val recorded = if (m.isFile) m.readText(Charsets.US_ASCII).trim() else "1"
-            if (recorded == version.toString()) return false
-            val dem = File(dir, TileKey.KIND_DEM)
-            if (dem.exists()) {
-                // renamed first: relief tiles of the new version written meanwhile land in a fresh dem/
-                val doomed = File(dir, ".dem-stale-${UUID.randomUUID()}").takeIf { dem.renameTo(it) } ?: dem
-                doomed.deleteRecursively()
-                if (doomed == dem && dem.exists()) return true  // not all gone: the marker stays, the next check tries again
-            }
-            writeAtomic(m, version.toString().toByteArray(Charsets.US_ASCII))
-            total.set(size())
-            true
         }
     }
 
     companion object {
         private const val TOUCH_MS = 60 * 60 * 1000L
-        /** Next to the tile folders: the relief version the cached dem tiles come from. */
-        const val DEM_VERSION_FILE = "dem-version.txt"
 
         /** One low-priority thread for every cache's trims, so a walk never runs on a WebView request thread. */
         private val TRIMMER: Executor by lazy {
