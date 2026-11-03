@@ -63,7 +63,9 @@ def test_with_tuileries_every_request_goes_there_with_its_credentials(tiles_clie
     assert tiles_client.get("/buildings/15/16941/11670").content == CELL
     peaks = tiles_client.get("/peaks", params={"w": 6.0, "s": 45.0, "e": 6.1, "n": 45.1}).json()
     assert peaks[0]["name"] == "Pic Test"
-    assert net.calls == ["https://tuileries.example.org/t/ortho/15/16941/11670", "https://tuileries.example.org/t/dem/12/2120/1460",
+    # the metatile first (this fake answers it with garbage: the photo is then asked for alone)
+    assert net.calls == ["https://tuileries.example.org/meta/15/16940/11668?layers=ortho,dem,buildings,trails",
+                         "https://tuileries.example.org/t/ortho/15/16941/11670", "https://tuileries.example.org/t/dem/12/2120/1460",
                          "https://tuileries.example.org/buildings/15/16941/11670",
                          "https://tuileries.example.org/peaks?w=6.00000&s=45.00000&e=6.10000&n=45.10000"]
     for headers in net.headers:
@@ -75,7 +77,7 @@ def test_with_tuileries_every_request_goes_there_with_its_credentials(tiles_clie
     for path in ("/t/ortho/15/16941/11670", "/t/dem/12/2120/1460", "/buildings/15/16941/11670"):
         assert tiles_client.get(path).status_code == 200
     tiles_client.get("/peaks", params={"w": 6.0, "s": 45.0, "e": 6.1, "n": 45.1})
-    assert len(net.calls) == 4
+    assert len(net.calls) == 5
 
 
 def test_tuileries_png_stand_in_and_failures(tiles_client, net):
@@ -149,3 +151,37 @@ def test_http_get_carries_the_credentials_to_a_real_server():
         assert http_get(fake.url + "api/info")[0] == 401  # without them: refused
     finally:
         fake.close()
+
+
+def test_one_metatile_fills_the_caches_of_its_area(tiles_client, net, folders):
+    import gzip
+    from fake_tuileries import build_meta
+    x0, y0 = 67764, 46680
+    cell = json.dumps({"v": 2, "z": 15, "x": 16941, "y": 11670, "o": [0, 0], "b": [], "c": []}).encode()
+    photos = [(0, 17, x, y, 3 if (x, y) == (x0 + 1, y0) else 1 if (x, y) == (x0 + 2, y0) else 0,
+               0 if (x, y) in ((x0 + 1, y0), (x0 + 2, y0)) else 1, 0,
+               b"" if (x, y) in ((x0 + 1, y0), (x0 + 2, y0)) else WEBP + bytes([x % 256]))
+              for y in range(y0, y0 + 4) for x in range(x0, x0 + 4)]
+    meta = build_meta(17, x0, y0, photos + [(1, 13, 4235, 2917, 0, 2, 0, b"\x89PNG dem"),
+                                            (2, 15, 16941, 11670, 0, 4, 1, gzip.compress(cell)),
+                                            (3, 15, 16941, 11670, 0, 5, 1, gzip.compress(b"\x1a\x08trails"))])
+    net.answers[f"https://tuileries.example.org/meta/17/{x0}/{y0}"] = (200, "application/x-tuileries-metatile", meta)
+    net.answers["https://tuileries.example.org/t/ortho/"] = (200, "image/avif", b"avif photo")
+    first = tiles_client.get(f"/t/ortho/17/{x0 + 3}/{y0 + 3}")
+    assert first.headers["content-type"] == "image/webp" and first.content == WEBP + bytes([(x0 + 3) % 256])
+    for path, body in ((f"/t/ortho/17/{x0}/{y0 + 1}", WEBP + bytes([x0 % 256])), ("/t/dem/13/4235/2917", b"\x89PNG dem"),
+                       ("/buildings/15/16941/11670", cell), ("/trails/15/16941/11670", b"\x1a\x08trails")):
+        assert tiles_client.get(path).content == body, path
+    assert tiles_client.get(f"/t/ortho/17/{x0 + 2}/{y0}").status_code == 404  # no tile there: not asked again
+    assert len(net.calls) == 1  # one request for all of it
+    pending = tiles_client.get(f"/t/ortho/17/{x0 + 1}/{y0}")  # not ready in the metatile: asked for alone
+    assert pending.headers["content-type"] == "image/avif" and net.calls[-1].endswith(f"/t/ortho/17/{x0 + 1}/{y0}")
+    assert (folders[1] / "tiles" / "orthoa" / "17" / str(x0 + 1) / f"{y0}.avif").read_bytes() == b"avif photo"
+
+
+def test_a_tuileries_without_metatiles_gets_single_tiles(tiles_client, net):
+    net.answers["https://tuileries.example.org/meta/"] = (404, "text/plain", b"none")
+    net.answers["https://tuileries.example.org/t/ortho/"] = (200, "image/webp", WEBP)
+    tiles_client.get("/t/ortho/17/4/4")
+    tiles_client.get("/t/ortho/17/8/8")
+    assert [u.split("/")[3] for u in net.calls] == ["meta", "t", "t"]

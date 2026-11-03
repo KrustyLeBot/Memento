@@ -10,9 +10,10 @@ from urllib.parse import parse_qs
 CACHE_LIMIT = 300 * 1024 * 1024
 PURGE_TARGET = int(CACHE_LIMIT * 0.8)  # purge down to this so the next purge is not one tile away
 MAX_ZOOM = {"ortho": 19, "dem": 15}
-# "orthow": an aerial photo Tuileries re-encoded as WebP, in its own folder so a file's type follows its folder
-MIME = {"ortho": "image/jpeg", "orthow": "image/webp", "dem": "image/png", "osmfb2": "image/png"}
-EXT = {"ortho": "jpg", "orthow": "webp", "dem": "png", "osmfb2": "png"}
+# "orthow" / "orthoa": an aerial photo Tuileries re-encoded as WebP / AVIF, each in its own folder so a file's type
+# follows its folder
+MIME = {"ortho": "image/jpeg", "orthow": "image/webp", "orthoa": "image/avif", "dem": "image/png", "osmfb2": "image/png"}
+EXT = {"ortho": "jpg", "orthow": "webp", "orthoa": "avif", "dem": "png", "osmfb2": "png"}
 OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer; OSM stand-ins of IGN errors (build 73)
 # and of white sea tiles (build 80)
 BUILDINGS_Z = 15  # core/buildings.py's cells
@@ -49,7 +50,8 @@ class TileRequest:
         """Every cache entry that answers this request: a photo is a JPEG, a WebP (Tuileries) or the PNG stand-in."""
         if self.kind != "ortho":
             return (self,)
-        return self, TileRequest("orthow", self.z, self.x, self.y), self.fallback()
+        return (self, TileRequest("orthow", self.z, self.x, self.y), TileRequest("orthoa", self.z, self.x, self.y),
+                self.fallback())
 
     def typed(self, content_type: str) -> "TileRequest | None":
         """Where an answer of this type is cached, None for a type this request never takes."""
@@ -189,7 +191,7 @@ def _cached_files(top: str):
                         stack.append(entry.path)
                     continue
                 name = entry.name
-                if not (name.endswith((".png", ".jpg", ".webp", ".pbf")) or cells and name.endswith(".json")):
+                if not (name.endswith((".png", ".jpg", ".webp", ".avif", ".pbf")) or cells and name.endswith(".json")):
                     continue
                 try:
                     st = entry.stat()  # follows a link like os.stat did; a plain file's date is the listing's

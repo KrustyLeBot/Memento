@@ -11,6 +11,15 @@ WEBP = b"RIFF\x1a\x00\x00\x00WEBPVP8 " + b"\x00" * 14  # a WebP header: the byte
 INFO = b'{"name":"Tuileries","version":"0.1.0","max_zoom":17,"layers":["ortho","dem","buildings","peaks"]}'
 
 
+def build_meta(z: int, x0: int, y0: int, entries: list[tuple]) -> bytes:
+    """A metatile as the contract (v1.1) lays it out; entries are (layer, z, x, y, status, format, encoding, data)."""
+    import struct
+    out = b"TUIM" + struct.pack(">BBBBIIH", 1, z, 4, 0, x0, y0, len(entries))
+    for layer, ez, x, y, status, fmt, enc, data in entries:
+        out += struct.pack(">BBIIBBBI", layer, ez, x, y, status, fmt, enc, len(data)) + data
+    return out
+
+
 class FakeTuileries:
     def __init__(self):
         self.requests: list[tuple[str, dict]] = []

@@ -94,6 +94,8 @@ class TileStore:
         self.fetch = fetch
         self.source = source  # Tuileries when configured: then the only server asked
         self._info: tuple[float, dict] | None = None  # (when, answer) of the last good /api/info
+        self._meta_seen: dict[tuple, tuple[float, dict]] = {}  # block -> (when asked, status of each photo entry)
+        self._meta_off_until = 0.0
         self.clock = clock
         self.backoff = mapcache.Backoff()
         self._locks: dict[str, threading.Lock] = {}
@@ -127,6 +129,10 @@ class TileStore:
         found = self._cached(tile)
         if found is not None:
             return found
+        if self.source is not None and tile.kind == "ortho":
+            answered, found = self._meta(tile)
+            if answered:
+                return found
         with self._lock_for(tile.key):
             found = self._cached(tile)  # fetched by the request we waited for
             if found is not None:
@@ -151,6 +157,62 @@ class TileStore:
                 return None
             self._store(mapcache.tile_path(self.root, stored), data)
             return stored.mime, data
+
+    # ---- Tuileries metatiles: one request for a 4x4 photo block and the relief, buildings and trails under it ----
+
+    META_AGAIN_AFTER = 60.0  # a block's metatile is not asked again sooner; its missing tiles are asked for alone
+    META_OFF_FOR = 600.0  # a Tuileries without /meta (404) gets single-tile requests that long
+
+    def _meta(self, tile: mapcache.TileRequest) -> tuple[bool, tuple[str, bytes] | None]:
+        """(True, answer) when the block's metatile answered for the tile, (False, None) when it is to be asked for
+        alone (pending, failed, recently asked, no /meta). The block's other tiles wait for the same metatile and
+        then find themselves in the cache."""
+        block = tuileries.meta_block(tile.z, tile.x, tile.y)
+        with self._lock_for(f"meta/{block}"):
+            found = self._cached(tile)
+            if found is not None:
+                return True, found
+            now = self.clock()
+            seen = self._meta_seen.get(block)
+            if seen is not None and now - seen[0] < self.META_AGAIN_AFTER:
+                return seen[1].get((tile.x, tile.y)) == tuileries.META_NONE, None
+            if now < self._meta_off_until:
+                return False, None
+            if self.backoff.blocked(now):
+                return True, None
+            try:
+                status, _kind, data = self._tuileries(tuileries.meta_url(self.source, *block))
+            except Offline as error:
+                self.backoff.failed(self.clock())
+                _log(f"metatile {block}: Tuileries unreachable ({error})")
+                return True, None
+            self.backoff.succeeded()
+            entries = []
+            if status == 200:
+                try:
+                    entries = tuileries.parse_meta(data)
+                except ValueError as error:
+                    _log(f"metatile {block}: {error}")
+            else:
+                if status == 404:  # a Tuileries from before metatiles
+                    self._meta_off_until = now + self.META_OFF_FOR
+                _log(f"metatile {block}: Tuileries HTTP {status}")
+            statuses, answer = {}, None
+            for e in entries:
+                target = tuileries.meta_cache_target(self.root, e)
+                if target is not None:
+                    self._store(*target)
+                if e.layer == "ortho":
+                    statuses[(e.x, e.y)] = e.status
+                    stored = tile.typed(e.mime) if (e.x, e.y) == (tile.x, tile.y) and target is not None else None
+                    if stored is not None:
+                        answer = (stored.mime, e.data)
+            if len(self._meta_seen) > 4000:
+                self._meta_seen = {k: v for k, v in self._meta_seen.items() if now - v[0] < self.META_AGAIN_AFTER}
+            self._meta_seen[block] = (now, statuses)
+            if answer is not None:
+                return True, answer
+            return statuses.get((tile.x, tile.y)) == tuileries.META_NONE, None
 
     def _tuileries(self, url: str) -> tuple[int, str, bytes]:
         return self.fetch(url, self.source.headers())

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from fake_tuileries import INFO, PASSWORD, USER, WEBP, FakeTuileries
+from fake_tuileries import INFO, PASSWORD, USER, WEBP, FakeTuileries, build_meta
 from memento_win.core import mapcache, tuileries
 from memento_win.services import maphost
 
@@ -75,7 +75,8 @@ def test_each_answer_type_is_cached_where_its_type_says(tmp_path):
     dem = mapcache.TileRequest("dem", 12, 2120, 1460)
     assert tuileries.tile_answer(dem, 200, "image/png; charset=binary", b"\x89PNG") == dem
     assert tuileries.tile_answer(dem, 200, "image/webp", WEBP) is None
-    assert [v.kind for v in t.variants()] == ["ortho", "orthow", "osmfb2"] and dem.variants() == (dem,)
+    assert [v.kind for v in t.variants()] == ["ortho", "orthow", "orthoa", "osmfb2"] and dem.variants() == (dem,)
+    assert tuileries.tile_answer(t, 200, "image/avif", b"avif").kind == "orthoa" and t.typed("image/avif").mime == "image/avif"
 
 
 def test_purge_counts_webp_tiles(tmp_path):
@@ -183,7 +184,7 @@ def test_routing_follows_the_settings(tmp_path, monkeypatch, real_store):
     store.buildings(mapcache.BuildingsRequest(16941, 11670), lambda r: None)
     store.peaks(mapcache.PeaksRequest(6.8, 45.9, 6.9, 46.0), lambda r: None)
     assert [u for u, _ in sent] == [
-        "https://tuileries.example.org/t/ortho/15/16941/11670", "https://tuileries.example.org/t/dem/12/2120/1460",
+        "https://tuileries.example.org/meta/15/16940/11668?layers=ortho,dem,buildings,trails", "https://tuileries.example.org/t/dem/12/2120/1460",
         "https://tuileries.example.org/buildings/15/16941/11670",
         "https://tuileries.example.org/peaks?w=6.80000&s=45.90000&e=6.90000&n=46.00000"]
     assert all(h["authorization"].startswith("Basic ") and h["cf-access-client-id"] == "cid" for _, h in sent)
@@ -251,7 +252,7 @@ def test_store_fetches_from_a_fake_tuileries(tmp_path, server, real_store):
     store.source = source(server.url, cf_id="cid", cf_secret="csec")
     got = []
     store.get(mapcache.TileRequest("ortho", 15, 16941, 11670), got.append)
-    store.get(mapcache.TileRequest("ortho", 15, 1, 1), got.append)  # 404 there
+    store.get(mapcache.TileRequest("ortho", 15, 1, 1), got.append)  # 404 there; /meta answers 404 too (an older Tuileries): single tiles
     assert _wait(app, lambda: len(got) == 2), got
     assert ("image/webp", WEBP) in got and None in got
     path, headers = next(r for r in server.requests if r[0] == "/t/ortho/15/16941/11670")
@@ -309,7 +310,89 @@ def test_trails_are_cached_but_not_their_absence(tmp_path, real_store, monkeypat
     store._trails_answer(req, "trails/12/2120/1460", False, 200, b"\x1a\x08trails")
     store.trails(empty, got.append)
     store._trails_answer(empty, "trails/12/2121/1460", False, 204, b"")
+    assert _wait(real_store, lambda: not store._pending)
     assert got[1:] == [b"\x1a\x08trails", b""]
     assert mapcache.trails_path(tmp_path, req).is_file() and not mapcache.trails_path(tmp_path, empty).exists()
     store.trails(req, got.append)  # from the cache
     assert got[-1] == b"\x1a\x08trails" and len(sent) == 2
+
+
+# ---- metatiles (contract v1.1) ----
+
+CELL15 = json.dumps({"v": 2, "z": 15, "x": 16941, "y": 11670, "o": [0, 0], "b": [], "c": []}).encode()
+
+
+def _meta_17():
+    """The z17 block holding tile (67764, 46680): its 16 photos (one pending, one with no tile), the z13 relief, the
+    z15 buildings cell and the z15 trails tile, gzipped where the contract says."""
+    import gzip
+    x0, y0 = 67764, 46680
+    photos = []
+    for y in range(y0, y0 + 4):
+        for x in range(x0, x0 + 4):
+            if (x, y) == (x0 + 1, y0):
+                photos.append((0, 17, x, y, 3, 0, 0, b""))  # pending
+            elif (x, y) == (x0 + 2, y0):
+                photos.append((0, 17, x, y, 1, 0, 0, b""))  # no tile
+            else:
+                photos.append((0, 17, x, y, 0, 1, 0, WEBP + bytes([x % 256])))
+    return x0, y0, build_meta(17, x0, y0, photos + [
+        (1, 13, 4235, 2917, 0, 2, 0, b"\x89PNG dem"),
+        (2, 15, 16941, 11670, 0, 4, 1, gzip.compress(CELL15)),
+        (3, 15, 16941, 11670, 0, 5, 1, gzip.compress(b"\x1a\x08trails")),
+    ])
+
+
+def test_metatile_is_parsed_and_each_entry_finds_its_cache(tmp_path):
+    x0, y0, data = _meta_17()
+    entries = tuileries.parse_meta(data)
+    assert len(entries) == 19 and [e.layer for e in entries[-3:]] == ["dem", "buildings", "trails"]
+    assert entries[-2].data == CELL15 and entries[-1].data == b"\x1a\x08trails"  # un-gzipped
+    targets = [tuileries.meta_cache_target(tmp_path, e) for e in entries]
+    assert targets[0] == (tmp_path / "orthow" / "17" / str(x0) / f"{y0}.webp", WEBP + bytes([x0 % 256]))
+    assert targets[1] is None and targets[2] is None  # pending, no tile
+    assert targets[-3] == (tmp_path / "dem" / "13" / "4235" / "2917.png", b"\x89PNG dem")
+    assert targets[-2][0] == tmp_path / "buildings" / "15" / "16941" / "11670.json"
+    assert targets[-1][0] == tmp_path / "trails" / "15" / "16941" / "11670.pbf"
+    assert tuileries.meta_block(17, 67765, 46683) == (17, 67764, 46680)
+    assert tuileries.meta_url(source(), 17, 67764, 46680) == \
+        "https://tuileries.example.org/meta/17/67764/46680?layers=ortho,dem,buildings,trails"
+    for bad in (b"", b"XXXX" + data[4:], data[:-3]):
+        with pytest.raises(ValueError):
+            tuileries.parse_meta(bad)
+
+
+def test_one_metatile_serves_the_block_and_fills_the_caches(tmp_path, real_store, monkeypatch):
+    x0, y0, data = _meta_17()
+    store = maphost.TileStore(tmp_path)
+    sent = _requests(store, monkeypatch)
+    store.source = source()
+    got = {}
+    for dx, dy in ((0, 0), (1, 0), (2, 0), (3, 3)):
+        store.get(mapcache.TileRequest("ortho", 17, x0 + dx, y0 + dy), lambda r, k=(dx, dy): got.__setitem__(k, r))
+    assert [u for u, _ in sent] == [f"https://tuileries.example.org/meta/17/{x0}/{y0}?layers=ortho,dem,buildings,trails"]
+    store._meta_answer((17, x0, y0), False, 200, data)
+    assert got[(0, 0)] == ("image/webp", WEBP + bytes([x0 % 256])) and got[(3, 3)][0] == "image/webp"
+    assert got[(2, 0)] is None  # no tile there
+    assert (1, 0) not in got and sent[-1][0] == f"https://tuileries.example.org/t/ortho/17/{x0 + 1}/{y0}"  # pending: alone
+    assert _wait(real_store, lambda: not store._pending)
+    assert (tmp_path / "dem" / "13" / "4235" / "2917.png").read_bytes() == b"\x89PNG dem"
+    found = []
+    store.buildings(mapcache.BuildingsRequest(16941, 11670), found.append)
+    store.trails(mapcache.TrailsRequest(15, 16941, 11670), found.append)
+    store.get(mapcache.TileRequest("ortho", 17, x0 + 1, y0 + 1), found.append)
+    assert found == [CELL15, b"\x1a\x08trails", ("image/webp", WEBP + bytes([(x0 + 1) % 256]))]
+    assert len(sent) == 2  # all three from the cache
+    # within a minute, a block's missing tile is asked for alone, not by a second metatile
+    store.get(mapcache.TileRequest("ortho", 17, x0 + 2, y0), found.append)
+    assert sent[-1][0] == f"https://tuileries.example.org/t/ortho/17/{x0 + 2}/{y0}"
+
+
+def test_a_tuileries_without_metatiles_gets_single_tiles(tmp_path, real_store, monkeypatch):
+    store = maphost.TileStore(tmp_path)
+    sent = _requests(store, monkeypatch)
+    store.source = source()
+    store.get(mapcache.TileRequest("ortho", 17, 4, 4), lambda r: None)
+    store._meta_answer((17, 4, 4), False, 404, b"none")
+    store.get(mapcache.TileRequest("ortho", 17, 8, 8), lambda r: None)  # another block: no /meta for a while
+    assert [u.split("/")[3] for u, _ in sent] == ["meta", "t", "t"]

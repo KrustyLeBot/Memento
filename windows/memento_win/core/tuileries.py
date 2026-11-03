@@ -14,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from . import mapcache
+from . import buildings, mapcache
 
 PHOTO_MAX_ZOOM_DEFAULT = 17
 PHOTO_MAX_ZOOM_RANGE = (14, 19)  # 19: IGN's top level, also the page's former fixed maxzoom
@@ -120,7 +120,8 @@ def valid_cell(data: bytes, x: int, y: int) -> bool:
         doc = json.loads(data)
     except ValueError:
         return False
-    return isinstance(doc, dict) and doc.get("v") == 1 and doc.get("x") == x and doc.get("y") == y and isinstance(doc.get("b"), list)
+    # v2: Tuileries' cells with their roofs' colours ("c"), which the page uses instead of sampling the photo
+    return isinstance(doc, dict) and doc.get("v") in (1, 2) and doc.get("x") == x and doc.get("y") == y and isinstance(doc.get("b"), list)
 
 
 def parse_peaks(data: bytes) -> list[dict]:
@@ -163,10 +164,96 @@ def parse_info(data: bytes) -> Info:
         raise TuileriesError("Réponse inattendue : ce n'est pas un serveur Tuileries ?")
     zoom = doc.get("max_zoom")
     layers = doc.get("layers") if isinstance(doc.get("layers"), list) else []
-    attribution = doc.get("attribution")
     return Info(str(doc.get("name") or "Tuileries"), doc["version"],
                 zoom if isinstance(zoom, int) and not isinstance(zoom, bool) else None,
-                tuple(str(v) for v in layers), attribution.strip()[:300] if isinstance(attribution, str) else "")
+                tuple(str(v) for v in layers), _attribution(doc))
+
+
+def _attribution(doc: dict) -> str:
+    """The photo's credits (`attributions.ortho`, e.g. Sentinel-2 by EOX abroad) and the trails', one line; the page
+    already names IGN, OpenStreetMap and Terrarium. A plain `attribution` string is taken as is."""
+    if isinstance(doc.get("attribution"), str):
+        return doc["attribution"].strip()[:300]
+    credits = doc.get("attributions") if isinstance(doc.get("attributions"), dict) else {}
+    out: list[str] = []
+    for layer in ("ortho", "trails"):
+        for text in credits.get(layer) or []:
+            if isinstance(text, str) and text.strip() and text.strip() not in out and "IGN" not in text:
+                out.append(text.strip())
+    return " · ".join(out)[:300]
+
+
+# ---- v1.1 metatiles: `GET /meta/{z}/{x}/{y}?layers=...`, a 4x4 photo block with the relief, buildings and trails
+# of the same area in one answer (contract "v1.1 metatiles") ----
+
+META_SIDE = 4
+META_LAYERS = ("ortho", "dem", "buildings", "trails")
+META_FORMATS = {1: "image/webp", 2: "image/png", 3: "image/jpeg", 4: "application/json", 5: "application/vnd.mapbox-vector-tile"}
+META_OK, META_NONE, META_ERROR, META_PENDING = 0, 1, 2, 3
+_HEAD = 18
+_ENTRY = 17
+
+
+@dataclass(frozen=True)
+class MetaEntry:
+    layer: str
+    z: int
+    x: int
+    y: int
+    status: int  # META_OK, META_NONE (no tile there), META_ERROR / META_PENDING (ask that tile again, alone, later)
+    mime: str  # "" when unknown (an unknown format is not used: the tile is asked for alone)
+    data: bytes  # un-gzipped
+
+
+def meta_block(z: int, x: int, y: int) -> tuple[int, int, int]:
+    """The 4x4 block (z, x0, y0) holding a photo tile."""
+    return z, x - x % META_SIDE, y - y % META_SIDE
+
+
+def meta_url(t: Tuileries, z: int, x: int, y: int, layers: tuple[str, ...] = META_LAYERS) -> str:
+    return f"{t.base}meta/{z}/{x}/{y}?layers={','.join(layers)}"
+
+
+def parse_meta(data: bytes) -> list[MetaEntry]:
+    """ValueError on anything but a well-formed metatile."""
+    if len(data) < _HEAD or data[:4] != b"TUIM" or data[4] != 1:
+        raise ValueError("metatile: bad header")
+    count = int.from_bytes(data[16:18], "big")
+    out, at = [], _HEAD
+    for _ in range(count):
+        if at + _ENTRY > len(data):
+            raise ValueError("metatile: cut short")
+        head = data[at:at + _ENTRY]
+        layer, z, status, fmt, enc = head[0], head[1], head[10], head[11], head[12]
+        x, y, length = (int.from_bytes(head[i:i + 4], "big") for i in (2, 6, 13))
+        body = data[at + _ENTRY:at + _ENTRY + length]
+        if len(body) != length or layer >= len(META_LAYERS):
+            raise ValueError("metatile: bad entry")
+        at += _ENTRY + length
+        if status == META_OK and enc == 1:
+            try:
+                body = gzip.decompress(body)
+            except (OSError, EOFError):
+                status, body = META_ERROR, b""
+        elif status == META_OK and enc != 0:
+            status, body = META_ERROR, b""  # an encoding this client does not know: asked for alone
+        out.append(MetaEntry(META_LAYERS[layer], z, x, y, status, META_FORMATS.get(fmt, ""), body))
+    return out
+
+
+def meta_cache_target(root, e: MetaEntry):
+    """(path, bytes) where a received entry goes in the host's cache (the very files its single requests fill), or
+    None when it is not to be cached (no tile, pending, an unknown type, an unreadable cell)."""
+    if e.status != META_OK or not e.data:
+        return None
+    if e.layer in ("ortho", "dem"):
+        stored = mapcache.TileRequest(e.layer, e.z, e.x, e.y).typed(e.mime)
+        return (mapcache.tile_path(root, stored), e.data) if stored is not None else None
+    if e.layer == "buildings":
+        return (buildings.cache_path(root, e.x, e.y), e.data) if e.z == mapcache.BUILDINGS_Z and valid_cell(e.data, e.x, e.y) else None
+    if e.layer == "trails" and e.mime == META_FORMATS[5]:
+        return mapcache.trails_path(root, mapcache.TrailsRequest(e.z, e.x, e.y)), e.data
+    return None
 
 
 def info_answer(status: int, data: bytes) -> Info:

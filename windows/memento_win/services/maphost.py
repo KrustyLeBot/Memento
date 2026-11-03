@@ -29,6 +29,8 @@ from .async_util import run_async
 SCHEME = b"scr"
 BASE_URL = "scr://app/"
 PURGE_EVERY = 20 * 1024 * 1024  # bytes written between two purges
+META_AGAIN_AFTER = 60.0  # s: a block's metatile is not asked again sooner; its missing tiles are asked for alone
+META_OFF_FOR = 600.0  # s: a Tuileries without /meta (404) gets single-tile requests that long
 TOUCH_AFTER = 3600  # seconds: a read refreshes the file's date (LRU) only past this age, the purge needs no finer
 MIME = {"html": b"text/html", "js": b"text/javascript", "css": b"text/css", "png": b"image/png", "jpg": b"image/jpeg", "webp": b"image/webp",
         "json": b"application/json",
@@ -185,6 +187,9 @@ class TileStore(QObject):
         self._peaks_waiting: dict[tuple, list[Callable[[list | None], None]]] = {}
         self._cells_waiting: dict[tuple[int, int], list[Callable[[bytes | None], None]]] = {}
         self._pending: dict[Path, bytes] = {}  # handed to a worker, not on disk yet: served from here meanwhile
+        self._meta_waiting: dict[tuple, list[tuple[mapcache.TileRequest, Callable]]] = {}
+        self._meta_asked: dict[tuple, float] = {}  # block -> when its metatile was last asked for
+        self._meta_off_until = 0.0
         self._written = 0
         self._purge_lock = threading.Lock()
         self.purge_async()
@@ -208,6 +213,11 @@ class TileStore(QObject):
         if self.backoff.blocked(time.monotonic()):
             done(None)
             return
+        if self.source is not None and tile.kind == "ortho" and self._meta(tile, done):
+            return
+        self._single(tile, done)
+
+    def _single(self, tile: mapcache.TileRequest, done: Callable[[tuple[str, bytes] | None], None]) -> None:
         if tile.key in self._waiting:
             self._waiting[tile.key].append(done)
             return
@@ -217,6 +227,71 @@ class TileStore(QObject):
             reply.finished.connect(partial(self._tuileries_fetched, reply, tile))
             return
         self._fetch(tile, mapcache.upstream_url(tile), primary=True)
+
+    # ---- Tuileries metatiles: one request for a 4x4 photo block and the relief, buildings and trails under it ----
+
+    def _meta(self, tile: mapcache.TileRequest, done: Callable) -> bool:
+        """Asks for (or joins) the metatile of the tile's block; False when the tile is to be asked for alone."""
+        block = tuileries.meta_block(tile.z, tile.x, tile.y)
+        if block in self._meta_waiting:
+            self._meta_waiting[block].append((tile, done))
+            return True
+        now = time.monotonic()
+        if now < self._meta_off_until or now - self._meta_asked.get(block, -1e9) < META_AGAIN_AFTER:
+            return False
+        if len(self._meta_asked) > 4000:
+            self._meta_asked = {k: v for k, v in self._meta_asked.items() if now - v < META_AGAIN_AFTER}
+        self._meta_asked[block] = now
+        self._meta_waiting[block] = [(tile, done)]
+        reply = self._nam.get(_request(tuileries.meta_url(self.source, *block), self.source))
+        reply.finished.connect(partial(self._meta_fetched, reply, block))
+        return True
+
+    def _meta_fetched(self, reply: QNetworkReply, block: tuple) -> None:
+        try:
+            error = reply.error()
+            status = int(reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0)
+            data = bytes(reply.readAll())
+        finally:
+            reply.deleteLater()
+        self._meta_answer(block, error in OFFLINE_ERRORS, status, data)
+
+    def _meta_answer(self, block: tuple, offline: bool, status: int, data: bytes) -> None:
+        """Every received entry goes to its cache (the page's next requests for that area are local); each waiting
+        photo tile gets its entry, or is asked for alone when its entry is pending, failed or missing."""
+        waiting = self._meta_waiting.pop(block, [])
+        if offline:
+            self.backoff.failed(time.monotonic())
+            for _tile, done in waiting:
+                done(None)
+            return
+        self.backoff.succeeded()
+        entries = []
+        if status == 200:
+            try:
+                entries = tuileries.parse_meta(data)
+            except ValueError as error:
+                _log(f"metatile {block}: {error}")
+        else:
+            if status == 404:  # a Tuileries from before metatiles
+                self._meta_off_until = time.monotonic() + META_OFF_FOR
+            _log(f"metatile {block}: Tuileries HTTP {status}")
+        photos = {}
+        for e in entries:
+            target = tuileries.meta_cache_target(self.root, e)
+            if target is not None:
+                self._store(*target)
+            if e.layer == "ortho":
+                photos[(e.x, e.y)] = e
+        for tile, done in waiting:
+            e = photos.get((tile.x, tile.y))
+            stored = tile.typed(e.mime) if e is not None and e.status == tuileries.META_OK and e.data else None
+            if stored is not None:
+                done((stored.mime, e.data))
+            elif e is not None and e.status == tuileries.META_NONE:
+                done(None)
+            else:
+                self._single(tile, done)
 
     def _tuileries_fetched(self, reply: QNetworkReply, tile: mapcache.TileRequest) -> None:
         """No stand-in here: Tuileries applies the OpenStreetMap rule itself, and a failure fails like offline."""
