@@ -150,7 +150,10 @@ def run(operation: str, *args: str, apart: bool, timeout: float) -> tuple[dict, 
     if done.returncode != 0:
         lines = done.stderr.decode("utf-8", "replace").strip().splitlines()
         if done.returncode not in (EXIT_UNREADABLE, EXIT_MISSING):
-            print(f"memento-web: track process failed: {done.stderr.decode('utf-8', 'replace')[-2000:]}", flush=True)
+            print(f"memento-web: track process failed ({done.returncode}): "
+                  f"{done.stderr.decode('utf-8', 'replace')[-2000:]}", flush=True)
+        if done.returncode < 0:  # killed: the container's mem_limit is the usual reason
+            raise TrackError("Lecture du tracé interrompue (mémoire du conteneur insuffisante ?)")
         raise TrackError(lines[-1] if lines else f"code {done.returncode}", missing=done.returncode == EXIT_MISSING)
     header, _, body = done.stdout.partition(b"\n")
     return json.loads(header), body
