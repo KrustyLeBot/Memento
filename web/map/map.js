@@ -9,7 +9,11 @@
   const PITCH_TALL = 45;     // on a tall narrow view, so the whole square's surface stays in sight
   const FOLLOW_PITCH = 55;
   const FOLLOW_WIDTH_M = 1750;  // what the screen's width spans around the position while following, in 3D
-  const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium';
+  // attrib: the tile server's own credit (e.g. the photo abroad), passed by the host; trails=1: its hiking-trails overlay
+  const EXTRA_ATTRIBUTION = (params.get('attrib') || '').slice(0, 300);
+  const ATTRIBUTION = '© IGN · © OpenStreetMap · Terrarium' + (EXTRA_ATTRIBUTION ? ' · ' + EXTRA_ATTRIBUTION : '');
+  const TRAILS = params.get('trails') === '1';
+  const TRAIL_LAYERS = ['trails-halo', 'trails-route', 'trails-path'];
   // Buildings (3D only): IGN BD TOPO footprints extruded, walls a light stone, roofs coloured from the aerial photo.
   const BLD_Z = 15;            // the host serves one z15 cell (850 m wide in the Alps) per request
   const BLD_SAMPLE_Z = 17;     // the photo zoom roofs are sampled at (1.2 m a pixel)
@@ -354,12 +358,26 @@
         live: geo(), acc: geo(), dots: geo(),
         bld: geo({ maxzoom: 16 }),
         peaks: geo(),
+        // the host answers 204 where a tile has no trail (or is still being built): an empty tile, no error
+        ...(TRAILS ? { trails: { type: 'vector', tiles: [`${BASE}trails/{z}/{x}/{y}`], minzoom: 10, maxzoom: 15 } } : {}),
       },
       // only the buildings are lit (the terrain and the photo are not): from behind the camera, a little to the left
       light: { anchor: 'viewport', position: [1.5, 200, 35], color: '#ffffff', intensity: 0.35 },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': t.bg } },
         { id: 'ortho', type: 'raster', source: 'ortho', layout: { visibility: 'none' }, paint: rasterPaint() },
+        // hiking trails on the photo (under the 3D block's surround, so only the block shows them): waymarked routes
+        // solid, other paths dashed, purple on a white halo so they read on snow and forest without looking like a track
+        ...(TRAILS ? [
+          { id: 'trails-halo', type: 'line', source: 'trails', 'source-layer': 'trails', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': HALO, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 15, 5] } },
+          { id: 'trails-route', type: 'line', source: 'trails', 'source-layer': 'trails', filter: ['==', ['get', 'kind'], 'route'],
+            layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+            paint: { 'line-color': '#8e24aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 1.2, 15, 2.6] } },
+          { id: 'trails-path', type: 'line', source: 'trails', 'source-layer': 'trails', filter: ['!=', ['get', 'kind'], 'route'],
+            layout: { visibility: 'none', 'line-join': 'round' },
+            paint: { 'line-color': '#8e24aa', 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 1, 15, 2], 'line-dasharray': [2, 1.5] } },
+        ] : []),
         { id: 'band', type: 'fill', source: 'band', paint: { 'fill-color': t.band, 'fill-antialias': false } },
         { id: 'mask', type: 'fill', source: 'mask', paint: { 'fill-color': t.bg, 'fill-antialias': false } },
         { id: 'frame', type: 'line', source: 'frame', paint: { 'line-color': t.frame, 'line-width': 1.5 } },
@@ -492,7 +510,7 @@
     const bounds = SQ ? grow(SQ, 200) : undefined;
     if (SQ) {
       map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
-      map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
+      map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, TRAILS ? TRAIL_LAYERS[0] : 'band');
       // MapLibre 4.7 on terrain: on the first frame at a new tile zoom, the parent standing in for the missing tiles is
       // taken from the tile cache without being drawn, and the tiles it replaces are hidden: a blank frame at each zoom
       // step (the whole view when zooming out). A second pass of the same update finds it in place and draws it.
@@ -523,6 +541,7 @@
     vis('ortho', shown && (!is3d || !SQ));
     vis('orthosq', shown && is3d && !!SQ);
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
+    TRAIL_LAYERS.forEach((id) => vis(id, shown));
     // setTerrain rebuilds the whole terrain renderer: only when its state really changes
     const want = is3d && shown && !!(SQ || pos) && !!map.getSource('dem'), cur = map.getTerrain();
     if (want && (!cur || cur.exaggeration !== exag)) map.setTerrain({ source: 'dem', exaggeration: exag });
