@@ -348,7 +348,7 @@ object OfflinePacks {
                     throw PackException(if (pack.hasRoute) "Parcours trop étendu pour une carte hors ligne" else "Zone trop volumineuse pour une carte hors ligne")
                 }
                 // the square's zooms are all below the corridor's: these folders hold only the zoom being dropped
-                for (k in listOf(TileKey.KIND_ORTHO, TileKey.KIND_ORTHO_WEBP)) File(pdir, "$k/${group.z}").deleteRecursively()
+                for (k in TileKey.PHOTO_KINDS) File(pdir, "$k/${group.z}").deleteRecursively()
                 if (group.inCorridor) {
                     corridor = corridor?.let { c -> if (group.z - 1 > zmax) c.copy(zooms = c.zooms.first until group.z) else null }
                 } else {

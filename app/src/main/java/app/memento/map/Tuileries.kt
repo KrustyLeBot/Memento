@@ -82,12 +82,12 @@ data class Tuileries(
         /** Points sent at most in a `POST /api/prepare` line: the server only needs the corridor's shape. */
         const val PREPARE_MAX_POINTS = 2000
 
-        /** `{"line":[[lon,lat],...],"corridor_m":N}`, the route thinned evenly to [PREPARE_MAX_POINTS]. */
-        fun prepareLine(route: Route, corridorM: Double = TilePlans.CORRIDOR_M): String {
+        /** `{"line":[[lon,lat],...],"name":…}`, the route thinned evenly to [PREPARE_MAX_POINTS] (Tuileries warms a 1 km corridor). */
+        fun prepareLine(route: Route): String {
             val n = route.size
             val step = maxOf(1, (n + PREPARE_MAX_POINTS - 1) / PREPARE_MAX_POINTS)
             val idx = (0 until n step step).toMutableList().apply { if (n > 0 && last() != n - 1) add(n - 1) }
-            return idx.joinToString(",", "{\"line\":[", "],\"corridor_m\":${Json.num(corridorM, 0)}}") {
+            return idx.joinToString(",", "{\"line\":[", "],\"name\":${Json.quote(route.name)}}") {
                 "[${Json.num(route.lons[it], 6)},${Json.num(route.lats[it], 6)}]"
             }
         }
@@ -108,7 +108,8 @@ data class Tuileries(
 
         fun validCell(body: ByteArray, x: Int, y: Int): Boolean {
             val o = try { Json.parse(String(body, Charsets.UTF_8)).asMap() } catch (_: Json.JsonException) { null } ?: return false
-            return o["v"].asDouble() == 1.0 && o["x"].asDouble() == x.toDouble() && o["y"].asDouble() == y.toDouble() && o["b"] is List<*>
+            // v2: Tuileries' cells with their roofs' colours ("c"), which the page uses instead of sampling the photo
+            return o["v"].asDouble() in setOf(1.0, 2.0) && o["x"].asDouble() == x.toDouble() && o["y"].asDouble() == y.toDouble() && o["b"] is List<*>
         }
 
         fun parseInfo(text: String): TuileriesInfo {
@@ -119,8 +120,22 @@ data class Tuileries(
                 version,
                 o["max_zoom"].asDouble()?.toInt(),
                 o["layers"].asList().orEmpty().filterIsInstance<String>(),
-                (o["attribution"] as? String)?.trim()?.take(300).orEmpty(),
+                attributionOf(o),
             )
+        }
+
+        /**
+         * The photo's credits (`attributions.ortho`, e.g. Sentinel-2 by EOX abroad) and the trails', one line; the page
+         * already names IGN, OpenStreetMap and Terrarium. A plain `attribution` string is taken as is.
+         */
+        private fun attributionOf(o: Map<String, Any?>): String {
+            (o["attribution"] as? String)?.let { return it.trim().take(300) }
+            val credits = o["attributions"].asMap() ?: return ""
+            val out = LinkedHashSet<String>()
+            for (layer in listOf("ortho", "trails")) {
+                for (t in credits[layer].asList().orEmpty().filterIsInstance<String>()) if (t.isNotBlank() && "IGN" !in t) out.add(t.trim())
+            }
+            return out.joinToString(" · ").take(300)
         }
 
         /** What a refusal of Tuileries (or of Cloudflare in front of it) means to the user. */

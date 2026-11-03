@@ -8,11 +8,18 @@ package app.memento.map
  */
 data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
     /** Relative path in a cache or pack folder. */
-    val path: String get() = "$kind/$z/$x/$y.${when (kind) { KIND_ORTHO -> "jpg"; KIND_ORTHO_WEBP -> "webp"; KIND_BUILDINGS -> "json"; else -> "png" }}"
+    val path: String get() = "$kind/$z/$x/$y.${when (kind) {
+        KIND_ORTHO -> "jpg"
+        KIND_ORTHO_WEBP -> "webp"
+        KIND_ORTHO_AVIF -> "avif"
+        KIND_BUILDINGS -> "json"
+        else -> "png"
+    }}"
 
     val mime: String get() = when (kind) {
         KIND_ORTHO -> "image/jpeg"
         KIND_ORTHO_WEBP -> "image/webp"
+        KIND_ORTHO_AVIF -> "image/avif"
         KIND_BUILDINGS -> "application/json"
         else -> "image/png"
     }
@@ -21,7 +28,7 @@ data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
 
     /** Every cache or pack entry that answers this request: a photo is a JPEG, a WebP (Tuileries) or the PNG stand-in. */
     fun variants(): List<TileKey> =
-        if (kind == KIND_ORTHO) listOf(this, TileKey(KIND_ORTHO_WEBP, z, x, y), fallback()) else listOf(this)
+        if (kind == KIND_ORTHO) listOf(this, TileKey(KIND_ORTHO_WEBP, z, x, y), TileKey(KIND_ORTHO_AVIF, z, x, y), fallback()) else listOf(this)
 
     /** Where an answer of [contentType] is kept; null for a type this request never takes. */
     fun typed(contentType: String?): TileKey? {
@@ -34,6 +41,9 @@ data class TileKey(val kind: String, val z: Int, val x: Int, val y: Int) {
         const val KIND_DEM = "dem"
         const val KIND_OSM = "osmfb2"
         const val KIND_ORTHO_WEBP = "orthow"
+        const val KIND_ORTHO_AVIF = "orthoa"
+        /** Every folder an aerial photo can be kept in, whatever its type (the stand-in is not a photo). */
+        val PHOTO_KINDS = listOf(KIND_ORTHO, KIND_ORTHO_WEBP, KIND_ORTHO_AVIF)
         const val KIND_BUILDINGS = "buildings"
         /** Browsing-cache folders deleted at startup: a former base layer; OSM stand-ins once cached for IGN refusals. */
         val OLD_KINDS = listOf("plan", "osm", "osmfb")

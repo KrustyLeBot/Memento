@@ -76,6 +76,21 @@ object TileServer {
         peaksDir = File(root, PEAKS)
     }
 
+    /** A browsing cache in [root] without a Context (tests). */
+    @Synchronized
+    internal fun initCache(root: File) {
+        cache = TileCache(root, BROWSING_MAX)
+        peaksDir = File(root, PEAKS)
+    }
+
+    /** What the page gets for a photo or relief tile (tests). */
+    internal fun serveTile(key: TileKey): WebResourceResponse = tile(key)
+
+    internal fun forgetMetatiles() {
+        metaSeen.clear()
+        metaOffUntil = 0L
+    }
+
     fun handle(request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
         if (url.host != HOST) return null
@@ -108,6 +123,8 @@ object TileServer {
             (OfflinePacks.findTile(v.path) ?: cache.get(v.path))?.let { openOrNull(it) }?.let { return image(v.mime, it) }
         }
         if (!NetState.online.value || backedOff()) return overzoomed(key) ?: notFound()
+        val t = MapConfig.tuileries
+        if (t != null && key.kind == TileKey.KIND_ORTHO) viaMeta(t, key)?.let { return it }
         val got = try {
             fetchShared(key, allowOsm = true)
         } catch (e: IOException) {
@@ -115,6 +132,63 @@ object TileServer {
             return overzoomed(key) ?: throw e
         } ?: return notFound()
         return image(got.key.mime, ByteArrayInputStream(got.bytes))
+    }
+
+    // ---- Tuileries metatiles: one request for a 4x4 photo block and the relief, buildings and trails under it ----
+
+    private const val META_AGAIN_MS = 60_000L  // a block's metatile is not asked again sooner: its missing tiles go alone
+    private const val META_OFF_MS = 600_000L  // a Tuileries without /meta (404) gets single-tile requests that long
+    private val metaLocks = ConcurrentHashMap<Triple<Int, Int, Int>, Any>()
+    /** Block -> (when asked, status of each photo entry by "x/y"). */
+    private val metaSeen = ConcurrentHashMap<Triple<Int, Int, Int>, Pair<Long, Map<String, Int>>>()
+    @Volatile private var metaOffUntil = 0L
+
+    /**
+     * The tile's answer from its block's metatile, every received entry going to the browsing cache (the page's next
+     * requests for that area are local); null when the tile is to be asked for alone (pending or failed in the
+     * metatile, block asked less than a minute ago, no /meta). The block's other tiles wait for the same metatile.
+     */
+    private fun viaMeta(t: Tuileries, key: TileKey): WebResourceResponse? {
+        val block = Metatile.block(key)
+        val lock = metaLocks.computeIfAbsent(block) { Any() }
+        try {
+            synchronized(lock) {
+                for (v in key.variants()) cache.get(v.path)?.let { openOrNull(it) }?.let { return image(v.mime, it) }
+                val now = SystemClock.elapsedRealtime()
+                metaSeen[block]?.takeIf { now - it.first < META_AGAIN_MS }?.let { seen ->
+                    return if (seen.second["${key.x}/${key.y}"] == Metatile.NONE) notFound() else null
+                }
+                if (now < metaOffUntil) return null
+                val r = try {
+                    get(Metatile.url(t, block), t.headers())
+                } catch (e: IOException) {
+                    return overzoomed(key) ?: notFound()
+                }
+                val entries = if (r.code == 200) {
+                    try { Metatile.parse(r.body) } catch (e: IOException) { Log.w(TAG, "metatile $block: ${e.message}"); emptyList() }
+                } else {
+                    if (r.code == 404) metaOffUntil = now + META_OFF_MS  // a Tuileries from before metatiles
+                    Log.w(TAG, "metatile $block: HTTP ${r.code}")
+                    emptyList()
+                }
+                val statuses = HashMap<String, Int>()
+                var answer: WebResourceResponse? = null
+                for (e in entries) {
+                    val path = e.cachePath()
+                    if (path != null) cache.put(path, e.data)
+                    if (e.layer != TileKey.KIND_ORTHO) continue
+                    statuses["${e.x}/${e.y}"] = e.status
+                    if (e.x == key.x && e.y == key.y && path != null) {
+                        answer = image(key.typed(e.mime)!!.mime, ByteArrayInputStream(e.data))
+                    }
+                }
+                if (metaSeen.size > 4000) metaSeen.entries.removeIf { now - it.value.first >= META_AGAIN_MS }
+                metaSeen[block] = now to statuses
+                return answer ?: if (statuses["${key.x}/${key.y}"] == Metatile.NONE) notFound() else null
+            }
+        } finally {
+            metaLocks.remove(block, lock)
+        }
     }
 
     /** Process-wide: a failure seen by one tile, a cell or a pack download spares the next requests their timeouts. */
@@ -261,7 +335,7 @@ object TileServer {
         if (z > TRAILS_MAX_Z || x >= (1 shl z) || y >= (1 shl z)) return notFound()
         val rel = "trails/$z/$x/$y.pbf"
         cache.get(rel)?.let { openOrNull(it) }?.let { return WebResourceResponse(TRAILS_MIME, null, 200, "OK", headers(), it) }
-        if (!NetState.online.value) return notFound()
+        if (!NetState.online.value || backedOff()) return notFound()
         val bytes = Tuileries.trailsOf(get(t.trailsUrl(z, x, y), t.headers()))
         if (bytes.isNotEmpty()) cache.put(rel, bytes)
         // an empty body is an empty vector tile: the page draws no trail there
@@ -370,6 +444,7 @@ object TileServer {
         c.doOutput = true
         for ((k, v) in headers) c.setRequestProperty(k, v)
         c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("X-Tuileries", "1")  // Tuileries asks it of every POST (its CSRF rule)
         try {
             c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = c.responseCode

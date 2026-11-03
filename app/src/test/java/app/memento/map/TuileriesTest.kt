@@ -18,17 +18,17 @@ import java.nio.file.Files
 import java.util.Base64
 import java.util.Collections
 
-private const val USER = "randonneur"
-private const val PASSWORD = "mot-de-passe-de-test"
+internal const val USER = "randonneur"
+internal const val PASSWORD = "mot-de-passe-de-test"
 // a WebP header: the bytes are passed through and stored, never decoded here
-private val WEBP = "RIFF\u001a\u0000\u0000\u0000WEBPVP8 ".toByteArray(Charsets.ISO_8859_1) + ByteArray(14)
+internal val WEBP = "RIFF\u001a\u0000\u0000\u0000WEBPVP8 ".toByteArray(Charsets.ISO_8859_1) + ByteArray(14)
 private const val INFO = """{"name":"Tuileries","version":"0.1.0","max_zoom":17,"layers":["ortho","dem","buildings","peaks"]}"""
 
 /**
  * A fake Tuileries (synthetic answers only): records each request's headers, checks Basic auth like the real one.
  * Plain sockets, one request per connection: the unit tests compile against android.jar, without the JDK's HTTP server.
  */
-private class FakeTuileries {
+internal class FakeTuileries {
     val requests: MutableList<Pair<String, Map<String, String>>> = Collections.synchronizedList(ArrayList())
     val posted: MutableList<Pair<String, String>> = Collections.synchronizedList(ArrayList())
     val answers: MutableMap<String, Triple<Int, String, ByteArray>> =
@@ -137,7 +137,8 @@ class TuileriesTest {
         }
         val dem = TileKey("dem", 12, 2120, 1460)
         assertEquals(dem, Tuileries.tileOf(dem, HttpResult(200, "image/png; charset=binary", byteArrayOf(1)))!!.key)
-        assertEquals(listOf("ortho", "orthow", "osmfb2"), photo.variants().map { it.kind })
+        assertEquals(listOf("ortho", "orthow", "orthoa", "osmfb2"), photo.variants().map { it.kind })
+        assertEquals("orthoa/15/16941/11670.avif", Tuileries.tileOf(photo, HttpResult(200, "image/avif", byteArrayOf(1)))!!.key.path)
         assertEquals(listOf(dem), dem.variants())
         assertEquals("""Erreur HTTP 500""", Tuileries.statusMessage(500))
     }
@@ -212,6 +213,8 @@ class TuileriesTest {
         }
         assertEquals("https://t.example.org/trails/12/2120/1460", Tuileries("https://t.example.org").trailsUrl(12, 2120, 1460))
         assertEquals("Sentinel-2 cloudless by EOX", Tuileries.parseInfo("""{"version":"1","attribution":"Sentinel-2 cloudless by EOX"}""").attribution)
+        assertEquals("Sentinel-2 cloudless 2024 by EOX · © OpenStreetMap contributors", Tuileries.parseInfo(
+            """{"version":"1","attributions":{"ortho":["© IGN","Sentinel-2 cloudless 2024 by EOX"],"trails":["© OpenStreetMap contributors"]}}""").attribution)
         MapConfig.set(null, 16)
         assertEquals("&photomax=16", MapConfig.pageQuery())
         MapConfig.set(source(), 16)
@@ -233,7 +236,7 @@ class TuileriesTest {
         val lons = DoubleArray(5000) { 6.0 + it * 0.00001 }
         val body = Tuileries.prepareLine(Route("test", lats, lons, null))
         val line = Json.parse(body).asMap()!!
-        assertEquals(1000.0, line["corridor_m"].asDouble())
+        assertEquals("test", line["name"])
         val pts = line["line"].asList()!!
         assertTrue(pts.size <= Tuileries.PREPARE_MAX_POINTS + 1)
         assertEquals(listOf(6.0, 45.0), pts.first().asList()!!.map { it.asDouble() })
@@ -245,6 +248,7 @@ class TuileriesTest {
         while (fake.posted.isEmpty() && System.currentTimeMillis() < end) Thread.sleep(20)
         assertEquals(listOf("/api/prepare" to """{"bbox":[6,45,6.1,45.1]}"""), fake.posted.toList())
         assertEquals("csecret", fake.requests.single().second["cf-access-client-secret"])
+        assertEquals("1", fake.requests.single().second["x-tuileries"])
     }
 
     @Test
