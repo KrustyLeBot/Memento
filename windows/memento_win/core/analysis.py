@@ -1,9 +1,10 @@
 """Activity analysis: cleaning, stops, distance, climb and ski runs. Same algorithms as the Android app."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
-from .track import Pause, Sport, Track, TrackPoint, distance_between
+from .track import EARTH_RADIUS, Pause, Sport, Track, TrackPoint, distance_between
 
 MAX_SPEED = 50.0          # m/s: faster between two fixes is a GPS jump
 STOP_RADIUS = 8.0         # m: 1 km/h for 30 s
@@ -149,22 +150,28 @@ def analyze(track: Track, sport: Sport) -> Analysis:
         seg[i] = seg[i - 1] + (1 if crosses else 0)
 
     stop_idx = [False] * n
+    stop_of = [-1] * n  # which stop a point belongs to: two points in the same one is an O(1) check
     stops: list[Stop] = []
+    # "within STOP_RADIUS": a flat projection around the first point, exact to the micrometre at 8 m, without the
+    # trigonometry of a full distance (a 200 000-point file asks it more than a million times)
+    lat_r = [math.radians(p.lat) for p in kept]
+    lon_r = [math.radians(p.lon) for p in kept]
+    cos_lat = [math.cos(v) for v in lat_r]
+    r2 = (STOP_RADIUS / EARTH_RADIUS) ** 2
     i = 0
     while i < n:
         j = i
-        while j + 1 < n and seg[j + 1] == seg[i] and distance_between(kept[i], kept[j + 1]) <= STOP_RADIUS:
+        while j + 1 < n and seg[j + 1] == seg[i] and \
+                ((lon_r[j + 1] - lon_r[i]) * cos_lat[i]) ** 2 + (lat_r[j + 1] - lat_r[i]) ** 2 <= r2:
             j += 1
         if j > i and kept[j].time - kept[i].time >= STOP_MIN_MS:
             for k in range(i, j + 1):
                 stop_idx[k] = True
+                stop_of[k] = len(stops)
             stops.append(Stop(kept[i].time, kept[j].time, kept[i].lat, kept[i].lon, False))
             i = j + 1
         else:
             i += 1
-
-    def same_stop(a: int, b: int) -> bool:
-        return any(a >= s.start and b <= s.end for s in stops)
 
     cum = [0.0] * n
     moving = 0
@@ -176,7 +183,7 @@ def analyze(track: Track, sport: Sport) -> Analysis:
             if d <= PAUSE_BRIDGE:
                 cum[k] += d
             continue
-        in_stop = stop_idx[k] and stop_idx[k - 1] and same_stop(kept[k - 1].time, kept[k].time)
+        in_stop = stop_of[k] >= 0 and stop_of[k] == stop_of[k - 1]
         if not in_stop:
             cum[k] += distance_between(kept[k - 1], kept[k])
             moving += kept[k].time - kept[k - 1].time

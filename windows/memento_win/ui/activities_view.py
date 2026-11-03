@@ -1,6 +1,7 @@
 """The "Activités" folder: figures and the list, then one activity with its map, figures and charts."""
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 
 from ..core import activity as act
 from ..core import mapdata
-from ..core.analysis import Analysis, analyze
+from ..core.analysis import Analysis
 from ..core.note import Note
 from ..core.store import Store
 from ..core.track import Sport
@@ -332,6 +333,7 @@ class ActivitiesScreen(QWidget):
     changed = Signal()  # something was written: the window rescans
     open_file = Signal(str)
     reveal_file = Signal(str)
+    _track_loaded = Signal(str, object, object)  # note path, analysis or None, error message or None (from the worker)
 
     def __init__(self):
         super().__init__()
@@ -357,6 +359,7 @@ class ActivitiesScreen(QWidget):
         self._build_list()
         self.detail_layout = QVBoxLayout(self.detail_page)
         self.detail_layout.setContentsMargins(0, 0, 0, 0)
+        self._track_loaded.connect(self._on_track_loaded)
 
     def set_store(self, store: Store) -> None:
         self.store = store
@@ -593,15 +596,36 @@ class ActivitiesScreen(QWidget):
         if self.store is None or note.activity is None:
             return
         self.current = note
+        info = note.activity
+        cached = self.store.cached_analysis(info) if info.file else None
+        if not info.file or cached is not None:
+            self._show_detail(note, cached)
+        else:
+            # reading and analysing a long track takes seconds: off the window's thread, the detail fills in after
+            self._show_detail(note, None, loading=True)
+            threading.Thread(target=self._load_track, args=(note,), daemon=True).start()
+        self.stack.setCurrentWidget(self.detail_page)
+
+    def _load_track(self, note: Note) -> None:
+        try:
+            _track, analysis = self.store.track_and_analysis(note.activity)
+            self._track_loaded.emit(note.path, analysis, None)
+        except Exception as error:  # noqa: BLE001 (shown on the page, as before)
+            self._track_loaded.emit(note.path, None, str(error))
+
+    def _on_track_loaded(self, path: str, analysis: Analysis | None, error: str | None) -> None:
+        if self.current is not None and self.current.path == path and self.stack.currentWidget() is self.detail_page:
+            self._show_detail(self.current, analysis, error=error)
+
+    def _show_detail(self, note: Note, analysis: Analysis | None, loading: bool = False, error: str | None = None) -> None:
         self._park_map()
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.detail_layout.addWidget(self._detail(note))
-        self.stack.setCurrentWidget(self.detail_page)
+        self.detail_layout.addWidget(self._detail(note, analysis, loading, error))
 
-    def _detail(self, note: Note) -> QWidget:
+    def _detail(self, note: Note, analysis: Analysis | None, loading: bool = False, error: str | None = None) -> QWidget:
         s = theme.scheme()
         info = note.activity
         host = QWidget()
@@ -641,13 +665,11 @@ class ActivitiesScreen(QWidget):
             description.setWordWrap(True)
             col.addWidget(description)
 
-        analysis = None
-        try:
-            if info.file:
-                analysis = analyze(self.store.read_track(info), info.sport)
-        except Exception as error:  # noqa: BLE001
+        if loading:
+            col.addWidget(QLabel("Chargement du tracé…"))
+        if error is not None:
             frame, lay = card("Fichier")
-            lay.addWidget(QLabel(f"{error}"))
+            lay.addWidget(QLabel(error))
             col.addWidget(frame)
 
         ski = info.sport == Sport.SKI

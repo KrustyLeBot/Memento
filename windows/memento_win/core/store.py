@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from . import atomic
@@ -13,7 +15,7 @@ from .activity import ActivityInfo
 from .agenda.model import AGENDA_DIR
 from .agenda.store import AgendaStore, DirFs
 from .contacts import DIR as CONTACTS_DIR, Contact, ContactBook
-from .analysis import analyze
+from .analysis import Analysis, analyze
 from .note import Note
 from .settings import PATH as SETTINGS_PATH, ActivitySettings
 from .track import Sport, Track
@@ -26,6 +28,7 @@ REFUSED = ".memento-refused/refused"
 
 # Above this, a file is refused: it is synced to every device (same limit as the Android app).
 MAX_ATTACHMENT = 50_000_000
+ANALYSES_KEPT = 4
 
 
 def now_ms() -> int:
@@ -63,6 +66,10 @@ class Store:
         self._cache: dict[str, tuple[int, Note]] = {}  # path -> (mtime_ns, note)
         self.agenda = AgendaStore(DirFs(self.root))  # agenda/: events, calendars.json (core/agenda)
         self.contacts = ContactBook(self.root)  # contacts/, kept out of the regular list
+        # the last activities analysed, (track, analysis) by _analysis_key: reopening one, or opening it right after
+        # its import, reads and analyses nothing (seconds for a 200 000-point race)
+        self._analyses: OrderedDict[tuple, tuple[Track, Analysis]] = OrderedDict()
+        self._analyses_lock = threading.Lock()
 
     # ---- reading ----
 
@@ -240,6 +247,40 @@ class Store:
                 pass  # not synced yet: the activity opens without altitude
         return track
 
+    def _analysis_key(self, info: ActivityInfo) -> tuple:
+        st = self.file_path(info.file).stat()
+        return info.file, info.alt, info.sport, st.st_size, st.st_mtime_ns
+
+    def cached_analysis(self, info: ActivityInfo) -> Analysis | None:
+        """The analysis when it is in the cache, without computing anything (None also when the file is missing)."""
+        try:
+            key = self._analysis_key(info)
+        except OSError:
+            return None
+        with self._analyses_lock:
+            hit = self._analyses.get(key)
+        return hit[1] if hit else None
+
+    def track_and_analysis(self, info: ActivityInfo) -> tuple[Track, Analysis]:
+        """The track of an activity and its analysis, from a small cache (thread-safe; the analysis is the slow part)."""
+        key = self._analysis_key(info)
+        with self._analyses_lock:
+            hit = self._analyses.get(key)
+            if hit is not None:
+                self._analyses.move_to_end(key)
+                return hit
+        track = self.read_track(info)
+        result = track, analyze(track, info.sport)
+        self._remember_analysis(key, result)
+        return result
+
+    def _remember_analysis(self, key: tuple, result: tuple[Track, Analysis]) -> None:
+        with self._analyses_lock:
+            self._analyses[key] = result
+            self._analyses.move_to_end(key)
+            while len(self._analyses) > ANALYSES_KEPT:
+                self._analyses.popitem(last=False)
+
     def find_activity(self, start: int | None) -> Note | None:
         """The activity already imported from the same recording (same start time, to the second)."""
         if start is None:
@@ -274,7 +315,9 @@ class Store:
                 note_id = fmt.generate_id()
         relative = f"attachments/{fmt.slug(title)}-{note_id}.{ext}"
         atomic.write_bytes(self.file_path(relative), data)
-        info = ActivityInfo.from_analysis(sport, analyze(track, sport), track, relative)
+        a = analyze(track, sport)
+        info = ActivityInfo.from_analysis(sport, a, track, relative)
+        self._remember_analysis(self._analysis_key(info), (track, a))
         now = now_ms()
         if replace is None:
             return self.save(Note(path=f"{ACTIVITIES_DIR}/{fmt.file_name_for(title, note_id)}", id=note_id, title=title,

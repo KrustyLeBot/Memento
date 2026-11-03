@@ -2,9 +2,7 @@
 URLs and when the IGN aerial photo is replaced by the OpenStreetMap tile. Pure Python, no Qt, so it is testable."""
 from __future__ import annotations
 
-import math
 import os
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -12,9 +10,10 @@ from urllib.parse import parse_qs
 CACHE_LIMIT = 300 * 1024 * 1024
 PURGE_TARGET = int(CACHE_LIMIT * 0.8)  # purge down to this so the next purge is not one tile away
 MAX_ZOOM = {"ortho": 19, "dem": 15}
-MIME = {"ortho": "image/jpeg", "dem": "image/png", "osmfb": "image/png"}
-EXT = {"ortho": "jpg", "dem": "png", "osmfb": "png"}
-OLD_KINDS = ("plan", "osm")  # deleted at startup: a former base layer; OSM stand-ins cached for IGN errors (build 73)
+MIME = {"ortho": "image/jpeg", "dem": "image/png", "osmfb2": "image/png"}
+EXT = {"ortho": "jpg", "dem": "png", "osmfb2": "png"}
+OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer; OSM stand-ins of IGN errors (build 73)
+# and of white sea tiles (build 80)
 BUILDINGS_Z = 15  # core/buildings.py's cells
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
@@ -26,7 +25,7 @@ TERRARIUM = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}
 
 @dataclass(frozen=True)
 class TileRequest:
-    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (Terrarium PNG), or "osmfb" (the photo's OpenStreetMap stand-in, PNG)
+    kind: str  # "ortho" (IGN aerial photo, JPEG), "dem" (Terrarium PNG), or "osmfb2" (the photo's OpenStreetMap stand-in, PNG)
     z: int
     x: int
     y: int
@@ -41,7 +40,7 @@ class TileRequest:
 
     def fallback(self) -> "TileRequest":
         """Where the photo's OpenStreetMap stand-in is cached: its own folder, so the file type follows the folder."""
-        return TileRequest("osmfb", self.z, self.x, self.y)
+        return TileRequest("osmfb2", self.z, self.x, self.y)
 
 
 @dataclass(frozen=True)
@@ -105,120 +104,13 @@ def fallback_url(tile: TileRequest) -> str:
 
 
 def ortho_needs_fallback(status: int, content_type: str, data: bytes) -> bool:
-    """IGN answers 404 "No data found" outside its photo coverage (abroad, at sea, from z13 or so), 400 past the edge
-    of its tile matrix, and a uniform white JPEG at the edge of the coverage. Only those mean "no photo here": a 403,
-    408, 429, 5xx or a dropped connection is a refusal or a hiccup inside France, and an OSM tile cached for it would
-    stand in for the photo for good. A uniform non-white tile (the sea's dark blue at low zoom) is a real answer."""
+    """IGN answers 404 "No data found" outside its photo coverage (abroad, from z13 or so) and 400 past the edge of its
+    tile matrix: only those mean "no photo here". A 403, 408, 429, 5xx or a dropped connection is a refusal or a hiccup
+    inside France, and an OSM tile cached for it would stand in for the photo for good. The white tiles off the coast
+    are kept: the map page shows the parent tile through their white pixels."""
     if status in (400, 404, 204):
         return True
-    if status != 200:
-        return False
-    if not content_type.startswith("image/") or not data:
-        return True
-    colour = jpeg_uniform_colour(data)
-    return colour is not None and colour[0] >= 248 and all(abs(c - 128) <= 4 for c in colour[1:])
-
-
-def jpeg_uniform_colour(data: bytes) -> tuple[int, ...] | None:
-    """The (Y, Cb, Cr) colour, 0..255, of a baseline JPEG whose every block is that one flat colour; None for
-    anything else (a photo, a progressive or restart-marked file, a malformed one). Only small files are decoded:
-    a tile with anything on it is several kilobytes. A flat image is exactly one where every block has no AC
-    coefficient and, after the first, a DC difference of zero, so the Huffman codes are walked, never transformed."""
-    if len(data) > 4096 or not data.startswith(b"\xff\xd8"):
-        return None
-    try:
-        return _jpeg_flat(data)
-    except (IndexError, KeyError, ValueError, struct.error):
-        return None
-
-
-def _jpeg_flat(data: bytes) -> tuple[int, ...] | None:
-    quant, huff, comps, width, height, pos = {}, {}, [], 0, 0, 2
-    while True:
-        if data[pos] != 0xFF:
-            return None
-        marker = data[pos + 1]
-        length = struct.unpack(">H", data[pos + 2:pos + 4])[0]
-        body = data[pos + 4:pos + 2 + length]
-        pos += 2 + length
-        if marker == 0xDB:
-            i = 0
-            while i < len(body):
-                precision, table = body[i] >> 4, body[i] & 15
-                quant[table] = struct.unpack(">H", body[i + 1:i + 3])[0] if precision else body[i + 1]  # the DC step
-                i += 1 + 64 * (precision + 1)
-        elif marker in (0xC0, 0xC1):
-            height, width = struct.unpack(">HH", body[1:5])
-            comps = [(body[6 + 3 * k], body[7 + 3 * k] >> 4, body[7 + 3 * k] & 15, body[8 + 3 * k]) for k in range(body[5])]
-        elif marker == 0xC4:
-            i = 0
-            while i < len(body):
-                table, counts = body[i], body[i + 1:i + 17]
-                symbols, codes, code, k = body[i + 17:i + 17 + sum(counts)], {}, 0, 0
-                for bits in range(1, 17):
-                    for _ in range(counts[bits - 1]):
-                        codes[(bits, code)] = symbols[k]
-                        code, k = code + 1, k + 1
-                    code <<= 1
-                huff[table] = codes
-                i += 17 + sum(counts)
-        elif marker in (0xDD, 0xC2) or 0xC3 <= marker <= 0xCF and marker != 0xC4:
-            return None  # restart intervals, progressive or other codings: not what a flat IGN tile is
-        elif marker == 0xDA:
-            break
-    scan = {body[1 + 2 * k]: (body[2 + 2 * k] >> 4, body[2 + 2 * k] & 15) for k in range(body[0])}
-    if not comps or len(scan) != len(comps):
-        return None
-    bits = _Bits(data, pos)
-    hmax, vmax = max(c[1] for c in comps), max(c[2] for c in comps)
-    mcus = -(-width // (8 * hmax)) * -(-height // (8 * vmax)) if len(comps) > 1 else -(-width // 8) * -(-height // 8)
-    dc = {}
-    for m in range(mcus):
-        for cid, h, v, _q in comps:
-            dc_table, ac_table = scan[cid]
-            for _ in range(h * v if len(comps) > 1 else 1):
-                size = bits.decode(huff[dc_table])
-                diff = bits.extend(size)
-                if cid in dc and diff:
-                    return None
-                dc.setdefault(cid, diff)
-                if bits.decode(huff[0x10 | ac_table]) != 0:  # anything but an immediate end of block
-                    return None
-    # rounded half up, as Kotlin's Math.round in the Android copy (Python's round() goes half to even)
-    return tuple(max(0, min(255, math.floor(dc[cid] * quant[q] / 8 + 128.5))) for cid, _h, _v, q in comps)
-
-
-class _Bits:
-    """The entropy-coded bits, with the 0xFF00 byte stuffing undone."""
-
-    def __init__(self, data: bytes, pos: int):
-        self.data, self.pos, self.acc, self.n = data, pos, 0, 0
-
-    def bit(self) -> int:
-        if self.n == 0:
-            byte = self.data[self.pos]
-            if byte == 0xFF:
-                if self.data[self.pos + 1] != 0:
-                    raise ValueError("marker inside the scan")
-                self.pos += 1
-            self.pos += 1
-            self.acc, self.n = byte, 8
-        self.n -= 1
-        return (self.acc >> self.n) & 1
-
-    def decode(self, codes: dict) -> int:
-        code = 0
-        for length in range(1, 17):
-            code = code << 1 | self.bit()
-            if (length, code) in codes:
-                return codes[(length, code)]
-        raise ValueError("bad Huffman code")
-
-    def extend(self, size: int) -> int:
-        value = 0
-        for _ in range(size):
-            value = value << 1 | self.bit()
-        return value - (1 << size) + 1 if size and value < 1 << (size - 1) else value
+    return status == 200 and (not content_type.startswith("image/") or not data)
 
 
 def purge(root: Path, limit: int = CACHE_LIMIT, target: int = PURGE_TARGET) -> tuple[int, int]:

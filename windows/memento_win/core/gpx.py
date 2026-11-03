@@ -12,8 +12,6 @@ _TRKPT_START = re.compile(r"<trkpt\b")
 _SEG = re.compile(r"<trkseg\b")
 _LAT = re.compile(r"""\blat\s*=\s*["']([^"']+)["']""")
 _LON = re.compile(r"""\blon\s*=\s*["']([^"']+)["']""")
-_ELE = re.compile(r"<ele>\s*([^<\s]+)\s*</ele>")
-_TIME = re.compile(r"<time>\s*([^<\s]+)\s*</time>")
 _HR = re.compile(r"<(?:\w+:)?hr>\s*(\d+)\s*</(?:\w+:)?hr>")
 _TRK = re.compile(r"<trk\b[^>]*>")
 UNTIMED_STEP_MS = 1000
@@ -53,6 +51,32 @@ def _trkpts(text: str):
             yield start, text[start + 6:close], text[close + 1:end]
 
 
+def _attr(attrs: str, name: str) -> str | None:
+    """An attribute's value with str.find, not a regex: two of them per point, 200 000 points in a long race."""
+    m = _LAT if name == "lat" else _LON
+    i = attrs.find(name)
+    if i < 0:
+        return None
+    # the usual shape, lat="45.1": read directly; anything else (spaces, another attribute ending in "lat") by regex
+    j = i + len(name)
+    if (i == 0 or attrs[i - 1].isspace()) and attrs[j:j + 1] == "=" and attrs[j + 1:j + 2] in ('"', "'"):
+        end = attrs.find(attrs[j + 1], j + 2)
+        if end > 0:
+            return attrs[j + 2:end]
+    found = m.search(attrs)
+    return found.group(1) if found else None
+
+
+def _child(inner: str, tag: str) -> str | None:
+    start = inner.find(f"<{tag}>")
+    if start < 0:
+        return None
+    start += len(tag) + 2
+    end = inner.find(f"</{tag}>", start)
+    value = inner[start:end].strip() if end >= 0 else ""
+    return value or None
+
+
 def _name(text: str) -> str | None:
     trk = _TRK.search(text)
     if trk is None:
@@ -79,21 +103,21 @@ def read(text: str) -> Track:
         while seg_idx + 1 < len(seg_pos) and seg_pos[seg_idx + 1] < start:
             seg_idx += 1
             seg_starts.append(len(points))
-        la, lo = _LAT.search(attrs), _LON.search(attrs)
-        if not (la and lo):
+        la, lo = _attr(attrs, "lat"), _attr(attrs, "lon")
+        if la is None or lo is None:
             continue
         try:
-            lat, lon = float(la.group(1)), float(lo.group(1))
+            lat, lon = float(la), float(lo)
         except ValueError:
             continue
-        tm = _TIME.search(inner)
-        t = parse_time(tm.group(1)) if tm else None
-        ele = _ELE.search(inner)
-        hr = _HR.search(inner)
+        tm = _child(inner, "time")
+        t = parse_time(tm) if tm else None
+        ele = _child(inner, "ele")
+        hr = _HR.search(inner) if "hr>" in inner else None
         alt = None
         if ele:
             try:
-                alt = float(ele.group(1))
+                alt = float(ele)
             except ValueError:
                 pass
         if t is None:

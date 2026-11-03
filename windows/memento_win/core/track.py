@@ -81,7 +81,7 @@ class Track:
         return replace(self, **changes)
 
 
-_R = 6371008.8
+EARTH_RADIUS = _R = 6371008.8
 
 
 def distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -77,7 +77,8 @@ data class Track(
 )
 
 object Geo {
-    private const val R = 6371008.8
+    const val EARTH_RADIUS = 6371008.8
+    private const val R = EARTH_RADIUS
 
     fun distance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val p1 = Math.toRadians(lat1)

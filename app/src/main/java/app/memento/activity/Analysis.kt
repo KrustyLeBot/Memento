@@ -1,5 +1,6 @@
 package app.memento.activity
 
+import kotlin.math.cos
 import kotlin.math.max
 
 /** One cleaned, smoothed point of an activity. */
@@ -105,13 +106,25 @@ object Analyzer {
 
         // stops: nothing moved more than STOP_RADIUS for at least STOP_MIN_MS
         val stopIdx = BooleanArray(n)
+        val stopOf = IntArray(n) { -1 } // which stop a point belongs to: two points in the same one is an O(1) check
         val stops = ArrayList<Stop>()
+        // "within STOP_RADIUS": a flat projection around the first point, exact to the micrometre at 8 m, without the
+        // trigonometry of a full distance (a 200 000-point file asks it more than a million times)
+        val latR = DoubleArray(n) { Math.toRadians(kept[it].lat) }
+        val lonR = DoubleArray(n) { Math.toRadians(kept[it].lon) }
+        val cosLat = DoubleArray(n) { cos(latR[it]) }
+        val r2 = (STOP_RADIUS / Geo.EARTH_RADIUS).let { it * it }
+        fun near(a: Int, b: Int): Boolean {
+            val dx = (lonR[b] - lonR[a]) * cosLat[a]
+            val dy = latR[b] - latR[a]
+            return dx * dx + dy * dy <= r2
+        }
         var i = 0
         while (i < n) {
             var j = i
-            while (j + 1 < n && seg[j + 1] == seg[i] && Geo.distance(kept[i], kept[j + 1]) <= STOP_RADIUS) j++
+            while (j + 1 < n && seg[j + 1] == seg[i] && near(i, j + 1)) j++
             if (j > i && kept[j].time - kept[i].time >= STOP_MIN_MS) {
-                for (k in i..j) stopIdx[k] = true
+                for (k in i..j) { stopIdx[k] = true; stopOf[k] = stops.size }
                 stops.add(Stop(kept[i].time, kept[j].time, kept[i].lat, kept[i].lon, manual = false))
                 i = j + 1
             } else {
@@ -123,7 +136,7 @@ object Analyzer {
         val cum = DoubleArray(n)
         var moving = 0L
         for (k in 1 until n) {
-            val inStop = stopIdx[k] && stopIdx[k - 1] && sameStop(stops, kept[k - 1].time, kept[k].time)
+            val inStop = stopOf[k] >= 0 && stopOf[k] == stopOf[k - 1]
             cum[k] = cum[k - 1]
             if (seg[k] != seg[k - 1]) {
                 // a pause (watch auto-pause, button): what was walked across it still counts, unless it is a jump
@@ -290,8 +303,6 @@ object Analyzer {
         }
         return best
     }
-
-    private fun sameStop(stops: List<Stop>, a: Long, b: Long) = stops.any { a >= it.start && b <= it.end }
 
     /** Sorted by time, no repeated instants, no impossible jumps, nothing recorded while paused. */
     fun clean(track: Track): List<TrackPoint> {

@@ -10,15 +10,6 @@ import java.time.OffsetDateTime
 object Gpx {
     const val UNTIMED_STEP_MS = 1000L
 
-    private val TRKPT = Regex("""<trkpt\b([^>]*?)(/>|>(.*?)</trkpt>)""", setOf(RegexOption.DOT_MATCHES_ALL))
-    private val SEG_OPEN = Regex("""<trkseg\b""")
-    private val ATTR_LAT = Regex("""\blat\s*=\s*["']([^"']+)["']""")
-    private val ATTR_LON = Regex("""\blon\s*=\s*["']([^"']+)["']""")
-    private val ELE = Regex("""<ele>\s*([^<\s]+)\s*</ele>""")
-    private val TIME = Regex("""<time>\s*([^<\s]+)\s*</time>""")
-    private val HR = Regex("""<(?:\w+:)?hr>\s*(\d+)\s*</(?:\w+:)?hr>""")
-    private val NAME = Regex("""<trk\b[^>]*>.*?<name>\s*(?:<!\[CDATA\[)?(.*?)(?:]]>)?\s*</name>""", setOf(RegexOption.DOT_MATCHES_ALL))
-
     fun looksLikeGpx(text: String) = text.contains("<gpx", ignoreCase = true)
 
     fun read(text: String): Track {
@@ -26,27 +17,25 @@ object Gpx {
         val points = ArrayList<TrackPoint>()
         val untimed = ArrayList<TrackPoint>()
         val segmentStarts = ArrayList<Int>() // index of the first point of each segment
-        val segPositions = SEG_OPEN.findAll(text).map { it.range.first }.toList()
+        val segPositions = GpxScan.openings(text, "<trkseg")
         var segIdx = -1
-        for (m in TRKPT.findAll(text)) {
-            while (segIdx + 1 < segPositions.size && segPositions[segIdx + 1] < m.range.first) {
+        GpxScan.elements(text, "trkpt") { start, attrs, inner ->
+            while (segIdx + 1 < segPositions.size && segPositions[segIdx + 1] < start) {
                 segIdx++
                 segmentStarts.add(points.size)
             }
-            val attrs = m.groupValues[1]
-            val lat = ATTR_LAT.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
-            val lon = ATTR_LON.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull() ?: continue
-            val inner = m.groupValues[3]
-            val ele = ELE.find(inner)?.groupValues?.get(1)?.toDoubleOrNull()
-            val hr = HR.find(inner)?.groupValues?.get(1)?.toIntOrNull()
-            val time = TIME.find(inner)?.groupValues?.get(1)?.let { parseTime(it) }
+            val lat = GpxScan.attr(attrs, "lat")?.toDoubleOrNull() ?: return@elements
+            val lon = GpxScan.attr(attrs, "lon")?.toDoubleOrNull() ?: return@elements
+            val ele = GpxScan.child(inner, "ele")?.toDoubleOrNull()
+            val hr = GpxScan.heartRate(inner)
+            val time = GpxScan.child(inner, "time")?.let { parseTime(it) }
             if (time == null) {
                 untimed.add(TrackPoint(untimed.size * UNTIMED_STEP_MS, lat, lon, ele, hr, gpsAlt = ele))
-                continue
+            } else {
+                points.add(TrackPoint(time, lat, lon, ele, hr, gpsAlt = ele))
             }
-            points.add(TrackPoint(time, lat, lon, ele, hr, gpsAlt = ele))
         }
-        val name = NAME.find(text)?.groupValues?.get(1)?.trim()?.ifEmpty { null }
+        val name = GpxScan.name(text, "trk")
         // timed points win: a file with a few untimed ones among them is a normal activity
         if (points.isEmpty() && untimed.isNotEmpty()) {
             val hrs = untimed.mapNotNull { it.hr }

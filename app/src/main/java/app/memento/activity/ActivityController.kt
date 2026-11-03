@@ -132,6 +132,7 @@ class ActivityController(
         if (replace == null) while (id in ids) id = NoteFormat.generateId()
         val file = "attachments/" + NoteFormat.slug(title) + "-$id.$extension"
         repo.fs.writeBytes(file, bytes)
+        justSaved = Saved(file, track, a, sport)
         val info = ActivityInfo.from(sport, a, track, file, altMarker)
         if (replace != null) {
             // the old track and its altitude file go; photos and the description stay
@@ -334,11 +335,22 @@ class ActivityController(
 
     // ---- open / edit / delete ----
 
+    /** The track and analysis of the activity just imported: opening it right after needs no second read. */
+    private class Saved(val file: String, val track: Track, val analysis: Analysis, val sport: Sport)
+    @Volatile private var justSaved: Saved? = null
+
     fun open(note: Note) {
         detail = ActivityDetail(note, null, null)
         onOpen?.invoke()
         val info = note.activity ?: return
         val file = info.file ?: return
+        val saved = justSaved
+        justSaved = null
+        // an altitude looked up after the import changes the track: then it is read again
+        if (saved != null && saved.file == file && saved.sport == info.sport && (info.alt == null || !Elevation.missing(saved.track))) {
+            detail = ActivityDetail(note, saved.track, saved.analysis)
+            return
+        }
         scope.launch {
             val loaded = withContext(io) {
                 try {

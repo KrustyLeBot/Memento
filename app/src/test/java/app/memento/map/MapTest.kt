@@ -5,7 +5,6 @@ import app.memento.activity.Geo
 import app.memento.activity.Sport
 import app.memento.activity.Track
 import app.memento.activity.TrackPoint
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -393,19 +392,9 @@ class TileSourcesTest {
         assertFalse(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-alps.jpg")))
         assertFalse(TileSources.ignHasNoTile(500, "text/html", ByteArray(100)))
         assertFalse(TileSources.ignHasNoTile(503, null, ByteArray(0)))
-        // the white tile IGN sends at the edge of its coverage is "no photo"; the flat sea of low zooms is a photo
-        assertTrue(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-white.jpg")))
+        // the white tile off the coast is kept (the page shows its parent through it), the flat sea of low zooms too
+        assertFalse(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-white.jpg")))
         assertFalse(TileSources.ignHasNoTile(200, "image/jpeg", map("ign-ortho-sea.jpg")))
-    }
-
-    @Test
-    fun flatJpegColourIsReadWithoutDecodingThePicture() {
-        // real IGN answers, shared with the Windows tests (testdata/map)
-        assertArrayEquals(intArrayOf(255, 128, 128), FlatJpeg.colour(map("ign-ortho-white.jpg")))
-        assertArrayEquals(intArrayOf(48, 151, 101), FlatJpeg.colour(map("ign-ortho-sea.jpg")))
-        assertNull(FlatJpeg.colour(map("ign-ortho-alps.jpg")))
-        val white = map("ign-ortho-white.jpg")
-        for (n in listOf(2, 100, 700, 1640)) assertNull(FlatJpeg.colour(white.copyOf(n)))
     }
 
     private fun map(name: String): ByteArray =
@@ -424,7 +413,7 @@ class TileSourcesTest {
         val t = TileKey("ortho", 12, 2116, 1466)
         assertEquals("ortho/12/2116/1466.jpg", t.path)
         assertEquals("image/jpeg", t.mime)
-        assertEquals("osmfb/12/2116/1466.png", t.fallback().path)
+        assertEquals("osmfb2/12/2116/1466.png", t.fallback().path)
         assertEquals("image/png", t.fallback().mime)
         assertEquals("image/png", TileKey("dem", 3, 7, 0).mime)
     }

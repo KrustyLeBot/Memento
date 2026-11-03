@@ -28,7 +28,7 @@
     dark: { bg: '#18191c', band: '#43474e', frame: '#c9ccd1' },
   };
   const HALO = 'rgba(255,255,255,0.85)', CASING = 'rgba(0,0,0,0.75)';
-  const ORTHO = { type: 'raster', tiles: [BASE + 't/ortho/{z}/{x}/{y}'], tileSize: 256, maxzoom: 19 };
+  const ORTHO = { type: 'raster', tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19 };
   const EMPTY = { type: 'FeatureCollection', features: [] };
 
   let mode = params.get('mode') === '2d' ? '2d' : '3d';
@@ -207,6 +207,89 @@
     if (min > max) throw new Error('relief: no DEM pixel inside the square');
     return { sq, min, max, centre: centre == null ? (min + max) / 2 : centre };
   }
+  // IGN's photo stops a few kilometres off the coast: from z13 or so a tile past it is white, wholly or in steps along
+  // the edge (or missing, and the host's OpenStreetMap stand-in is its pale water), while z12 and below still show
+  // the sea. Those pixels show the parent tile through (recursively), so the sea stays one blue. Snow is rarely that
+  // white, and where it is, its parent is snow too; abroad, OpenStreetMap's land stays as it is.
+  // z13 and up only: below, IGN still has the sea, and white is clouds or surf. A hole smaller than 1 % of the tile
+  // (a white roof, a wave) is left alone.
+  const WHITE = 235, WHITE_CHECK_PX = 64, WHITE_MIN_Z = 12, WHITE_MIN_SHARE = 0.01;
+  const OSM_WATER = [170, 211, 223];
+  const seaGap = (d, i) => (d[i] >= WHITE && d[i + 1] >= WHITE && d[i + 2] >= WHITE) ||
+    (Math.abs(d[i] - OSM_WATER[0]) <= 4 && Math.abs(d[i + 1] - OSM_WATER[1]) <= 4 && Math.abs(d[i + 2] - OSM_WATER[2]) <= 4);
+  const composedParents = new Map();  // "z/x/y" -> Promise<ImageBitmap|null>, a few, least recently used out
+  async function photoBytes(z, x, y, signal) {
+    const res = await fetch(`${BASE}t/ortho/${z}/${x}/${y}`, { signal });
+    if (!res.ok) throw new Error(`photo ${z}/${x}/${y}: HTTP ${res.status}`);
+    return res.arrayBuffer();
+  }
+  function hasWhite(bmp) {
+    const c = canvasOf(WHITE_CHECK_PX, WHITE_CHECK_PX), g = c.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingEnabled = false;  // nearest pixels: a white step is not averaged away
+    g.drawImage(bmp, 0, 0, WHITE_CHECK_PX, WHITE_CHECK_PX);
+    const d = g.getImageData(0, 0, WHITE_CHECK_PX, WHITE_CHECK_PX).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (seaGap(d, i)) n++;
+    return n >= WHITE_CHECK_PX * WHITE_CHECK_PX * WHITE_MIN_SHARE;
+  }
+  /** The tile with its white pixels replaced by the parent's (null: no white, use the file as it is). */
+  async function composed(z, x, y, bmp, signal) {
+    if (z <= WHITE_MIN_Z || !hasWhite(bmp)) return null;
+    const parent = await parentPhoto(z - 1, x >> 1, y >> 1, signal);
+    if (!parent) return null;
+    const W = bmp.width, H = bmp.height, out = canvasOf(W, H), g = out.getContext('2d');
+    g.drawImage(parent, (x & 1) * parent.width / 2, (y & 1) * parent.height / 2, parent.width / 2, parent.height / 2, 0, 0, W, H);
+    const top = canvasOf(W, H), tg = top.getContext('2d', { willReadFrequently: true });
+    tg.drawImage(bmp, 0, 0);
+    const img = tg.getImageData(0, 0, W, H), d = img.data, mask = new Uint8Array(W * H);
+    for (let p = 0; p < mask.length; p++) mask[p] = seaGap(d, p * 4) ? 1 : 0;
+    // one more pixel around each hole: the JPEG's ringing along the white edge is pale, not white
+    for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+      if (!mask[r * W + c]) continue;
+      for (let rr = Math.max(0, r - 1); rr <= Math.min(H - 1, r + 1); rr++) {
+        for (let cc = Math.max(0, c - 1); cc <= Math.min(W - 1, c + 1); cc++) d[(rr * W + cc) * 4 + 3] = 0;
+      }
+    }
+    tg.putImageData(img, 0, 0);
+    g.drawImage(top, 0, 0);
+    return out;
+  }
+  function parentPhoto(z, x, y, signal) {
+    const key = `${z}/${x}/${y}`;
+    let p = composedParents.get(key);
+    if (p) { composedParents.delete(key); composedParents.set(key, p); return p; }
+    p = (async () => {
+      try {
+        const bmp = await createImageBitmap(new Blob([await photoBytes(z, x, y, signal)]));
+        const c = await composed(z, x, y, bmp, signal);
+        if (!c) return bmp;
+        bmp.close();
+        return createImageBitmap(c);
+      } catch (e) {
+        composedParents.delete(key);  // an abort or a network error: asked again next time
+        return null;
+      }
+    })();
+    composedParents.set(key, p);
+    while (composedParents.size > 24) {
+      const old = composedParents.keys().next().value;
+      composedParents.get(old).then((b) => b && b.close && b.close());
+      composedParents.delete(old);
+    }
+    return p;
+  }
+  maplibregl.addProtocol('ortho', async (req, abort) => {
+    const m = /^ortho:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
+    const z = +m[1], x = +m[2], y = +m[3];
+    const raw = await photoBytes(z, x, y, abort.signal);
+    if (z <= WHITE_MIN_Z) return { data: raw };
+    // MapLibre 4.7 takes an ImageBitmap as it is: the tile is decoded once (off the main thread), never re-encoded
+    const bmp = await createImageBitmap(new Blob([raw]));
+    const c = await composed(z, x, y, bmp, abort.signal);
+    if (!c) return { data: bmp };
+    bmp.close();
+    return { data: await createImageBitmap(c) };
+  });
   maplibregl.addProtocol('dem', async (req, abort) => {
     const m = /^dem:\/\/(\d+)\/(\d+)\/(\d+)/.exec(req.url);
     const z = +m[1], x = +m[2], y = +m[3];
@@ -265,6 +348,7 @@
         band: geo(), mask: geo(), frame: geo(), route: geo(), lines: geo(), track: geo({ lineMetrics: true }),
         live: geo(), acc: geo(), dots: geo(), cursor: geo(),
         bld: geo({ maxzoom: 16 }),
+        peaks: geo(),
       },
       // only the buildings are lit (the terrain and the photo are not): from behind the camera, a little to the left
       light: { anchor: 'viewport', position: [1.5, 200, 35], color: '#ffffff', intensity: 0.35 },
@@ -299,6 +383,11 @@
           'fill-extrusion-height': ['get', 'h'], 'fill-extrusion-base': ['-', ['get', 'h'], ROOF_CAP],
           'fill-extrusion-vertical-gradient': false } },
         // a dark ring outside the white one: the dots stand out on snow as on forest
+        // drawn by MapLibre, not as DOM markers: collisions resolved in the renderer (the most important kept), and no
+        // per-marker "hidden behind the relief?" check, which reads the GPU's depth buffer back and stalls each frame
+        { id: 'peaks', type: 'symbol', source: 'peaks', layout: {
+          'icon-image': peakImageExpr(), 'icon-anchor': 'bottom', 'symbol-sort-key': ['get', 'importance'],
+          'icon-padding': 4, 'icon-pitch-alignment': 'viewport', 'icon-rotation-alignment': 'viewport' } },
         { id: 'dots-halo', type: 'circle', source: 'dots', paint: { 'circle-radius': 11.5, 'circle-color': CASING, 'circle-blur': 0.15 } },
         { id: 'dots', type: 'circle', source: 'dots', paint: { 'circle-radius': 7, 'circle-color': ['get', 'color'], 'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff' } },
         { id: 'cursor-halo', type: 'circle', source: 'cursor', paint: { 'circle-radius': 10, 'circle-color': CASING, 'circle-blur': 0.15 } },
@@ -353,6 +442,11 @@
   // Added on demand: also after a style rebuild, which drops images added earlier.
   map.on('styleimagemissing', (e) => {
     if (e.id === 'smap-arrow' && !map.hasImage('smap-arrow')) map.addImage('smap-arrow', arrowImage(), { pixelRatio: 2 });
+    const peak = /^peak-(light|dark)-(\d+)$/.exec(e.id);
+    if (peak && peakList[+peak[2]] && !map.hasImage(e.id)) {
+      const ratio = Math.min(2, window.devicePixelRatio || 1);
+      map.addImage(e.id, peakImage(peakList[+peak[2]], peak[1], ratio), { pixelRatio: ratio });
+    }
   });
   map.on('error', (e) => {
     // tiles the host could not get (offline, outside the coverage) are expected: a blank tile, no report
@@ -688,6 +782,9 @@
       const d = document.createElement('div'); d.className = part; posEl.appendChild(d);
     }
     posMarker = new maplibregl.Marker({ element: posEl, anchor: 'center', opacityWhenCovered: '1' });
+    // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
+    // buffer back (readPixels), which stalls the frame; this one stays fully opaque when covered anyway
+    posMarker._updateOpacity = () => {};
   }
   function orientArrow() {
     if (!posEl || !pos || pos.heading == null) return;
@@ -729,7 +826,7 @@
 
   // ---------------------------------------------------------------- peaks
 
-  let peakMarkers = [], peakSeq = 0, peakTimer = 0;
+  let peakList = [], peakSeq = 0, peakTimer = 0, peakPopup = null;
   function schedulePeaks() {
     clearTimeout(peakTimer);
     peakTimer = setTimeout(loadPeaks, 400);  // a live square moving or data arriving in bursts: one request
@@ -753,59 +850,75 @@
     if (text != null) e.textContent = text;
     return e;
   }
+  function peakImageExpr() { return ['concat', `peak-${theme}-`, ['to-string', ['get', 'id']]]; }
+  const PEAK_CHIP = {
+    light: { fill: 'rgba(255,255,255,0.95)', text: '#1d1f22', border: 'rgba(0,0,0,0.12)' },
+    dark: { fill: 'rgba(32,34,38,0.95)', text: '#eceef1', border: 'rgba(255,255,255,0.14)' },
+  };
+  /** The label chip and its stem down to the summit (the image's bottom centre), as the DOM markers drew them. */
+  function peakImage(p, th, ratio) {
+    const c = PEAK_CHIP[th], label = p.ele != null ? `${p.name} · ${p.ele} m` : p.name;
+    const FONT = '600 11px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    const m = 5, chipH = 19, stemH = 30;  // m: room for the shadow
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = FONT;
+    const textW = Math.ceil(probe.measureText(label).width), chipW = textW + 14;
+    const w = chipW + 2 * m, h = m + chipH + stemH;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(w * ratio); canvas.height = Math.ceil(h * ratio);
+    const g = canvas.getContext('2d');
+    g.scale(ratio, ratio);
+    // stem: white fading down, outlined in black, legible on snow as on forest
+    const sx = w / 2 - 1, sy = m + chipH;
+    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(sx - 1, sy, 4, stemH);
+    const grad = g.createLinearGradient(0, sy, 0, sy + stemH);
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, 'rgba(255,255,255,0.2)');
+    g.fillStyle = grad; g.fillRect(sx, sy, 2, stemH);
+    g.save();
+    g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 4; g.shadowOffsetY = 1;
+    g.beginPath(); g.roundRect(m + 0.5, m + 0.5, chipW - 1, chipH - 1, 8);
+    g.fillStyle = c.fill; g.fill();
+    g.restore();
+    g.strokeStyle = c.border; g.lineWidth = 1; g.stroke();
+    g.font = FONT; g.fillStyle = c.text; g.textBaseline = 'middle';
+    g.fillText(label, m + 7, m + chipH / 2 + 0.5);
+    return g.getImageData(0, 0, canvas.width, canvas.height);
+  }
   function setPeaks(list) {
-    peakMarkers.forEach((m) => m.remove());
-    peakMarkers = list.map((p) => {
-      const root = el('div', 'smap-peak');
-      root.appendChild(el('div', 'label', p.ele != null ? `${p.name} · ${p.ele} m` : p.name));
-      root.appendChild(el('div', 'stem'));
-      const card = el('div');
-      card.appendChild(el('b', null, p.name));
-      card.appendChild(el('div', null, p.ele != null ? `Altitude : ${p.ele} m` : 'Altitude inconnue'));
-      card.appendChild(el('div', null, `Position : ${p.lat.toFixed(4)}° N, ${p.lon.toFixed(4)}° E`));
-      card.appendChild(el('div', null, `Importance : ${p.importance} (1 = majeur)`));
-      card.appendChild(el('div', null, 'Source : IGN BD TOPO'));
-      const popup = new maplibregl.Popup({ offset: 34, closeButton: false, maxWidth: '240px' }).setDOMContent(card);
-      return new maplibregl.Marker({ element: root, anchor: 'bottom' }).setLngLat([p.lon, p.lat]).setPopup(popup).addTo(map);
-    });
-    declutter();
+    if (peakPopup) { peakPopup.remove(); peakPopup = null; }
+    // image ids carry the index in the list: images of a former list must go, or they would show its labels
+    for (const id of map.listImages()) if (id.startsWith('peak-')) map.removeImage(id);
+    peakList = list;
+    src('peaks').setData({ type: 'FeatureCollection', features: list.map((p, i) => ({
+      type: 'Feature', properties: { id: i, importance: p.importance == null ? 99 : p.importance },
+      geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+    })) });
   }
-
-  // Labels are DOM markers, so MapLibre does not avoid collisions for them: hide those that overlap a more
-  // important one (the list comes sorted by importance), leave the screen, or sit under the top overlays.
-  const TOP_RESERVED = 64;
-  let declutterFrame = 0;
-  function declutter() {
-    if (declutterFrame) return;
-    declutterFrame = requestAnimationFrame(() => {
-      declutterFrame = 0;
-      const box = map.getContainer().getBoundingClientRect();
-      // every position read first, then every visibility written: interleaved, each read waits for a fresh layout
-      const rects = peakMarkers.map((m) => m.getElement().querySelector('.label').getBoundingClientRect());
-      const kept = [];
-      peakMarkers.forEach((m, i) => {
-        const r = rects[i];
-        const off = r.top < box.top + TOP_RESERVED || r.left < box.left || r.right > box.right || r.bottom > box.bottom;
-        const hit = kept.some((k) => !(r.right + 4 < k.left || r.left - 4 > k.right || r.bottom + 4 < k.top || r.top - 4 > k.bottom));
-        m.getElement().style.visibility = off || hit ? 'hidden' : 'visible';
-        if (!off && !hit) kept.push(r);
-      });
-    });
-  }
-  map.on('move', declutter);
-  map.on('resize', declutter);
+  map.on('click', 'peaks', (e) => {
+    const p = e.features && e.features[0] && peakList[e.features[0].properties.id];
+    if (!p) return;
+    const card = el('div');
+    card.appendChild(el('b', null, p.name));
+    card.appendChild(el('div', null, p.ele != null ? `Altitude : ${p.ele} m` : 'Altitude inconnue'));
+    card.appendChild(el('div', null, `Position : ${p.lat.toFixed(4)}° N, ${p.lon.toFixed(4)}° E`));
+    card.appendChild(el('div', null, `Importance : ${p.importance} (1 = majeur)`));
+    card.appendChild(el('div', null, 'Source : IGN BD TOPO'));
+    if (peakPopup) peakPopup.remove();
+    peakPopup = new maplibregl.Popup({ offset: 56, closeButton: false, maxWidth: '240px' })
+      .setLngLat([p.lon, p.lat]).setDOMContent(card).addTo(map);
+  });
+  map.on('mouseenter', 'peaks', () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'peaks', () => { map.getCanvas().style.cursor = ''; });
 
   // MapLibre changes the camera's elevation while rendering (DEM tiles arriving) and the ground under a marker
-  // when its DEM tile loads, both without a move event: the DOM markers would stay where they were drawn, off the
-  // block or off screen. They are re-placed after such a frame.
+  // when its DEM tile loads, both without a move event: the position marker (DOM) would stay where it was drawn,
+  // off the block or off screen. It is re-placed after such a frame.
   let markerFrame = 0, lastElevation = null;
   function replaceMarkers() {
-    if (markerFrame) return;
+    if (markerFrame || !posAdded) return;
     markerFrame = requestAnimationFrame(() => {
       markerFrame = 0;
       if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
-      peakMarkers.forEach((m) => m.setLngLat(m.getLngLat()));
-      declutter();
     });
   }
   map.on('render', () => {
@@ -1148,6 +1261,7 @@
       map.setPaintProperty('mask', 'fill-color', c.bg);
       map.setPaintProperty('band', 'fill-color', c.band);
       map.setPaintProperty('frame', 'line-color', c.frame);
+      map.setLayoutProperty('peaks', 'icon-image', peakImageExpr());
     },
     setCursor(lon, lat) {
       src('cursor').setData(lon == null ? EMPTY : { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [lon, lat] } });

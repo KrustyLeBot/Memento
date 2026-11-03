@@ -1,6 +1,7 @@
 package app.memento.map
 
 import app.memento.activity.Fit
+import app.memento.activity.GpxScan
 import app.memento.activity.Track
 
 /**
@@ -8,10 +9,6 @@ import app.memento.activity.Track
  * GPX `<trkpt>` and `<rtept>` are taken as they come, with their `<ele>` when present.
  */
 object RouteFile {
-    private val PT = Regex("""<(trkpt|rtept)\b([^>]*?)(/>|>(.*?)</\1>)""", setOf(RegexOption.DOT_MATCHES_ALL))
-    private val ATTR_LAT = Regex("""\blat\s*=\s*["']([^"']+)["']""")
-    private val ATTR_LON = Regex("""\blon\s*=\s*["']([^"']+)["']""")
-    private val ELE = Regex("""<ele>\s*([^<\s]+)\s*</ele>""")
     private val NAME = Regex("""<(?:trk|rte|metadata)\b[^>]*>\s*<name>\s*(?:<!\[CDATA\[)?(.*?)(?:]]>)?\s*</name>""", setOf(RegexOption.DOT_MATCHES_ALL))
 
     fun read(bytes: ByteArray, fallbackName: String): Route {
@@ -29,13 +26,13 @@ object RouteFile {
     fun readGpx(text: String, fallbackName: String): Route {
         val trk = ArrayList<Triple<Double, Double, Double?>>()
         val rte = ArrayList<Triple<Double, Double, Double?>>()
-        for (m in PT.findAll(text)) {
-            val attrs = m.groupValues[2]
-            // "NaN" parses as a number: one such point would make the route's box, and its pack, NaN
-            val lat = ATTR_LAT.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: continue
-            val lon = ATTR_LON.find(attrs)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: continue
-            val ele = ELE.find(m.groupValues[4])?.groupValues?.get(1)?.toDoubleOrNull()
-            (if (m.groupValues[1] == "trkpt") trk else rte).add(Triple(lat, lon, ele))
+        for ((tag, out) in listOf("trkpt" to trk, "rtept" to rte)) {
+            GpxScan.elements(text, tag) { _, attrs, inner ->
+                // "NaN" parses as a number: one such point would make the route's box, and its pack, NaN
+                val lat = GpxScan.attr(attrs, "lat")?.toDoubleOrNull()?.takeIf { it in -90.0..90.0 } ?: return@elements
+                val lon = GpxScan.attr(attrs, "lon")?.toDoubleOrNull()?.takeIf { it in -180.0..180.0 } ?: return@elements
+                out.add(Triple(lat, lon, GpxScan.child(inner, "ele")?.toDoubleOrNull()))
+            }
         }
         val name = NAME.find(text)?.groupValues?.get(1)?.let { unescape(it) }?.trim()?.ifEmpty { null } ?: fallbackName
         // a file with both usually carries the detailed track and a few route waypoints

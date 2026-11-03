@@ -298,3 +298,27 @@ def test_the_map_expands_over_the_window_and_comes_back_in_place(window):
     panel.expand()
     window.show_module("notes")  # leaving the module puts it back first
     assert not panel.expanded
+
+
+# ---- a long track opens without freezing the window ----
+
+def test_an_activity_track_is_read_off_the_window_thread_then_cached(window, tmp_path):
+    import time as _time
+    gpx = tmp_path / "ride.gpx"
+    pts = "".join(f'<trkpt lat="{45 + i * 3 / 111320:.7f}" lon="6.0"><ele>{1000 + i}</ele>'
+                  f'<time>2024-01-01T10:{i // 60:02d}:{i % 60:02d}Z</time></trkpt>' for i in range(120))
+    gpx.write_text(f'<?xml version="1.0"?><gpx><trk><name>Longue</name><trkseg>{pts}</trkseg></trk></gpx>', encoding="utf-8")
+    note = window.store.import_activity(gpx, None, None)
+    acts = window.activities
+    window.store._analyses.clear()  # as after a restart: nothing analysed yet
+    window.show_module("activities")
+    acts.open_activity(note)
+    texts = lambda: [w.text() for w in acts.detail_page.findChildren(QLabel)]  # noqa: E731
+    assert "Chargement du tracé…" in texts()
+    deadline = _time.time() + 10
+    while "Chargement du tracé…" in texts() and _time.time() < deadline:
+        QApplication.processEvents()
+        _time.sleep(0.01)
+    assert "Chargement du tracé…" not in texts() and acts.current is note
+    acts.open_activity(note)  # cached now: filled at once
+    assert "Chargement du tracé…" not in texts()

@@ -45,7 +45,7 @@ def test_peaks_and_files_are_parsed():
 def test_cache_path_and_urls(tmp_path):
     t = mapcache.TileRequest("ortho", 14, 8501, 5850)
     assert mapcache.tile_path(tmp_path, t) == tmp_path / "ortho" / "14" / "8501" / "5850.jpg"
-    assert mapcache.tile_path(tmp_path, t.fallback()) == tmp_path / "osmfb" / "14" / "8501" / "5850.png"
+    assert mapcache.tile_path(tmp_path, t.fallback()) == tmp_path / "osmfb2" / "14" / "8501" / "5850.png"
     assert (t.mime, t.fallback().mime, mapcache.TileRequest("dem", 1, 0, 0).mime) == ("image/jpeg", "image/png", "image/png")
     assert "LAYER=ORTHOIMAGERY.ORTHOPHOTOS" in mapcache.upstream_url(t)
     assert "FORMAT=image/jpeg" in mapcache.upstream_url(t)
@@ -60,26 +60,18 @@ TESTDATA = __import__("pathlib").Path(__file__).resolve().parents[2] / "testdata
 
 
 def test_ortho_falls_back_to_osm_outside_ign_coverage():
-    # real IGN answers (testdata/map): a photo, the white tile of the coverage's edge, the sea at low zoom, abroad
+    # real IGN answers (testdata/map): a photo, the white tile off the coast (the page shows its parent through it),
+    # the sea at low zoom, abroad
     photo, white, sea = ((TESTDATA / f"ign-ortho-{n}.jpg").read_bytes() for n in ("alps", "white", "sea"))
     assert not mapcache.ortho_needs_fallback(200, "image/jpeg", photo)
-    assert mapcache.ortho_needs_fallback(200, "image/jpeg", white)
-    assert not mapcache.ortho_needs_fallback(200, "image/jpeg", sea)  # flat, but a real answer: the sea
+    assert not mapcache.ortho_needs_fallback(200, "image/jpeg", white)
+    assert not mapcache.ortho_needs_fallback(200, "image/jpeg", sea)
     assert mapcache.ortho_needs_fallback(404, "text/xml; charset=UTF-8", (TESTDATA / "ign-ortho-nodata.xml").read_bytes())
     assert mapcache.ortho_needs_fallback(200, "text/xml", b"<x/>")
     assert mapcache.ortho_needs_fallback(200, "image/jpeg", b"")
     # refusals and hiccups inside France: an OSM tile cached for them would replace the photo for good
     for status in (0, 403, 408, 429, 500, 502, 503):
         assert not mapcache.ortho_needs_fallback(status, "text/html", b"<html/>")
-
-
-def test_flat_jpeg_detection():
-    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-white.jpg").read_bytes()) == (255, 128, 128)
-    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-sea.jpg").read_bytes()) == (48, 151, 101)
-    assert mapcache.jpeg_uniform_colour((TESTDATA / "ign-ortho-alps.jpg").read_bytes()) is None
-    white = (TESTDATA / "ign-ortho-white.jpg").read_bytes()
-    assert all(mapcache.jpeg_uniform_colour(white[:n]) is None for n in (2, 100, 700, 1640))  # truncated
-    assert mapcache.jpeg_uniform_colour(png(4, 4, b"\xff\xff\xff")) is None
 
 
 # ---- disk cache ----
@@ -297,7 +289,7 @@ def test_every_function_the_windows_host_calls_is_in_the_page_api():
 
 def test_urls_the_page_requests_are_served():
     page = _page()
-    assert "BASE + 't/ortho/{z}/{x}/{y}'" in page
+    assert "fetch(`${BASE}t/ortho/${z}/${x}/${y}`, { signal })" in page  # through the page's ortho:// protocol
     assert "maxzoom: 19" in page
     assert "`${BASE}t/dem/${z}/${x}/${y}`" in page
     assert "w=${sq[0].toFixed(5)}&s=${sq[1].toFixed(5)}&e=${sq[2].toFixed(5)}&n=${sq[3].toFixed(5)}" in page
