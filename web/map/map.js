@@ -361,19 +361,19 @@
         // the route to follow: white on a dark casing, under the coloured trail that runs along it
         { id: 'route-case', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 11 } },
         { id: 'route', type: 'line', source: 'route', layout: lineLayout, paint: { 'line-color': '#ffffff', 'line-width': 6.5, 'line-opacity': 0.9 } },
-        arrows('route-arrows', 'route'),
         { id: 'lines-halo', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'lines-case', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'lines', type: 'line', source: 'lines', layout: lineLayout, paint: { 'line-color': ['get', 'color'], 'line-width': 5 } },
-        arrows('lines-arrows', 'lines'),
         { id: 'track-halo', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 10.5 } },
         { id: 'track-case', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 8 } },
         { id: 'track', type: 'line', source: 'track', layout: lineLayout, paint: { 'line-width': 5, 'line-gradient': solid('#d7191c') } },
-        arrows('track-arrows', 'track'),
         { id: 'live-halo', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 12 } },
         { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 9.5 } },
         { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
         { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.2, 'fill-outline-color': '#ffffff' } },
+        // with terrain, each run of draped layers (fill, line, raster) is one render-to-texture pass per terrain tile, and
+        // with two runs or more MapLibre 4.7 re-renders every tile every frame: no symbol layer between draped layers
+        arrows('route-arrows', 'route'), arrows('lines-arrows', 'lines'), arrows('track-arrows', 'track'),
         // after every layer draped on the terrain (one render-to-texture pass for all of them), before the dots
         { id: 'bld-walls', type: 'fill-extrusion', source: 'bld', layout: { visibility: 'none' }, paint: {
           'fill-extrusion-color': BLD_WALL, 'fill-extrusion-height': ['-', ['get', 'h'], ROOF_CAP],
