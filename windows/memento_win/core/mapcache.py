@@ -16,6 +16,8 @@ EXT = {"ortho": "jpg", "orthow": "webp", "dem": "png", "osmfb2": "png"}
 OLD_KINDS = ("plan", "osm", "osmfb")  # deleted at startup: a former base layer; OSM stand-ins of IGN errors (build 73)
 # and of white sea tiles (build 80)
 BUILDINGS_Z = 15  # core/buildings.py's cells
+TRAILS_MAX_Z = 15  # Tuileries' trails pyramid; the page overzooms past it
+TRAILS_MIME = "application/x-protobuf"
 USER_AGENT = "Memento (https://github.com/KrustyLeBot/Memento)"
 
 IGN_ORTHO = ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
@@ -73,11 +75,18 @@ class BuildingsRequest:
 
 
 @dataclass(frozen=True)
+class TrailsRequest:
+    z: int
+    x: int
+    y: int  # a hiking-trails vector tile (Tuileries only)
+
+
+@dataclass(frozen=True)
 class FileRequest:
     path: str  # relative to web/, e.g. "map/index.html"
 
 
-def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | BuildingsRequest | FileRequest | None:
+def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | BuildingsRequest | TrailsRequest | FileRequest | None:
     """`path` is the URL path under the base (`/t/ortho/12/2120/1460`, `/peaks`, `/buildings/15/16941/11670`,
     `/map/map.js`); None = not served."""
     parts = [p for p in path.split("/") if p]
@@ -92,6 +101,9 @@ def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | Bu
     if len(parts) == 4 and parts[0] == "buildings" and all(p.isdigit() and len(p) <= 7 for p in parts[1:]):
         z, x, y = (int(p) for p in parts[1:])
         return BuildingsRequest(x, y) if z == BUILDINGS_Z and x < 2 ** z and y < 2 ** z else None
+    if len(parts) == 4 and parts[0] == "trails" and all(p.isdigit() and len(p) <= 7 for p in parts[1:]):
+        z, x, y = (int(p) for p in parts[1:])
+        return TrailsRequest(z, x, y) if z <= TRAILS_MAX_Z and x < 2 ** z and y < 2 ** z else None
     if parts == ["peaks"]:
         q = parse_qs(query)
         try:
@@ -108,6 +120,10 @@ def parse_request(path: str, query: str = "") -> TileRequest | PeaksRequest | Bu
 
 def tile_path(root: Path, tile: TileRequest) -> Path:
     return root / tile.kind / str(tile.z) / str(tile.x) / f"{tile.y}.{EXT[tile.kind]}"
+
+
+def trails_path(root: Path, req: TrailsRequest) -> Path:
+    return root / "trails" / str(req.z) / str(req.x) / f"{req.y}.pbf"
 
 
 def upstream_url(tile: TileRequest) -> str:
@@ -173,7 +189,7 @@ def _cached_files(top: str):
                         stack.append(entry.path)
                     continue
                 name = entry.name
-                if not (name.endswith((".png", ".jpg", ".webp")) or cells and name.endswith(".json")):
+                if not (name.endswith((".png", ".jpg", ".webp", ".pbf")) or cells and name.endswith(".json")):
                     continue
                 try:
                     st = entry.stat()  # follows a link like os.stat did; a plain file's date is the listing's

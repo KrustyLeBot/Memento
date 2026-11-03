@@ -269,10 +269,47 @@ def test_configure_reaches_the_live_store_and_the_page_url():
     QApplication.instance() or QApplication([])
     from memento_win.ui import mapview
     try:
-        maphost.configure(source(), 15)
+        maphost.configure(source(), 15, fetch_info=False)
         assert maphost.tile_store().source == source()
-        assert mapview.page_url("2d", "light").endswith("&photomax=15")
+        assert mapview.page_url("2d", "light").endswith("&photomax=15&trails=1")
+        maphost.set_attribution("Sentinel-2 cloudless & EOX")
+        assert mapview.page_url("2d", "light").endswith("&trails=1&attrib=Sentinel-2%20cloudless%20%26%20EOX")
         maphost.configure(tuileries.Tuileries(""), 99)
         assert maphost.tile_store().source is None and maphost.photo_max_zoom() == 19
+        assert mapview.page_url("3d", "dark").endswith("&interactive=1&photomax=19")  # no trails, no credit
     finally:
         maphost.configure(None, tuileries.PHOTO_MAX_ZOOM_DEFAULT)
+
+
+def test_trails_requests_and_answers(tmp_path):
+    import gzip
+    assert mapcache.parse_request("/trails/12/2120/1460") == mapcache.TrailsRequest(12, 2120, 1460)
+    assert mapcache.parse_request("/trails/16/1/1") is None and mapcache.parse_request("/trails/2/4/0") is None
+    assert mapcache.trails_path(tmp_path, mapcache.TrailsRequest(12, 2120, 1460)) == tmp_path / "trails" / "12" / "2120" / "1460.pbf"
+    assert source().trails_url(mapcache.TrailsRequest(12, 2120, 1460)) == "https://tuileries.example.org/trails/12/2120/1460"
+    mvt = b"\x1a\x08trails"
+    assert tuileries.trails_answer(200, mvt) == mvt
+    assert tuileries.trails_answer(200, gzip.compress(mvt)) == mvt
+    assert tuileries.trails_answer(204, b"") == b"" and tuileries.trails_answer(404, b"none") == b""
+    assert tuileries.trails_answer(502, b"down") is None
+    info = tuileries.parse_info(b'{"version":"1","max_zoom":17,"attribution":"Sentinel-2 cloudless by EOX"}')
+    assert info.attribution == "Sentinel-2 cloudless by EOX" and tuileries.parse_info(INFO).attribution == ""
+
+
+def test_trails_are_cached_but_not_their_absence(tmp_path, real_store, monkeypatch):
+    store = maphost.TileStore(tmp_path)
+    got = []
+    store.trails(mapcache.TrailsRequest(12, 1, 1), got.append)
+    assert got == [None]  # no Tuileries: no trails at all
+    sent = _requests(store, monkeypatch)
+    store.source = source()
+    req, empty = mapcache.TrailsRequest(12, 2120, 1460), mapcache.TrailsRequest(12, 2121, 1460)
+    store.trails(req, got.append)
+    assert sent[-1][0] == "https://tuileries.example.org/trails/12/2120/1460" and sent[-1][1]["authorization"].startswith("Basic ")
+    store._trails_answer(req, "trails/12/2120/1460", False, 200, b"\x1a\x08trails")
+    store.trails(empty, got.append)
+    store._trails_answer(empty, "trails/12/2121/1460", False, 204, b"")
+    assert got[1:] == [b"\x1a\x08trails", b""]
+    assert mapcache.trails_path(tmp_path, req).is_file() and not mapcache.trails_path(tmp_path, empty).exists()
+    store.trails(req, got.append)  # from the cache
+    assert got[-1] == b"\x1a\x08trails" and len(sent) == 2

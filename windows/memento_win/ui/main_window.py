@@ -362,7 +362,11 @@ class MainWindow(QMainWindow):
 
     def _test_tiles(self, source: tuileries.Tuileries) -> None:
         self.settings.tiles_status.setText("Connexion…")
-        run_async(lambda: tuileries.fetch_info(source), self.settings.show_tiles_test, self.settings.show_tiles_test)
+        def done(result) -> None:
+            self.settings.show_tiles_test(result)
+            if isinstance(result, tuileries.Info) and source == self._tuileries():
+                maphost.set_attribution(result.attribution)
+        run_async(lambda: tuileries.fetch_info(source), done, done)
 
     def _contacts_order_changed(self, first_name_first: bool) -> None:
         self.config.contacts_first_name_first = first_name_first

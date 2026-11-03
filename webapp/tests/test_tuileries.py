@@ -104,9 +104,37 @@ def test_status_line_reads_api_info(tiles_client, net):
     net.answers["https://tuileries.example.org/api/info"] = (200, "application/json",
                                                             b'{"name":"Tuileries","version":"0.1.0","max_zoom":17,"layers":["ortho"]}')
     assert tiles_client.get("/api/map/tiles").json() == {
-        "source": "tuileries", "url": "https://tuileries.example.org/", "name": "Tuileries", "version": "0.1.0", "max_zoom": 17}
+        "source": "tuileries", "url": "https://tuileries.example.org/", "name": "Tuileries", "version": "0.1.0", "max_zoom": 17,
+        "attribution": ""}
     net.answers["https://tuileries.example.org/api/info"] = (401, "text/plain", b"")
-    assert "mot de passe" in tiles_client.get("/api/map/tiles").json()["error"]
+    calls = len(net.calls)
+    assert tiles_client.get("/api/map/tiles").json()["version"] == "0.1.0"  # a good answer is kept a while...
+    assert len(net.calls) == calls
+    assert "mot de passe" in tiles_client.get("/api/map/tiles?fresh=1").json()["error"]  # ...but not for the test
+
+
+def test_trails_through_tuileries(tiles_client, net, folders):
+    import gzip
+    mvt = b"\x1a\x08trails"
+    net.answers["https://tuileries.example.org/trails/12/2120/"] = (200, "application/vnd.mapbox-vector-tile", gzip.compress(mvt))
+    net.answers["https://tuileries.example.org/trails/12/2121/"] = (204, "", b"")
+    net.answers["https://tuileries.example.org/trails/12/2122/"] = (502, "text/plain", b"down")
+    tile = tiles_client.get("/trails/12/2120/1460")
+    assert tile.status_code == 200 and tile.content == mvt and tile.headers["content-type"] == "application/x-protobuf"
+    assert (folders[1] / "tiles" / "trails" / "12" / "2120" / "1460.pbf").read_bytes() == mvt
+    empty = tiles_client.get("/trails/12/2121/1460")
+    assert empty.status_code == 204 and "max-age=300" in empty.headers["cache-control"]
+    tiles_client.get("/trails/12/2121/1460")
+    assert net.calls.count("https://tuileries.example.org/trails/12/2121/1460") == 2  # an empty answer is not kept
+    assert tiles_client.get("/trails/12/2122/1460").status_code == 404
+    tiles_client.get("/trails/12/2120/1460")
+    assert net.calls.count("https://tuileries.example.org/trails/12/2120/1460") == 1
+    assert all(h["Authorization"] == BASIC for h in net.headers)
+
+
+def test_no_trails_without_tuileries_and_none_without_login(client, net, make_client):
+    assert client.get("/trails/12/2120/1460").status_code == 404 and net.calls == []
+    assert make_client().get("/trails/12/2120/1460").status_code == 401
 
 
 def test_http_get_carries_the_credentials_to_a_real_server():

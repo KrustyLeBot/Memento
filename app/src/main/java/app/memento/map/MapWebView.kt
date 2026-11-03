@@ -210,9 +210,9 @@ object MapHost {
         return w
     }
 
-    // photomax: the photo source's maxzoom (a setting); the page enlarges that level beyond it
+    // photomax, trails, attrib: the map settings and the tile server extras (MapConfig.pageQuery)
     internal fun pageUrl(mode3d: Boolean, dark: Boolean) = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") +
-        "&theme=" + (if (dark) "dark" else "light") + "&interactive=1&photomax=" + MapConfig.photoMaxZoom
+        "&theme=" + (if (dark) "dark" else "light") + "&interactive=1" + MapConfig.pageQuery()
 
     /** Loads the page again with the current [MapConfig] (read when it loads); the kept state is replayed on "ready". */
     fun reloadPage() {

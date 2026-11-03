@@ -21,6 +21,7 @@ object MapRuntime {
         Settings(app).let { MapConfig.set(it.tuileries, it.photoMaxZoom) }
         NetState.init(app)
         TileServer.init(app)
+        TileServer.refreshInfo()
         OfflinePacks.onDownloadStarted = { PackDownloadService.start(app) }
         OfflinePacks.init(app)
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {

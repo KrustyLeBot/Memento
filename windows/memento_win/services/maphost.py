@@ -13,6 +13,7 @@ import time
 import traceback
 import uuid
 from functools import partial
+from urllib.parse import quote
 from pathlib import Path
 from typing import Callable
 
@@ -82,21 +83,53 @@ def _request(url: str, source: tuileries.Tuileries | None = None) -> QNetworkReq
 # What the settings chose: the Tuileries server (None: IGN, OpenStreetMap and AWS directly) and the photo's top zoom.
 _source: tuileries.Tuileries | None = None
 _photo_max_zoom = tuileries.PHOTO_MAX_ZOOM_DEFAULT
+_attribution = ""  # Tuileries' own credit, from its /api/info (read in the background)
 
 
-def configure(source: tuileries.Tuileries | None, photo_max_zoom: int) -> None:
+def configure(source: tuileries.Tuileries | None, photo_max_zoom: int, fetch_info: bool = True) -> None:
     """Applies the map settings: to the tile store at once, to the pages on their next load."""
-    global _source, _photo_max_zoom
-    _source = source if source is not None and source.configured else None
+    global _source, _photo_max_zoom, _attribution
+    source = source if source is not None and source.configured else None
+    changed = source != _source
+    _source = source
     _photo_max_zoom = tuileries.clamp_photo_max_zoom(photo_max_zoom)
+    if changed:
+        _attribution = ""
     if _profile is not None and shiboken6.isValid(_profile):
         store = _profile.findChild(TileStore)
         if store is not None:
             store.source = _source
+    if _source is not None and changed and fetch_info:
+        wanted = _source
+
+        def run() -> None:
+            global _attribution
+            try:
+                info = tuileries.fetch_info(wanted)
+            except tuileries.TuileriesError as error:
+                _log(f"Tuileries: {error}")
+                return
+            if _source == wanted:
+                _attribution = info.attribution
+        threading.Thread(target=run, name="tuileries-info", daemon=True).start()
+
+
+def set_attribution(text: str) -> None:
+    """From a successful "Tester la connexion": shown by the next page load."""
+    global _attribution
+    _attribution = text
 
 
 def photo_max_zoom() -> int:
     return _photo_max_zoom
+
+
+def page_query() -> str:
+    """What the page takes from the host's settings: the photo's top zoom and, with Tuileries, its trails and credit."""
+    query = f"&photomax={_photo_max_zoom}"
+    if _source is not None:
+        query += "&trails=1" + (f"&attrib={quote(_attribution)}" if _attribution else "")
+    return query
 
 
 def _log(text: str) -> None:
@@ -392,6 +425,58 @@ class TileStore(QObject):
         for done in self._peaks_waiting.pop(key, []):
             done(found or [])
 
+    # ---- trails (Tuileries only) ----
+
+    def trails(self, req: mapcache.TrailsRequest, done: Callable[[bytes | None], None]) -> None:
+        """The vector tile from the cache, else from Tuileries; b"" where it has none (never cached), None on error."""
+        if self.source is None:
+            done(None)
+            return
+        path = mapcache.trails_path(self.root, req)
+        if path in self._pending:
+            done(self._pending[path])
+            return
+        try:
+            data = _read_cached(path)
+            done(data)
+            return
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            _log(f"{path}: {error}")
+        if self.backoff.blocked(time.monotonic()):
+            done(None)
+            return
+        key = f"trails/{req.z}/{req.x}/{req.y}"
+        if key in self._waiting:
+            self._waiting[key].append(done)
+            return
+        self._waiting[key] = [done]
+        reply = self._nam.get(_request(self.source.trails_url(req), self.source))
+        reply.finished.connect(partial(self._trails_fetched, reply, req, key))
+
+    def _trails_fetched(self, reply: QNetworkReply, req: mapcache.TrailsRequest, key: str) -> None:
+        try:
+            error = reply.error()
+            status = int(reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute) or 0)
+            data = bytes(reply.readAll())
+        finally:
+            reply.deleteLater()
+        self._trails_answer(req, key, error in OFFLINE_ERRORS, status, data)
+
+    def _trails_answer(self, req: mapcache.TrailsRequest, key: str, offline: bool, status: int, data: bytes) -> None:
+        if offline:
+            self.backoff.failed(time.monotonic())
+            self._finish(key, None)
+            return
+        self.backoff.succeeded()
+        found = tuileries.trails_answer(status, data)
+        if found is None:
+            _log(f"{key}: Tuileries HTTP {status}")
+        elif found:
+            self._store(mapcache.trails_path(self.root, req), found)
+        self._finish(key, found)
+
     # ---- buildings ----
 
     def buildings(self, req: mapcache.BuildingsRequest, done: Callable[[bytes | None], None]) -> None:
@@ -492,6 +577,9 @@ class SchemeHandler(QWebEngineUrlSchemeHandler):
             self.store.peaks(req, lambda found, j=job: self._answer(j, b"application/json", json.dumps(found).encode()))
         elif isinstance(req, mapcache.BuildingsRequest):
             self.store.buildings(req, lambda found, j=job: self._answer(j, b"application/json", found))
+        elif isinstance(req, mapcache.TrailsRequest):
+            # an empty body is an empty vector tile: the page draws no trail there
+            self.store.trails(req, lambda found, j=job: self._answer(j, mapcache.TRAILS_MIME.encode(), found))
         else:
             job.fail(QWebEngineUrlRequestJob.Error.UrlNotFound)
 

@@ -6,6 +6,7 @@ Windows host and the web server."""
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import math
 import urllib.error
@@ -58,6 +59,9 @@ class Tuileries:
     def buildings_url(self, x: int, y: int) -> str:
         return f"{self.base}buildings/{mapcache.BUILDINGS_Z}/{x}/{y}"
 
+    def trails_url(self, req: mapcache.TrailsRequest) -> str:
+        return f"{self.base}trails/{req.z}/{req.x}/{req.y}"
+
     def peaks_url(self, w: float, s: float, e: float, n: float) -> str:
         return f"{self.base}peaks?w={w:.5f}&s={s:.5f}&e={e:.5f}&n={n:.5f}"
 
@@ -95,6 +99,21 @@ def tile_answer(tile: mapcache.TileRequest, status: int, content_type: str, data
     return tile.typed(content_type)
 
 
+def trails_answer(status: int, data: bytes) -> bytes | None:
+    """A trails tile as the page takes it: the (un-gzipped) vector tile, b"" for "no trail here" (204, and 404 while
+    Tuileries has not built its trails: never cached, asked again later), None for an error."""
+    if status in (204, 404):
+        return b""
+    if status != 200:
+        return None
+    if data[:2] == b"\x1f\x8b":  # stored gzipped by Tuileries, sent with Content-Encoding the hosts do not ask for
+        try:
+            data = gzip.decompress(data)
+        except (OSError, EOFError):
+            return None
+    return data
+
+
 def valid_cell(data: bytes, x: int, y: int) -> bool:
     """A buildings cell as core/buildings.py encodes it, for that cell (anything else is never cached)."""
     try:
@@ -128,6 +147,7 @@ class Info:
     version: str
     max_zoom: int | None
     layers: tuple[str, ...]
+    attribution: str = ""  # the server's own credit (the photo abroad), shown on the map
 
     def summary(self) -> str:
         zoom = f", zoom max {self.max_zoom}" if self.max_zoom is not None else ""
@@ -143,9 +163,10 @@ def parse_info(data: bytes) -> Info:
         raise TuileriesError("Réponse inattendue : ce n'est pas un serveur Tuileries ?")
     zoom = doc.get("max_zoom")
     layers = doc.get("layers") if isinstance(doc.get("layers"), list) else []
+    attribution = doc.get("attribution")
     return Info(str(doc.get("name") or "Tuileries"), doc["version"],
                 zoom if isinstance(zoom, int) and not isinstance(zoom, bool) else None,
-                tuple(str(v) for v in layers))
+                tuple(str(v) for v in layers), attribution.strip()[:300] if isinstance(attribution, str) else "")
 
 
 def info_answer(status: int, data: bytes) -> Info:

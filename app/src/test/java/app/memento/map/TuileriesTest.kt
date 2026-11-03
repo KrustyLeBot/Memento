@@ -198,6 +198,36 @@ class TuileriesTest {
     }
 
     @Test
+    fun trailsAndThePageQuery() {
+        val mvt = byteArrayOf(0x1a, 0x02, 0x74, 0x72)
+        val gz = java.io.ByteArrayOutputStream().also { o -> java.util.zip.GZIPOutputStream(o).use { it.write(mvt) } }.toByteArray()
+        assertArrayEquals(mvt, Tuileries.trailsOf(HttpResult(200, "application/vnd.mapbox-vector-tile", gz)))
+        assertArrayEquals(mvt, Tuileries.trailsOf(HttpResult(200, "application/vnd.mapbox-vector-tile", mvt)))
+        assertEquals(0, Tuileries.trailsOf(HttpResult(204, null, ByteArray(0))).size)
+        assertEquals(0, Tuileries.trailsOf(HttpResult(404, "text/plain", ByteArray(3))).size)  // not built yet
+        try {
+            Tuileries.trailsOf(HttpResult(502, "text/plain", ByteArray(3)))
+            fail("an upstream error is not an empty tile")
+        } catch (_: IOException) {
+        }
+        assertEquals("https://t.example.org/trails/12/2120/1460", Tuileries("https://t.example.org").trailsUrl(12, 2120, 1460))
+        assertEquals("Sentinel-2 cloudless by EOX", Tuileries.parseInfo("""{"version":"1","attribution":"Sentinel-2 cloudless by EOX"}""").attribution)
+        MapConfig.set(null, 16)
+        assertEquals("&photomax=16", MapConfig.pageQuery())
+        MapConfig.set(source(), 16)
+        assertEquals("&photomax=16&trails=1", MapConfig.pageQuery())
+        MapConfig.attribution = "Sentinel-2 cloudless & EOX"
+        assertEquals("&photomax=16&trails=1&attrib=Sentinel-2%20cloudless%20%26%20EOX", MapConfig.pageQuery())
+        MapConfig.set(null, 16)
+        assertEquals("", MapConfig.attribution)
+        // the page's side of it
+        val root = generateSequence(File("").absoluteFile) { it.parentFile }.first { File(it, "web/map/map.js").isFile }
+        val page = File(root, "web/map/map.js").readText()
+        assertTrue(page.contains("tiles: [`\${BASE}trails/{z}/{x}/{y}`]") && page.contains("'source-layer': 'trails'"))
+        assertTrue(page.contains("params.get('trails') === '1'") && page.contains("params.get('attrib')"))
+    }
+
+    @Test
     fun prepareIsSentToTuileriesOnly() {
         val lats = DoubleArray(5000) { 45.0 + it * 0.00001 }
         val lons = DoubleArray(5000) { 6.0 + it * 0.00001 }

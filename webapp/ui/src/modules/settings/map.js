@@ -12,6 +12,21 @@ export function photoMaxZoom(/** @type {unknown} */ value) {
 }
 
 /**
+ * What the map page takes from the settings (after `mode`, `theme`, `interactive`): the photo's top zoom and, with
+ * Tuileries, its trails overlay and credit.
+ * @param {number} photomax
+ * @param {{ source: string, attribution?: string } | null} tiles GET /api/map/tiles (null: unknown, as direct)
+ */
+export function pageQuery(photomax, tiles) {
+  let q = `&photomax=${photomax}`;
+  if (tiles?.source === 'tuileries') {
+    q += '&trails=1';
+    if (tiles.attribution) q += `&attrib=${encodeURIComponent(tiles.attribution)}`;
+  }
+  return q;
+}
+
+/**
  * The status line of the « Serveur de cartes » section, from GET /api/map/tiles.
  * @param {{ source: string, url?: string, name?: string, version?: string, max_zoom?: number | null, error?: string } | null} s
  */

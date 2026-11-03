@@ -212,5 +212,5 @@ export const settings = {
   saveActivities: (/** @type {string | null} */ version, /** @type {{ refine_altitude: boolean, totals: string[] }} */ value) =>
     request('PUT', '/api/settings/activities', { version, json: value }),
   /** The map's tile source (MEMENTO_TILES_* on the server) and, for Tuileries, its /api/info or the error. */
-  mapTiles: () => request('GET', '/api/map/tiles'),
+  mapTiles: (fresh = false) => request('GET', `/api/map/tiles${fresh ? '?fresh=1' : ''}`),
 };

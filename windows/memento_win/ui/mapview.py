@@ -95,9 +95,8 @@ class MapView(QWebEngineView):
 
 
 def page_url(mode: str, theme_name: str) -> str:
-    # photomax: the photo source's maxzoom (a setting); the page enlarges that level beyond it
-    return (f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={theme_name}&interactive=1"
-            f"&photomax={maphost.photo_max_zoom()}")
+    # photomax, trails, attrib: the map settings and the tile server's extras (maphost.page_query)
+    return f"{maphost.BASE_URL}map/index.html?mode={mode}&theme={theme_name}&interactive=1{maphost.page_query()}"
 
 
 def _theme() -> str:

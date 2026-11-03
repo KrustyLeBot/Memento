@@ -23,9 +23,9 @@
   /** @type {Parameters<typeof tilesStatus>[0]} */
   let tiles = null;
 
-  async function loadTiles() {
+  async function loadTiles(fresh = false) {
     try {
-      tiles = await api.mapTiles();
+      tiles = await api.mapTiles(fresh);
     } catch (error) {
       tiles = { source: 'tuileries', url: '?', error: error instanceof Error ? error.message : String(error) };
     }
@@ -142,7 +142,7 @@
         <p class="muted">{tilesStatus(tiles)}</p>
         <p class="muted">Réglé sur le serveur, dans le fichier .env (MEMENTO_TILES_URL, MEMENTO_TILES_USER, MEMENTO_TILES_PASSWORD,
           MEMENTO_TILES_CF_ID, MEMENTO_TILES_CF_SECRET).</p>
-        <button class="btn tonal" on:click={() => { tiles = null; loadTiles(); }}>Tester la connexion</button>
+        <button class="btn tonal" on:click={() => { tiles = null; loadTiles(true); }}>Tester la connexion</button>
       </div>
     {/if}
 

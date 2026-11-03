@@ -86,6 +86,7 @@ object TileServer {
                 path.startsWith("/t/") -> TileKey.parse(path)?.let { tile(it) } ?: notFound()
                 path == "/peaks" -> peaks(url)
                 path.startsWith("/buildings/") -> TileKey.parseBuildings(path)?.let { buildings(it) } ?: notFound()
+                path.startsWith("/trails/") -> trails(path)
                 else -> notFound()
             }
         } catch (e: Exception) {
@@ -246,6 +247,40 @@ object TileServer {
         if (!NetState.online.value || backedOff()) return notFound()
         val got = fetchShared(key, allowOsm = false) ?: return notFound()
         return WebResourceResponse(key.mime, "utf-8", 200, "OK", headers(), ByteArrayInputStream(got.bytes))
+    }
+
+    // ---- trails (Tuileries only) ----
+
+    private val TRAILS_PATH = Regex("""^/trails/(\d{1,2})/(\d{1,7})/(\d{1,7})$""")
+    private const val TRAILS_MAX_Z = 15
+
+    /** The vector tile from the cache, else from Tuileries; an empty one where it has none (never cached). */
+    private fun trails(path: String): WebResourceResponse {
+        val t = MapConfig.tuileries ?: return notFound()
+        val (z, x, y) = TRAILS_PATH.matchEntire(path)?.destructured?.toList()?.map { it.toInt() } ?: return notFound()
+        if (z > TRAILS_MAX_Z || x >= (1 shl z) || y >= (1 shl z)) return notFound()
+        val rel = "trails/$z/$x/$y.pbf"
+        cache.get(rel)?.let { openOrNull(it) }?.let { return WebResourceResponse(TRAILS_MIME, null, 200, "OK", headers(), it) }
+        if (!NetState.online.value) return notFound()
+        val bytes = Tuileries.trailsOf(get(t.trailsUrl(z, x, y), t.headers()))
+        if (bytes.isNotEmpty()) cache.put(rel, bytes)
+        // an empty body is an empty vector tile: the page draws no trail there
+        return WebResourceResponse(TRAILS_MIME, null, 200, "OK", headers(), ByteArrayInputStream(bytes))
+    }
+
+    private const val TRAILS_MIME = "application/x-protobuf"
+
+    /** Reads Tuileries' /api/info in the background for its credit on the map ([MapConfig.attribution]). */
+    fun refreshInfo() {
+        val t = MapConfig.tuileries ?: return
+        Thread {
+            try {
+                val info = tuileriesInfo(t)
+                if (MapConfig.tuileries == t) MapConfig.attribution = info.attribution
+            } catch (e: IOException) {
+                Log.w(TAG, "Tuileries info: ${e.message}")
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     // ---- peaks ----

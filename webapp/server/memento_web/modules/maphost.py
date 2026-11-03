@@ -93,6 +93,7 @@ class TileStore:
         self.root = root
         self.fetch = fetch
         self.source = source  # Tuileries when configured: then the only server asked
+        self._info: tuple[float, dict] | None = None  # (when, answer) of the last good /api/info
         self.clock = clock
         self.backoff = mapcache.Backoff()
         self._locks: dict[str, threading.Lock] = {}
@@ -280,10 +281,16 @@ class TileStore:
             self._store(file, json.dumps(found).encode())
             return found
 
-    def info(self) -> dict:
-        """What the settings page shows: the source in use and, for Tuileries, its /api/info or why it failed."""
+    INFO_TTL = 3600.0  # a good /api/info answer is kept this long (the map page asks for it at each load)
+
+    def info(self, fresh: bool = False) -> dict:
+        """The source in use and, for Tuileries, its /api/info or why it failed: the settings' status line, and the
+        map page's trails and attribution."""
         if self.source is None:
             return {"source": "direct"}
+        cached = self._info
+        if not fresh and cached and self.clock() - cached[0] < self.INFO_TTL:
+            return cached[1]
         out = {"source": "tuileries", "url": self.source.base}
         try:
             status, _kind, data = self._tuileries(self.source.info_url)
@@ -293,8 +300,40 @@ class TileStore:
         except tuileries.TuileriesError as error:
             out["error"] = str(error)
         else:
-            out.update(name=info.name, version=info.version, max_zoom=info.max_zoom)
+            out.update(name=info.name, version=info.version, max_zoom=info.max_zoom, attribution=info.attribution)
+            self._info = (self.clock(), out)
         return out
+
+    def trails(self, req: mapcache.TrailsRequest) -> bytes | None:
+        """The vector tile from the cache, else from Tuileries; b"" where it has none (never cached), None on error
+        or without Tuileries."""
+        if self.source is None:
+            return None
+        path = mapcache.trails_path(self.root, req)
+        with self._lock_for(f"trails/{req.z}/{req.x}/{req.y}"):
+            try:
+                data = path.read_bytes()
+                _touch(path)
+                return data
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                _log(f"{path}: {error}")
+            if self.backoff.blocked(self.clock()):
+                return None
+            try:
+                status, _kind, data = self._tuileries(self.source.trails_url(req))
+            except Offline as error:
+                self.backoff.failed(self.clock())
+                _log(f"trails: Tuileries unreachable ({error})")
+                return None
+            self.backoff.succeeded()
+            found = tuileries.trails_answer(status, data)
+            if found is None:
+                _log(f"trails {req.z}/{req.x}/{req.y}: Tuileries HTTP {status}")
+            elif found:
+                self._store(path, found)
+            return found
 
     def buildings(self, req: mapcache.BuildingsRequest) -> bytes | None:
         """The cell's slim JSON, from the cache or fetched page by page; None offline or on a WFS error."""
@@ -369,11 +408,24 @@ class MapHost:
             Route("/t/{kind}/{z}/{x}/{y}", self.tile, methods=["GET"]),
             Route("/peaks", self.summits, methods=["GET"]),
             Route("/buildings/{z}/{x}/{y}", self.buildings, methods=["GET"]),
+            Route("/trails/{z}/{x}/{y}", self.trails, methods=["GET"]),
             Route("/api/map/tiles", self.tiles_status, methods=["GET"]),
         ]
 
     async def tiles_status(self, request: Request) -> JSONResponse:
-        return JSONResponse(await run_in_threadpool(self.store.info), headers={"Cache-Control": "no-store"})
+        fresh = request.query_params.get("fresh") == "1"  # "Tester la connexion": never the kept answer
+        return JSONResponse(await run_in_threadpool(self.store.info, fresh), headers={"Cache-Control": "no-store"})
+
+    async def trails(self, request: Request) -> Response:
+        req = mapcache.parse_request(request.url.path)
+        if not isinstance(req, mapcache.TrailsRequest):
+            raise not_found("Tuile inconnue")
+        data = await run_in_threadpool(self.store.trails, req)
+        if data is None:
+            return Response(status_code=404, headers={"Cache-Control": "no-store"})
+        if not data:  # no trail there yet (or still being built): asked again soon
+            return Response(status_code=204, headers={"Cache-Control": "private, max-age=300"})
+        return Response(data, media_type=mapcache.TRAILS_MIME, headers={"Cache-Control": "private, max-age=86400"})
 
     async def page(self, request: Request) -> Response:
         """The file, or its .gz sibling (built with the image) to a browser that accepts gzip; an ETag lets a

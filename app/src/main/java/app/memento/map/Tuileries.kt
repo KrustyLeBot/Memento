@@ -36,6 +36,8 @@ data class Tuileries(
     fun tileUrl(key: TileKey): String =
         if (key.kind == TileKey.KIND_BUILDINGS) "${base}buildings/${key.z}/${key.x}/${key.y}" else "${base}t/${key.kind}/${key.z}/${key.x}/${key.y}"
 
+    fun trailsUrl(z: Int, x: Int, y: Int): String = "${base}trails/$z/$x/$y"
+
     fun peaksUrl(b: Bbox): String = "${base}peaks?w=${Json.num(b.w, 5)}&s=${Json.num(b.s, 5)}&e=${Json.num(b.e, 5)}&n=${Json.num(b.n, 5)}"
 
     val infoUrl: String get() = "${base}api/info"
@@ -92,6 +94,18 @@ data class Tuileries(
 
         fun prepareBbox(b: Bbox): String = "{\"bbox\":[" + b.toList().joinToString(",") { Json.num(it, 6) } + "]}"
 
+        /**
+         * A trails tile as the page takes it: the (un-gzipped) vector tile, an empty one for "no trail here" (204, and
+         * 404 while Tuileries has not built its trails: never cached, asked again later); an error throws.
+         */
+        fun trailsOf(r: HttpResult): ByteArray {
+            if (r.code == 204 || r.code == 404) return ByteArray(0)
+            if (r.code != 200) throw IOException("Sentiers Tuileries : ${statusMessage(r.code)}")
+            val b = r.body
+            // stored gzipped by Tuileries and sent with a Content-Encoding this client did not ask for
+            return if (b.size >= 2 && b[0] == 0x1f.toByte() && b[1] == 0x8b.toByte()) java.util.zip.GZIPInputStream(b.inputStream()).use { it.readBytes() } else b
+        }
+
         fun validCell(body: ByteArray, x: Int, y: Int): Boolean {
             val o = try { Json.parse(String(body, Charsets.UTF_8)).asMap() } catch (_: Json.JsonException) { null } ?: return false
             return o["v"].asDouble() == 1.0 && o["x"].asDouble() == x.toDouble() && o["y"].asDouble() == y.toDouble() && o["b"] is List<*>
@@ -105,6 +119,7 @@ data class Tuileries(
                 version,
                 o["max_zoom"].asDouble()?.toInt(),
                 o["layers"].asList().orEmpty().filterIsInstance<String>(),
+                (o["attribution"] as? String)?.trim()?.take(300).orEmpty(),
             )
         }
 
@@ -120,7 +135,7 @@ data class Tuileries(
 }
 
 /** `GET /api/info`: what the settings' "Tester la connexion" shows. */
-data class TuileriesInfo(val name: String, val version: String, val maxZoom: Int?, val layers: List<String>) {
+data class TuileriesInfo(val name: String, val version: String, val maxZoom: Int?, val layers: List<String>, val attribution: String = "") {
     fun summary(): String = "Connecté : $name $version" + (maxZoom?.let { " · photos archivées jusqu'au zoom $it" } ?: "")
 }
 
@@ -140,8 +155,24 @@ object MapConfig {
     var photoMaxZoom: Int = Tuileries.PHOTO_MAX_ZOOM_DEFAULT
         private set
 
+    /** Tuileries' own credit (the photo abroad), from its /api/info: [TileServer.refreshInfo]. */
+    @Volatile
+    var attribution: String = ""
+
     fun set(source: Tuileries?, photoMax: Int) {
-        tuileries = source?.takeIf { it.configured }
+        val t = source?.takeIf { it.configured }
+        if (t != tuileries) attribution = ""
+        tuileries = t
         photoMaxZoom = Tuileries.clampPhotoMaxZoom(photoMax)
+    }
+
+    /** What the page takes from the settings: the photo's top zoom and, with Tuileries, its trails and credit. */
+    fun pageQuery(): String {
+        var q = "&photomax=$photoMaxZoom"
+        if (tuileries != null) {
+            q += "&trails=1"
+            if (attribution.isNotEmpty()) q += "&attrib=" + java.net.URLEncoder.encode(attribution, "UTF-8").replace("+", "%20")
+        }
+        return q
     }
 }

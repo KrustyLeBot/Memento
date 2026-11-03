@@ -50,10 +50,12 @@ fun MapSourceSettings(settings: Settings) {
     fun edited() = Tuileries(url.trim(), user.trim(), password, cfId.trim(), cfSecret.trim())
 
     fun apply(source: Tuileries) {
-        val reload = source != MapConfig.tuileries.orEmpty() || zoom != MapConfig.photoMaxZoom
+        val newSource = source != MapConfig.tuileries.orEmpty()
+        val reload = newSource || zoom != MapConfig.photoMaxZoom
         settings.tuileries = source
         settings.photoMaxZoom = zoom
         MapConfig.set(source, zoom)
+        if (newSource) TileServer.refreshInfo()  // its credit, for the next page load
         // the page reads the photo's zoom when it loads, and a new source's tiles show on a fresh page
         if (reload) MapHost.reloadPage()
     }
@@ -105,6 +107,7 @@ fun MapSourceSettings(settings: Settings) {
                     status = try {
                         val info = withContext(Dispatchers.IO) { TileServer.tuileriesInfo(source) }
                         serverZoom = info.maxZoom
+                        if (source == MapConfig.tuileries) MapConfig.attribution = info.attribution
                         info.summary()
                     } catch (e: java.io.IOException) { // TuileriesException included
                         "Échec : ${e.message}"
