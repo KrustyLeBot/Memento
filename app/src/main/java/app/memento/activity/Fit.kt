@@ -34,7 +34,26 @@ object Fit {
         val global: Int, val bigEndian: Boolean, val fields: List<FieldDef>, val dev: List<DevFieldDef>,
     ) {
         val size = fields.sumOf { it.size } + dev.sumOf { it.size }
+        /** Byte offset of each field number in a message (-1: absent), so a value is read where it lies. */
+        val offsets = IntArray(256) { -1 }
+        val types = IntArray(256)
+        val sizes = IntArray(256)
+        /** Offset of the developer fields' first byte. */
+        val devStart: Int
+        /** Only these messages are decoded: a 60-hour race is 800 000 messages, most of them skipped. */
+        val wanted = global in WANTED
+
+        init {
+            var o = 0
+            for (f in fields) {
+                if (offsets[f.num] < 0) { offsets[f.num] = o; types[f.num] = f.type; sizes[f.num] = f.size }
+                o += f.size
+            }
+            devStart = o
+        }
     }
+
+    private val WANTED = setOf(MSG_FILE_ID, MSG_SPORT, MSG_SESSION, MSG_RECORD, MSG_EVENT, MSG_FIELD_DESCRIPTION)
 
     fun looksLikeFit(bytes: ByteArray): Boolean =
         bytes.size >= 12 && bytes[8] == '.'.code.toByte() && bytes[9] == 'F'.code.toByte() &&
@@ -53,7 +72,7 @@ object Fit {
         var manufacturer: Int? = null
 
         var pos = 0
-        while (pos + 12 <= bytes.size && looksLikeFit(bytes.copyOfRange(pos, minOf(pos + 12, bytes.size)))) {
+        while (pos + 12 <= bytes.size && looksLikeFit(bytes.copyOfRange(pos, pos + 12))) {
             val headerSize = bytes[pos].toInt() and 0xFF
             val dataSize = u(bytes, pos + 4, 4, false)
             var p = pos + headerSize
@@ -72,10 +91,8 @@ object Fit {
                     if (offset < (lastTs and 0x1F)) ts += 32
                     lastTs = ts
                     if (p + def.size > end) break
-                    val values = readFields(bytes, p, def, devNames)
-                    values.num[253] = ts
+                    if (def.wanted) handle(def.global, Msg(bytes, p, def, ts), points, hrs, events, devNames)
                     p += def.size
-                    handle(def.global, values, points, hrs, events, devNames)?.let { /* no summary in compressed records */ }
                     continue
                 }
                 val local = header and 0x0F
@@ -104,21 +121,23 @@ object Fit {
                 } else {
                     val def = defs[local] ?: throw FitException("Fichier FIT corrompu")
                     if (p + def.size > end) break
-                    val values = readFields(bytes, p, def, devNames)
+                    val values = Msg(bytes, p, def, null)
                     p += def.size
-                    values.num[253]?.let { lastTs = it }
+                    // a skipped message still has its timestamp read: it anchors the compressed ones that follow
+                    values.num(253)?.let { lastTs = it }
+                    if (!def.wanted) continue
                     val summary = handle(def.global, values, points, hrs, events, devNames)
                     if (summary != null) {
                         when (def.global) {
                             MSG_SESSION -> {
-                                values.num[5]?.let { sport = it.toInt() }
-                                values.num[2]?.let { start = (it + EPOCH_OFFSET) * 1000 }
-                                values.num[7]?.let { elapsed = it }
-                                values.num[8]?.let { timer = it }
-                                values.num[9]?.let { distance = it / 100.0 }
+                                values.num(5)?.let { sport = it.toInt() }
+                                values.num(2)?.let { start = (it + EPOCH_OFFSET) * 1000 }
+                                values.num(7)?.let { elapsed = it }
+                                values.num(8)?.let { timer = it }
+                                values.num(9)?.let { distance = it / 100.0 }
                             }
-                            MSG_SPORT -> if (sport == null) values.num[0]?.let { sport = it.toInt() }
-                            MSG_FILE_ID -> values.num[1]?.let { manufacturer = it.toInt() }
+                            MSG_SPORT -> if (sport == null) values.num(0)?.let { sport = it.toInt() }
+                            MSG_FILE_ID -> values.num(1)?.let { manufacturer = it.toInt() }
                         }
                     }
                 }
@@ -152,76 +171,73 @@ object Fit {
         )
     }
 
-    private class Values {
-        val num = HashMap<Int, Long>()
-        val str = HashMap<Int, String>()
-        val dev = HashMap<Pair<Int, Int>, Float>()
-    }
+    /** One message, read in place: no map per message (there can be 800 000 of them). */
+    private class Msg(val b: ByteArray, val start: Int, val def: Definition, val ts: Long?) {
+        fun num(n: Int): Long? {
+            if (n == 253 && ts != null) return ts
+            val o = def.offsets[n]
+            if (o < 0) return null
+            val type = def.types[n]
+            val size = baseSize(type)
+            if (size !in 1..8 || def.sizes[n] < size) return null
+            val raw = u(b, start + o, size, def.bigEndian)
+            if (isInvalid(type, raw, size)) return null
+            return if (isSigned(type)) signed(raw, size) else raw
+        }
 
-    private fun readFields(b: ByteArray, start: Int, def: Definition, devNames: Map<Pair<Int, Int>, String>): Values {
-        val out = Values()
-        var p = start
-        for (f in def.fields) {
-            when (f.type and 0x1F) {
-                7 -> { // string
-                    var e = p
-                    while (e < p + f.size && b[e].toInt() != 0) e++
-                    out.str[f.num] = String(b, p, e - p, Charsets.UTF_8)
-                }
-                else -> {
-                    val size = baseSize(f.type)
-                    if (size in 1..8 && f.size >= size) {
-                        val raw = u(b, p, size, def.bigEndian)
-                        val value = if (isInvalid(f.type, raw, size)) null else if (isSigned(f.type)) signed(raw, size) else raw
-                        if (value != null) out.num[f.num] = value
-                    }
-                }
-            }
-            p += f.size
+        fun str(n: Int): String? {
+            val o = def.offsets[n]
+            if (o < 0 || def.types[n] and 0x1F != 7) return null
+            var e = start + o
+            val limit = start + o + def.sizes[n]
+            while (e < limit && b[e].toInt() != 0) e++
+            return String(b, start + o, e - start - o, Charsets.UTF_8)
         }
-        for (d in def.dev) {
-            if (d.size == 4) {
-                val bits = u(b, p, 4, def.bigEndian).toInt()
-                out.dev[d.devIndex to d.num] = Float.fromBits(bits)
+
+        /** Calls [f] with (developer index, field number, value) of each 4-byte developer field. */
+        inline fun devFloats(f: (Int, Int, Float) -> Unit) {
+            var p = start + def.devStart
+            for (d in def.dev) {
+                if (d.size == 4) f(d.devIndex, d.num, Float.fromBits(u(b, p, 4, def.bigEndian).toInt()))
+                p += d.size
             }
-            p += d.size
         }
-        return out
     }
 
     /** Returns non-null for messages that carry summary data handled by the caller. */
     private fun handle(
-        global: Int, v: Values, points: MutableList<TrackPoint>, hrs: MutableList<Int>,
+        global: Int, v: Msg, points: MutableList<TrackPoint>, hrs: MutableList<Int>,
         events: MutableList<Pair<Long, Int>>, devNames: MutableMap<Pair<Int, Int>, String>,
     ): Unit? {
         when (global) {
             MSG_RECORD -> {
-                val ts = v.num[253] ?: return null
+                val ts = v.num(253) ?: return null
                 val time = (ts + EPOCH_OFFSET) * 1000
-                v.num[3]?.let { hrs.add(it.toInt()) }
-                val lat = v.num[0] ?: return null
-                val lon = v.num[1] ?: return null
-                val alt = v.num[78]?.let { it / 5.0 - 500 } ?: v.num[2]?.let { it / 5.0 - 500 }
+                val hr = v.num(3)
+                hr?.let { hrs.add(it.toInt()) }
+                val lat = v.num(0) ?: return null
+                val lon = v.num(1) ?: return null
+                val alt = v.num(78)?.let { it / 5.0 - 500 } ?: v.num(2)?.let { it / 5.0 - 500 }
                 var gpsAlt: Double? = null
                 var pressure: Double? = null
-                for ((key, value) in v.dev) {
-                    when (devNames[key]) {
+                if (devNames.isNotEmpty()) v.devFloats { idx, num, value ->
+                    when (devNames[idx to num]) {
                         DEV_GPS_ALT -> if (!value.isNaN()) gpsAlt = value.toDouble()
                         DEV_PRESSURE -> if (!value.isNaN()) pressure = value.toDouble()
                     }
                 }
                 points.add(
-                    TrackPoint(time, lat * SEMICIRCLE, lon * SEMICIRCLE, alt, v.num[3]?.toInt(), gpsAlt, pressure),
+                    TrackPoint(time, lat * SEMICIRCLE, lon * SEMICIRCLE, alt, hr?.toInt(), gpsAlt, pressure),
                 )
             }
             MSG_EVENT -> {
-                val ts = v.num[253] ?: return null
-                if ((v.num[0] ?: -1L) == 0L) v.num[1]?.let { events.add((ts + EPOCH_OFFSET) * 1000 to it.toInt()) }
+                val ts = v.num(253) ?: return null
+                if ((v.num(0) ?: -1L) == 0L) v.num(1)?.let { events.add((ts + EPOCH_OFFSET) * 1000 to it.toInt()) }
             }
             MSG_FIELD_DESCRIPTION -> {
-                val idx = v.num[0]?.toInt() ?: return null
-                val num = v.num[1]?.toInt() ?: return null
-                v.str[3]?.let { devNames[idx to num] = it }
+                val idx = v.num(0)?.toInt() ?: return null
+                val num = v.num(1)?.toInt() ?: return null
+                v.str(3)?.let { devNames[idx to num] = it }
             }
             MSG_SESSION, MSG_SPORT, MSG_FILE_ID -> return Unit
         }
@@ -236,7 +252,7 @@ object Fit {
         else -> 0
     }
 
-    private fun isSigned(type: Int) = (type and 0x1F) in setOf(1, 3, 5, 14)
+    private fun isSigned(type: Int) = when (type and 0x1F) { 1, 3, 5, 14 -> true; else -> false }
 
     private fun isInvalid(type: Int, raw: Long, size: Int): Boolean = when (type and 0x1F) {
         0, 2, 13 -> raw == 0xFFL

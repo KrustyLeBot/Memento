@@ -11,6 +11,16 @@ _SEMICIRCLE = 180.0 / 2147483648.0
 _MSG_FILE_ID, _MSG_SPORT, _MSG_SESSION, _MSG_RECORD, _MSG_EVENT = 0, 12, 18, 20, 21
 _MSG_FIELD_DESCRIPTION = 206
 
+# The fields read, per message: anything else is skipped without being decoded (a 60-hour race is 800 000 messages)
+_WANTED = {
+    _MSG_FILE_ID: {1},
+    _MSG_SPORT: {0},
+    _MSG_SESSION: {2, 5, 7, 8, 9},
+    _MSG_RECORD: {253, 0, 1, 2, 3, 78},
+    _MSG_EVENT: {253, 0, 1},
+}
+_CODES = {0: "B", 1: "b", 2: "B", 10: "B", 13: "B", 3: "h", 4: "H", 11: "H", 5: "i", 6: "I", 12: "I",
+          14: "q", 15: "q", 16: "Q"}
 _SIZES = {0: 1, 1: 1, 2: 1, 10: 1, 13: 1, 3: 2, 4: 2, 11: 2, 5: 4, 6: 4, 8: 4, 12: 4, 9: 8, 14: 8, 15: 8, 16: 8}
 _SIGNED = {1, 3, 5, 14}
 _INVALID = {0: 0xFF, 2: 0xFF, 13: 0xFF, 1: 0x7F, 3: 0x7FFF, 4: 0xFFFF, 5: 0x7FFFFFFF, 6: 0xFFFFFFFF,
@@ -54,13 +64,14 @@ def read(data: bytes) -> Track:
                 if offset < (last_ts & 0x1F):
                     ts += 32
                 last_ts = ts
-                big, glob, fields, dev, size = defs[local]
+                big, glob, fields, dev, size, compiled = defs[local]
                 if p + size > end:
                     break
-                num, strs, devv = _fields(data, p, big, fields, dev)
+                if compiled is not None or glob == _MSG_FIELD_DESCRIPTION:
+                    num, strs, devv = _decode(data, p, big, fields, dev, compiled)
+                    num[253] = ts
+                    _handle(glob, num, strs, devv, points, hrs, events, dev_names)
                 p += size
-                num[253] = ts
-                _handle(glob, num, strs, devv, points, hrs, events, dev_names)
                 continue
             local = header & 0x0F
             if header & 0x40:  # definition
@@ -82,14 +93,23 @@ def read(data: bytes) -> Track:
                     dev = [(data[p + 3 * i], data[p + 3 * i + 1], data[p + 3 * i + 2]) for i in range(dc)]
                     p += dc * 3
                 size = sum(f[1] for f in fields) + sum(d[1] for d in dev)
-                defs[local] = (big, glob, fields, dev, size)
+                defs[local] = (big, glob, fields, dev, size, _compile(big, glob, fields, dev))
             else:
                 if local not in defs:
                     raise FitError("Fichier FIT corrompu")
-                big, glob, fields, dev, size = defs[local]
+                big, glob, fields, dev, size, compiled = defs[local]
                 if p + size > end:
                     break
-                num, strs, devv = _fields(data, p, big, fields, dev)
+                if compiled is None and glob != _MSG_FIELD_DESCRIPTION:
+                    # skipped, but its timestamp still anchors the compressed ones that follow
+                    ts_at = _timestamp_offset(fields)
+                    if ts_at is not None:
+                        ts_value = struct.unpack_from(">I" if big else "<I", data, p + ts_at)[0]
+                        if ts_value != 0xFFFFFFFF:
+                            last_ts = ts_value
+                    p += size
+                    continue
+                num, strs, devv = _decode(data, p, big, fields, dev, compiled)
                 p += size
                 if 253 in num:
                     last_ts = num[253]
@@ -126,6 +146,67 @@ def read(data: bytes) -> Track:
         hr_avg=round(sum(hrs) / len(hrs)) if hrs else None, hr_max=max(hrs) if hrs else None,
         manufacturer=manufacturer,
     )
+
+
+def _timestamp_offset(fields) -> int | None:
+    at = 0
+    for number, size, btype in fields:
+        if number == 253 and size == 4 and (btype & 0x1F) in (6, 12):
+            return at
+        at += size
+    return None
+
+
+def _compile(big: bool, glob: int, fields, dev):
+    """One struct for the wanted numeric fields of a definition, the others as padding; None: nothing wanted.
+    Returns (struct, [(number, base type)], number of developer floats)."""
+    wanted = _WANTED.get(glob)
+    if wanted is None and glob != _MSG_RECORD:
+        return None
+    fmt = [">" if big else "<"]
+    keys = []
+    for number, size, btype in fields:
+        base = btype & 0x1F
+        code = _CODES.get(base)
+        width = _SIZES.get(base, 0)
+        if number in wanted and code is not None and size == width:
+            fmt.append(code)
+            keys.append((number, base))
+        else:
+            fmt.append(f"{size}x")
+    floats = 0
+    for number, size, idx in dev:
+        if size == 4 and glob == _MSG_RECORD:
+            fmt.append("f")
+            floats += 1
+        else:
+            fmt.append(f"{size}x")
+    return struct.Struct("".join(fmt)), keys, floats
+
+
+def _decode(data: bytes, p: int, big: bool, fields, dev, compiled):
+    if compiled is None:
+        return _fields(data, p, big, fields, dev)  # the rare messages read whole (field descriptions)
+    st, keys, floats = compiled
+    values = st.unpack_from(data, p)
+    num: dict[int, int] = {}
+    for (number, base), value in zip(keys, values):
+        invalid = _INVALID.get(base)
+        if invalid is not None:
+            if (value & ((1 << (8 * _SIZES[base])) - 1)) == invalid:
+                continue
+        elif base in (14, 15, 16) and (value & 0xFFFFFFFFFFFFFFFF) == 0xFFFFFFFFFFFFFFFF:
+            continue
+        num[number] = value
+    devv: dict[tuple[int, int], float] = {}
+    if floats:
+        rest = values[len(keys):]
+        i = 0
+        for number, size, idx in dev:
+            if size == 4:
+                devv[(idx, number)] = rest[i]
+                i += 1
+    return num, {}, devv
 
 
 def _fields(data: bytes, p: int, big: bool, fields, dev):
