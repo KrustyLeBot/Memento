@@ -161,6 +161,16 @@ def test_importing_a_gpx_file(tmp_path):
     assert note.title == "Sortie test"
     assert note.activity.file.endswith(".gpx")
     assert note.activity.ascent >= 100
+    # the window reads the file once for its dialog and hands that over: the same activity, without a second read
+    parsed = store.read_source(gpx)
+    reads = []
+    store.read_source = lambda source: reads.append(source)
+    again = store.import_activity(gpx, None, None, note, parsed=parsed)
+    assert reads == [] and again.activity == note.activity.__class__(**{**note.activity.__dict__, "file": again.activity.file})
+    # a new sport is a new analysis, kept for the window that reopens the activity right after
+    from memento_win.core.track import Sport
+    bike = store.update_activity(again, again.title, "", Sport.BIKE)
+    assert bike.activity.sport == Sport.BIKE and store.cached_analysis(bike.activity) is not None
 
 
 def test_a_gpx_without_times_is_imported_with_distance_and_climb_but_no_duration(tmp_path):

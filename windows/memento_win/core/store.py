@@ -66,9 +66,10 @@ class Store:
         self._cache: dict[str, tuple[int, Note]] = {}  # path -> (mtime_ns, note)
         self.agenda = AgendaStore(DirFs(self.root))  # agenda/: events, calendars.json (core/agenda)
         self.contacts = ContactBook(self.root)  # contacts/, kept out of the regular list
-        # the last activities analysed, (track, analysis) by _analysis_key: reopening one, or opening it right after
-        # its import, reads and analyses nothing (seconds for a 200 000-point race)
-        self._analyses: OrderedDict[tuple, tuple[Track, Analysis]] = OrderedDict()
+        # the last activities analysed, by _analysis_key: reopening one, or opening it right after its import, reads
+        # and analyses nothing (seconds for a 200 000-point race). Not their tracks: the samples hold all the window
+        # shows, and 200 000 more objects each would double the memory and every full garbage collection.
+        self._analyses: OrderedDict[tuple, Analysis] = OrderedDict()
         self._analyses_lock = threading.Lock()
 
     # ---- reading ----
@@ -98,8 +99,9 @@ class Store:
             note = fmt.parse(name, text, mtime // 1_000_000)
             self._cache[name] = (mtime, note)
             notes.append(note)
-        for stale in [k for k in self._cache if "/" not in k and k not in seen]:  # activities/ is scan_activities'
-            del self._cache[stale]
+        # list(): a copy taken at once, as a worker thread (an import in the window) may save a note meanwhile
+        for stale in [k for k in list(self._cache) if "/" not in k and k not in seen]:  # activities/ is scan_activities'
+            self._cache.pop(stale, None)
         return notes
 
     def scan_activities(self) -> list[Note]:
@@ -127,9 +129,9 @@ class Store:
             note = fmt.parse(path, text, mtime // 1_000_000)
             self._cache[path] = (mtime, note)
             notes.append(note)
-        for stale in [k for k in self._cache if k.startswith(f"{ACTIVITIES_DIR}/")] :
+        for stale in [k for k in list(self._cache) if k.startswith(f"{ACTIVITIES_DIR}/")]:  # list(): see scan()
             if stale not in seen:
-                del self._cache[stale]
+                self._cache.pop(stale, None)
         return notes
 
     def cached(self) -> dict[str, tuple[int, Note]]:
@@ -258,23 +260,25 @@ class Store:
         except OSError:
             return None
         with self._analyses_lock:
-            hit = self._analyses.get(key)
-        return hit[1] if hit else None
+            return self._analyses.get(key)
 
-    def track_and_analysis(self, info: ActivityInfo) -> tuple[Track, Analysis]:
-        """The track of an activity and its analysis, from a small cache (thread-safe; the analysis is the slow part)."""
+    def analysis(self, info: ActivityInfo) -> Analysis:
+        """The analysis of an activity, from a small cache (thread-safe; reading and analysing are the slow part)."""
         key = self._analysis_key(info)
         with self._analyses_lock:
             hit = self._analyses.get(key)
             if hit is not None:
                 self._analyses.move_to_end(key)
                 return hit
-        track = self.read_track(info)
-        result = track, analyze(track, info.sport)
+        result = analyze(self.read_track(info), info.sport)
         self._remember_analysis(key, result)
         return result
 
-    def _remember_analysis(self, key: tuple, result: tuple[Track, Analysis]) -> None:
+    def track_and_analysis(self, info: ActivityInfo) -> tuple[Track, Analysis]:
+        """The track of an activity (always read: tracks are not kept) and its analysis (from the cache)."""
+        return self.read_track(info), self.analysis(info)
+
+    def _remember_analysis(self, key: tuple, result: Analysis) -> None:
         with self._analyses_lock:
             self._analyses[key] = result
             self._analyses.move_to_end(key)
@@ -295,11 +299,13 @@ class Store:
             return fit.read(data), "fit"
         return gpx.read(data.decode("utf-8", "replace")), "gpx"
 
-    def import_activity(self, source: Path, title: str | None, sport: Sport | None, replace: Note | None = None) -> Note:
+    def import_activity(self, source: Path, title: str | None, sport: Sport | None, replace: Note | None = None,
+                        parsed: tuple[Track, str] | None = None) -> Note:
         """Reads a FIT or GPX file, copies it to attachments/ and creates the activity note.
-        With [replace], that activity keeps its name, description and photos and gets the new track."""
+        With [replace], that activity keeps its name, description and photos and gets the new track.
+        [parsed]: what read_source(source) already returned, so a long file is not read twice."""
         data = source.read_bytes()
-        track, ext = self.read_source(source)
+        track, ext = parsed or self.read_source(source)
         if not track.points and track.session_distance is None:
             raise fit.FitError("Aucune position dans ce fichier")
         sport = sport or Sport.guess(track.fit_sport)
@@ -317,7 +323,7 @@ class Store:
         atomic.write_bytes(self.file_path(relative), data)
         a = analyze(track, sport)
         info = ActivityInfo.from_analysis(sport, a, track, relative)
-        self._remember_analysis(self._analysis_key(info), (track, a))
+        self._remember_analysis(self._analysis_key(info), a)
         now = now_ms()
         if replace is None:
             return self.save(Note(path=f"{ACTIVITIES_DIR}/{fmt.file_name_for(title, note_id)}", id=note_id, title=title,
@@ -380,8 +386,9 @@ class Store:
         if info is not None and info.sport != sport:
             if info.file:
                 track = self.read_track(info)
-                info = ActivityInfo.from_analysis(sport, analyze(track, sport), track, info.file, info.alt,
-                                                  untimed_start=info.start)
+                analysis = analyze(track, sport)
+                info = ActivityInfo.from_analysis(sport, analysis, track, info.file, info.alt, untimed_start=info.start)
+                self._remember_analysis(self._analysis_key(info), analysis)  # the window reopens it right after
             else:
                 info = ActivityInfo(**{**info.__dict__, "sport": sport})
         return self.save(note.copy(title=title.strip() or note.title, body=description.strip(), activity=info, updated=now_ms()))
