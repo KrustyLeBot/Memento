@@ -42,7 +42,7 @@ class Sport(Enum):
         return Sport.GPS if fit_code in (None, 0) else Sport.from_fit(fit_code)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)  # no per-object dict: a 60-hour race has 200 000 points
 class TrackPoint:
     time: int  # epoch millis
     lat: float

@@ -322,3 +322,91 @@ def test_an_activity_track_is_read_off_the_window_thread_then_cached(window, tmp
     assert "Chargement du tracé…" not in texts() and acts.current is note
     acts.open_activity(note)  # cached now: filled at once
     assert "Chargement du tracé…" not in texts()
+
+
+def _long_gpx(path, minutes: int = 3, stops: int = 0):
+    """A walk at 1 Hz, standing still for the first 40 seconds of every [stops]th minute."""
+    pts, lat, t = [], 45.0, 0
+    for m in range(minutes):
+        for s in range(60):
+            if not (stops and m % stops == 0 and s < 40):
+                lat += 1.4 / 111320
+            pts.append(f'<trkpt lat="{lat:.7f}" lon="6.0"><ele>{1000 + t / 10:.1f}</ele>'
+                       f'<time>2024-01-01T{10 + t // 3600:02d}:{t // 60 % 60:02d}:{t % 60:02d}Z</time></trkpt>')
+            t += 1
+    path.write_text(f'<?xml version="1.0"?><gpx><trk><name>Course</name><trkseg>{"".join(pts)}</trkseg></trk></gpx>',
+                    encoding="utf-8")
+    return path
+
+
+def _until(condition, seconds: float = 10) -> None:
+    import time as _time
+    deadline = _time.time() + seconds
+    while not condition() and _time.time() < deadline:
+        QApplication.processEvents()
+        _time.sleep(0.01)
+
+
+def test_an_import_reads_and_analyses_off_the_window_thread(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog, QFileDialog
+    from memento_win.ui import activities_view
+    source = _long_gpx(tmp_path / "course.gpx")
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", lambda *a, **k: ([str(source)], ""))
+    monkeypatch.setattr(activities_view.ImportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    acts = window.activities
+    window.show_module("activities")
+    acts.import_files()
+    # the call returns at once: the file is read on a worker, the window says so and takes no second import
+    assert acts.busy and acts.status.text() == "Lecture de course.gpx…" and not acts.import_button.isEnabled()
+    _until(lambda: acts.current is not None)
+    assert not acts.busy and acts.footer.isHidden() and acts.import_button.isEnabled()
+    assert acts.current.title == "Course" and acts.current.activity.file
+    assert [n.title for n in window.store.scan_activities()] == ["Course"]
+    QApplication.processEvents()
+    assert acts.map_panel is not None and acts.map_panel.isVisible()  # the analysis was kept: shown at once
+
+
+def test_a_new_activity_adds_its_row_and_keeps_the_others(window):
+    for i in range(3):
+        add_activity(window.store, i, days_ago=i)
+    window.refresh()
+    acts = window.activities
+    before = dict(acts.row_widgets)
+    add_activity(window.store, 9, days_ago=9)
+    window.refresh()
+    assert len(acts.row_widgets) == 4
+    assert all(acts.row_widgets[key] is row for key, row in before.items())
+    acts.select_button.setChecked(True)  # the rows get a check box: all rebuilt
+    assert not any(acts.row_widgets[key] is row for key, row in before.items())
+
+
+def test_hundreds_of_stops_are_one_painted_list(window, tmp_path):
+    from memento_win.ui.activities_view import StopList, fmt_hour
+    note = window.store.import_activity(_long_gpx(tmp_path / "pauses.gpx", minutes=60, stops=2), None, None)
+    window.show_module("activities")
+    window.activities.open_activity(note)
+    lists = window.activities.detail_page.findChildren(StopList)
+    assert len(lists) == 1 and len(lists[0].rows) == 30
+    assert lists[0].rows[0] == ("Arrêt détecté", f"0 min 44 · {fmt_hour(note.activity.start)}")
+    assert lists[0].height() >= 30 * lists[0].fontMetrics().height()
+
+
+def test_the_chart_finds_the_point_under_the_mouse_by_bisection(app):
+    import random
+    from memento_win.ui.activities_view import Chart
+    rng = random.Random(3)
+    xs, x = [], 0.0
+    for _ in range(300):
+        x += rng.choice([0.0, 0.0, 1.0, 2.5])  # stops: the same distance several times
+        xs.append(x)
+    chart = Chart("Altitude", xs, [float(i % 7) for i in range(300)], "0 m", "6 m", "#000000",
+                  [(0.0, float(i)) for i in range(300)])
+    canvas = chart.canvas
+    canvas.resize(997, 110)
+    for pos in [0.0, 0.4, 13.5, 250.25, 498.5, 996.0, 997.0, 1200.0, -5.0]:
+        target = xs[0] + max(0.0, min(1.0, pos / canvas.width())) * (xs[-1] - xs[0])
+        assert canvas.nearest(pos) == min(range(len(xs)), key=lambda k: abs(xs[k] - target))
+    for x_target in xs[::7]:  # exactly on a point, and between two
+        for pos in (x_target / xs[-1] * canvas.width(), (x_target + 0.5) / xs[-1] * canvas.width()):
+            target = xs[0] + max(0.0, min(1.0, pos / canvas.width())) * (xs[-1] - xs[0])
+            assert canvas.nearest(pos) == min(range(len(xs)), key=lambda k: abs(xs[k] - target))
