@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from operator import attrgetter
 
-from .track import EARTH_RADIUS, Pause, Sport, Track, TrackPoint, distance_between
+from .track import EARTH_RADIUS, Pause, Sport, Track, TrackPoint
 
 MAX_SPEED = 50.0          # m/s: faster between two fixes is a GPS jump
 STOP_RADIUS = 8.0         # m: 1 km/h for 30 s
@@ -26,7 +27,7 @@ CLIMB_MIN_MS = 60_000
 MAX_WINDOW_MS = 15_000
 
 
-@dataclass
+@dataclass(slots=True)  # no per-object dict: a 60-hour race has 200 000 samples
 class Sample:
     time: int
     lat: float
@@ -125,18 +126,34 @@ class Analysis:
 def clean(track: Track) -> list[TrackPoint]:
     """Sorted by time, no repeated instants, no impossible jumps, nothing recorded while paused."""
     out: list[TrackPoint] = []
-    for p in sorted(track.points, key=lambda q: q.time):
+    pauses = [(pa.start, pa.end) for pa in track.pauses]
+    check_speed = not track.untimed
+    radians, cos, sin, asin, sqrt = math.radians, math.cos, math.sin, math.asin, math.sqrt
+    prev = None
+    prev_t = prev_lat_r = prev_cos = 0.0
+    for p in sorted(track.points, key=attrgetter("time")):
         if not (-90 <= p.lat <= 90 and -180 <= p.lon <= 180):
             continue
-        if any(pa.start < p.time < pa.end for pa in track.pauses):
+        t = p.time
+        if pauses and any(start < t < end for start, end in pauses):
             continue
-        if out:
-            prev = out[-1]
-            dt = (p.time - prev.time) / 1000
-            # stand-in times: a route's points can be far apart, which is no GPS jump
-            if dt <= 0 or (not track.untimed and distance_between(prev, p) / dt > MAX_SPEED):
+        if check_speed:
+            # track.distance's formula with each point's radians and cosine computed once, not once per pair
+            lat_r = radians(p.lat)
+            cos_r = cos(lat_r)
+        if prev is not None:
+            dt = (t - prev_t) / 1000
+            if dt <= 0:
                 continue
+            # stand-in times: a route's points can be far apart, which is no GPS jump
+            if check_speed:
+                a = sin((lat_r - prev_lat_r) / 2) ** 2 + prev_cos * cos_r * sin(radians(p.lon - prev.lon) / 2) ** 2
+                if 2 * EARTH_RADIUS * asin(sqrt(a)) / dt > MAX_SPEED:
+                    continue
         out.append(p)
+        prev, prev_t = p, t
+        if check_speed:
+            prev_lat_r, prev_cos = lat_r, cos_r
     return out
 
 
@@ -144,10 +161,13 @@ def analyze(track: Track, sport: Sport) -> Analysis:
     total = len(track.points)
     kept = clean(track)
     n = len(kept)
+    times = [p.time for p in kept]
     seg = [0] * n
-    for i in range(1, n):
-        crosses = any(p.start < kept[i].time and p.end > kept[i - 1].time for p in track.pauses)
-        seg[i] = seg[i - 1] + (1 if crosses else 0)
+    if track.pauses:
+        pauses = [(p.start, p.end) for p in track.pauses]
+        for i in range(1, n):
+            t0, t1 = times[i - 1], times[i]
+            seg[i] = seg[i - 1] + (1 if any(start < t1 and end > t0 for start, end in pauses) else 0)
 
     stop_idx = [False] * n
     stop_of = [-1] * n  # which stop a point belongs to: two points in the same one is an O(1) check
@@ -159,12 +179,23 @@ def analyze(track: Track, sport: Sport) -> Analysis:
     cos_lat = [math.cos(v) for v in lat_r]
     r2 = (STOP_RADIUS / EARTH_RADIUS) ** 2
     i = 0
+    m = 0
     while i < n:
+        # a stop reaches the first point STOP_MIN_MS later: unless that one is in the circle, no walk from i can be a
+        # stop (one test instead of walking every point a few metres apart while moving)
+        if m < i:
+            m = i
+        while m < n and times[m] - times[i] < STOP_MIN_MS:
+            m += 1
+        if m == n or seg[m] != seg[i] or \
+                ((lon_r[m] - lon_r[i]) * cos_lat[i]) ** 2 + (lat_r[m] - lat_r[i]) ** 2 > r2:
+            i += 1
+            continue
         j = i
         while j + 1 < n and seg[j + 1] == seg[i] and \
                 ((lon_r[j + 1] - lon_r[i]) * cos_lat[i]) ** 2 + (lat_r[j + 1] - lat_r[i]) ** 2 <= r2:
             j += 1
-        if j > i and kept[j].time - kept[i].time >= STOP_MIN_MS:
+        if j > i and times[j] - times[i] >= STOP_MIN_MS:
             for k in range(i, j + 1):
                 stop_idx[k] = True
                 stop_of[k] = len(stops)
@@ -173,24 +204,30 @@ def analyze(track: Track, sport: Sport) -> Analysis:
         else:
             i += 1
 
+    lons = [p.lon for p in kept]
+    radians, sin, asin, sqrt = math.radians, math.sin, math.asin, math.sqrt
+    diameter = 2 * EARTH_RADIUS
+
     cum = [0.0] * n
     moving = 0
+    total_dist = 0.0
     for k in range(1, n):
-        cum[k] = cum[k - 1]
-        if seg[k] != seg[k - 1]:
-            # a pause (watch auto-pause, button): what was walked across it still counts, unless it is a jump
-            d = distance_between(kept[k - 1], kept[k])
-            if d <= PAUSE_BRIDGE:
-                cum[k] += d
-            continue
-        in_stop = stop_of[k] >= 0 and stop_of[k] == stop_of[k - 1]
-        if not in_stop:
-            cum[k] += distance_between(kept[k - 1], kept[k])
-            moving += kept[k].time - kept[k - 1].time
+        new_seg = seg[k] != seg[k - 1]
+        if new_seg or not (stop_of[k] >= 0 and stop_of[k] == stop_of[k - 1]):
+            # track.distance from the radians and cosines above: the same operations in the same order, same result
+            d = diameter * asin(sqrt(sin((lat_r[k] - lat_r[k - 1]) / 2) ** 2
+                                     + cos_lat[k - 1] * cos_lat[k] * sin(radians(lons[k] - lons[k - 1]) / 2) ** 2))
+            if not new_seg:
+                total_dist += d
+                moving += times[k] - times[k - 1]
+            elif d <= PAUSE_BRIDGE:
+                # a pause (watch auto-pause, button): what was walked across it still counts, unless it is a jump
+                total_dist += d
+        cum[k] = total_dist
 
     # the smoothing window is in time: over stand-in times it would average points kilometres apart on a route
     alt = [p.alt for p in kept] if track.untimed else _smooth_altitude(kept)
-    speed = _smooth_speed(kept, seg, cum)
+    speed = _smooth_speed(times, seg, cum)
     has_alt = any(a is not None for a in alt)
 
     down = [False] * n
@@ -302,14 +339,14 @@ def analyze(track: Track, sport: Sport) -> Analysis:
     hrs = [q.hr for q in kept if q.hr is not None]
     alts = [a for a in alt if a is not None]
     elapsed = kept[-1].time - kept[0].time if n >= 2 else (track.session_elapsed_ms or 0)
-    intervals = sorted((kept[k].time - kept[k - 1].time) / 1000 for k in range(1, n))
+    intervals = sorted([(b - a) / 1000 for a, b in zip(times, times[1:])])
     run_ms = sum(r.duration_ms for r in runs)
     stats = Stats(
         elapsed_ms=elapsed,
         moving_ms=moving if n >= 2 else (track.session_timer_ms or 0),
         distance=_device_or_computed(track.session_distance, cum[-1] if n >= 2 else 0.0),
         ascent=ascent, descent=descent,
-        max_speed=_max_window_speed(kept, seg, cum),
+        max_speed=_max_window_speed(times, seg, cum),
         min_alt=min(alts) if alts else None, max_alt=max(alts) if alts else None,
         hr_avg=round(sum(hrs) / len(hrs)) if hrs else track.hr_avg,
         hr_max=max(hrs) if hrs else track.hr_max,
@@ -335,16 +372,21 @@ def analyze(track: Track, sport: Sport) -> Analysis:
     return Analysis(samples, stops, pause_stops, runs, climbs, stats, quality)
 
 
-def _max_window_speed(p: list[TrackPoint], seg: list[int], cum: list[float]) -> float:
+def _max_window_speed(times: list[int], seg: list[int], cum: list[float]) -> float:
     """Top speed held for MAX_WINDOW_MS: single GPS catch-up spikes (after a signal gap) do not count."""
-    best, j = 0.0, 0
-    for i in range(len(p)):
-        j = max(j, i)
-        while j + 1 < len(p) and seg[j + 1] == seg[i] and p[j].time - p[i].time < MAX_WINDOW_MS:
+    best, j, n = 0.0, 0, len(times)
+    least = MAX_WINDOW_MS / 1000 * 0.8
+    for i in range(n):
+        if j < i:
+            j = i
+        si, ti = seg[i], times[i]
+        while j + 1 < n and seg[j + 1] == si and times[j] - ti < MAX_WINDOW_MS:
             j += 1
-        dt = (p[j].time - p[i].time) / 1000
-        if dt >= MAX_WINDOW_MS / 1000 * 0.8:
-            best = max(best, (cum[j] - cum[i]) / dt)
+        dt = (times[j] - ti) / 1000
+        if dt >= least:
+            v = (cum[j] - cum[i]) / dt
+            if v > best:
+                best = v
     return best
 
 
@@ -356,37 +398,55 @@ def _device_or_computed(device: float | None, computed: float) -> float:
 
 
 def _smooth_altitude(p: list[TrackPoint]) -> list[float | None]:
+    times = [q.time for q in p]
+    alts = [q.alt for q in p]
+    # Nones before each index: a window without any is summed as a plain slice (same values, same order, same sum)
+    nones = [0] * (len(p) + 1)
+    for i, a in enumerate(alts):
+        nones[i + 1] = nones[i] + (a is None)
     out: list[float | None] = []
     lo = hi = 0
-    for i in range(len(p)):
-        if p[i].alt is None:
+    n = len(p)
+    for i in range(n):
+        if alts[i] is None:
             out.append(None)
             continue
-        while p[lo].time < p[i].time - ALT_WINDOW_MS:
+        t = times[i]
+        while times[lo] < t - ALT_WINDOW_MS:
             lo += 1
-        hi = max(hi, i)
-        while hi + 1 < len(p) and p[hi + 1].time <= p[i].time + ALT_WINDOW_MS:
+        if hi < i:
+            hi = i
+        while hi + 1 < n and times[hi + 1] <= t + ALT_WINDOW_MS:
             hi += 1
-        vals = [q.alt for q in p[lo:hi + 1] if q.alt is not None]
-        out.append(sum(vals) / len(vals))
+        if nones[hi + 1] == nones[lo]:
+            out.append(sum(alts[lo:hi + 1]) / (hi + 1 - lo))
+        else:
+            vals = [a for a in alts[lo:hi + 1] if a is not None]
+            out.append(sum(vals) / len(vals))
     return out
 
 
-def _smooth_speed(p: list[TrackPoint], seg: list[int], cum: list[float]) -> list[float]:
-    n = len(p)
+def _smooth_speed(times: list[int], seg: list[int], cum: list[float]) -> list[float]:
+    n = len(times)
     out = [0.0] * n
+    # times strictly increase (clean): both ends of the window only move forward, which makes this linear
+    lo = hi = 0
     for i in range(n):
-        lo = i
-        while lo > 0 and seg[lo - 1] == seg[i] and p[i].time - p[lo - 1].time <= SPEED_WINDOW_MS:
-            lo -= 1
-        hi = i
-        while hi + 1 < n and seg[hi + 1] == seg[i] and p[hi + 1].time - p[i].time <= SPEED_WINDOW_MS:
+        si, t = seg[i], times[i]
+        if seg[lo] != si:
+            lo = i
+        while t - times[lo] > SPEED_WINDOW_MS:
+            lo += 1
+        if hi < i:
+            hi = i
+        while hi + 1 < n and seg[hi + 1] == si and times[hi + 1] - t <= SPEED_WINDOW_MS:
             hi += 1
-        if lo == hi:
-            if i > 0 and seg[i - 1] == seg[i]:
-                lo = i - 1
-            elif i + 1 < n and seg[i + 1] == seg[i]:
-                hi = i + 1
-        dt = (p[hi].time - p[lo].time) / 1000
-        out[i] = (cum[hi] - cum[lo]) / dt if dt > 0 else 0.0
+        a, b = lo, hi
+        if a == b:
+            if i > 0 and seg[i - 1] == si:
+                a = i - 1
+            elif i + 1 < n and seg[i + 1] == si:
+                b = i + 1
+        dt = (times[b] - times[a]) / 1000
+        out[i] = (cum[b] - cum[a]) / dt if dt > 0 else 0.0
     return out
