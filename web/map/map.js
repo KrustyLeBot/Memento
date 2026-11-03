@@ -39,12 +39,12 @@
   let SQ = null;            // current square [w,s,e,n]; the DEM protocol reads it, so it is set before a rebuild
   let built3d = undefined;  // the square the 3D sources were built for (undefined: not built)
   let relief = null;        // {sq, min, max, centre} in metres for SQ, once measured (3D only; for the camera)
-  let fitPending = null;    // a 3D fit waiting for the relief (its duration)
+  let fitPending = null;    // a 3D fit waiting for the relief ({animated, done})
   let shown = false;        // nothing is fetched until there is something to show (the page is preloaded empty)
   let track = null, lines = [], route = null, dots = [];
   let explicitSquare = null, liveSquareKm = null, liveSq = null;
   let pos = null, follow = false, followFitted = false, banner = null, bannerTimer = 0;
-  const live = { coords: [], speeds: [], smooth: [], sum: 0, count: 0, colouredAvg: 0, colouredAt: 0, pending: 0 };
+  const live = { coords: [], speeds: [], smooth: [], sum: 0, count: 0, colouredAvg: 0, added: [], full: false, flushedAt: 0, pending: 0 };
 
   // ---------------------------------------------------------------- API stubs
 
@@ -349,7 +349,7 @@
       sources: {
         ortho: ORTHO,
         band: geo(), mask: geo(), frame: geo(), route: geo(), lines: geo(), track: geo({ lineMetrics: true }),
-        live: geo(), acc: geo(), dots: geo(),
+        live: geo(), dots: geo(),
         bld: geo({ maxzoom: 16 }),
         peaks: geo(),
       },
@@ -373,7 +373,6 @@
         { id: 'live-halo', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': HALO, 'line-width': 12 } },
         { id: 'live-case', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': CASING, 'line-width': 9.5 } },
         { id: 'live', type: 'line', source: 'live', layout: lineLayout, paint: { 'line-color': ['get', 'c'], 'line-width': 6 } },
-        { id: 'acc', type: 'fill', source: 'acc', paint: { 'fill-color': '#1a73ff', 'fill-opacity': 0.2, 'fill-outline-color': '#ffffff' } },
         // with terrain, each run of draped layers (fill, line, raster) is one render-to-texture pass per terrain tile, and
         // with two runs or more MapLibre 4.7 re-renders every tile every frame: no symbol layer between draped layers
         arrows('route-arrows', 'route'), arrows('lines-arrows', 'lines'), arrows('track-arrows', 'track'),
@@ -431,7 +430,7 @@
     const now = performance.now(), gap = now - lastFrame;
     lastFrame = now;
     // only frames drawn back to back while the camera moves: an idle map renders once in a while
-    if (ratio <= 1 || !map.isMoving() || gap > 400) return;
+    if (ratio <= 1 || !(map.isMoving() || anim) || gap > 400) return;
     frameGaps.push(gap);
     if (frameGaps.length < FRAME_SAMPLES) return;
     const median = frameGaps.sort((a, b) => a - b)[FRAME_SAMPLES >> 1];
@@ -466,14 +465,15 @@
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     return 6 * 156543 * Math.cos(lat * Math.PI / 180) / 2 ** z;  // 6 DEM pixels: wider than the cliff, so no white stripes
   }
-  // what band/mask/frame were last built for: every zoomend asks, and new data redraws the block's photo under them
+  // A setData reloads the source's tiles and, on terrain, redraws the photo of every terrain tile: only when the square
+  // or the band's width really changed (a camera animation ends a zoom at every frame)
   let frameKey = null;
   function updateFrame() {
-    const key = SQ ? `${SQ.join()}|${bandMetres()}` : '';
+    const band = SQ ? bandMetres() : 0, key = SQ ? `${SQ.join(',')}|${band}` : '';
     if (key === frameKey) return;
     frameKey = key;
     if (!SQ) { ['band', 'mask', 'frame'].forEach((id) => src(id).setData(EMPTY)); return; }
-    const b = grow(SQ, bandMetres()), w = SQ[2] - SQ[0], h = SQ[3] - SQ[1];
+    const b = grow(SQ, band), w = SQ[2] - SQ[0], h = SQ[3] - SQ[1];
     // a bounded ring, not the whole world: a world polygon tiled badly into a white veil
     const outer = [SQ[0] - 3 * w - 1, Math.max(-85, SQ[1] - 3 * h - 1), SQ[2] + 3 * w + 1, Math.min(85, SQ[3] + 3 * h + 1)];
     const poly = (rings) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: rings } });
@@ -481,13 +481,29 @@
     src('mask').setData(poly([ring(outer), hole(b)]));
     src('frame').setData(lineFeature(ring(SQ)));
   }
+  /** The 3D sources moved to the new square in place, when they exist: the block keeps its photo and relief while the
+   *  new ones load (removing and adding them showed a blank, flat block for a second, each time a live square moved). */
+  function moveSquare(bounds) {
+    const photo = map.getSource('orthosq'), dem = map.getSource('dem'), caches = map.style.sourceCaches;
+    const movable = (s) => s && s.tileBounds && s.tileBounds.bounds && typeof s.tileBounds.bounds.getWest === 'function';
+    if (!SQ || !built3d || !movable(photo) || !movable(dem) || !caches.dem || typeof caches.dem.reload !== 'function') return false;
+    for (const s of [photo, dem]) {
+      s.bounds = bounds;
+      s.tileBounds.bounds = maplibregl.LngLatBounds.convert(bounds);  // what MapLibre 4.7 tests each tile against
+    }
+    built3d = SQ;
+    caches.dem.reload();  // every DEM tile cut again to the new square; the old one is drawn until it arrives
+    map.triggerRepaint();
+    return true;
+  }
   function rebuild3d() {
+    const bounds = SQ ? grow(SQ, 200) : undefined;
+    if (moveSquare(bounds)) return;
     map.setTerrain(null);  // the terrain must let go of its source before the source is removed
     if (map.getLayer('orthosq')) map.removeLayer('orthosq');
     for (const id of ['orthosq', 'dem']) if (map.getSource(id)) map.removeSource(id);
     built3d = SQ;
     // sources bounded to the square: MapLibre requests no tile outside it
-    const bounds = SQ ? grow(SQ, 200) : undefined;
     if (SQ) {
       map.addSource('orthosq', Object.assign({}, ORTHO, { bounds }));
       map.addLayer({ id: 'orthosq', type: 'raster', source: 'orthosq', paint: rasterPaint() }, 'band');
@@ -511,15 +527,35 @@
       measuring = null;
       if (SQ !== sq) return;
       relief = Object.assign(r, { sq });
-      if (fitPending != null) { const d = fitPending; fitPending = null; fit(d); }
+      if (fitPending) { const f = fitPending; fitPending = null; fit(f.animated, f.done); }
     });
   }
+  const HANDOVER_MAX_MS = 5000;  // a tile that never comes (offline) does not keep both layers drawn
+  let photoLayer = null, handover = null;
+  function endHandover() {
+    if (!handover) return;
+    const cache = map.style.sourceCaches[photoLayer];
+    if (performance.now() < handover.until && cache && !(cache.used && cache.loaded())) return;
+    const old = handover.layer;
+    handover = null;
+    if (old !== photoLayer) vis(old, false);
+  }
+  map.on('render', endHandover);
+  map.on('idle', endHandover);
   function applyMode() {
     const is3d = mode === '3d';
     if (is3d && shown && (SQ || pos) && !sameBox(built3d, SQ)) rebuild3d();  // nothing to show: no unbounded terrain
     if (is3d && shown && SQ && !(relief && relief.sq === SQ)) measureForCamera(SQ);
-    vis('ortho', shown && (!is3d || !SQ));
-    vis('orthosq', shown && is3d && !!SQ);
+    // the two photo layers draw the same photo (the block's is bounded to the square): the one going away stays drawn,
+    // under the other, until the other's tiles are in, or the switch shows the background for as long as they load
+    const photo = !shown ? null : is3d && SQ ? 'orthosq' : 'ortho';
+    if (photo !== photoLayer) {
+      handover = photoLayer && photo && map.getLayer(photoLayer) ? { layer: photoLayer, until: performance.now() + HANDOVER_MAX_MS } : null;
+      photoLayer = photo;
+      if (handover) setTimeout(endHandover, HANDOVER_MAX_MS + 50);
+    }
+    vis('ortho', photo === 'ortho' || (!!handover && handover.layer === 'ortho'));
+    vis('orthosq', photo === 'orthosq' || (!!handover && handover.layer === 'orthosq'));
     ['band', 'mask', 'frame'].forEach((id) => vis(id, is3d && !!SQ));
     // setTerrain rebuilds the whole terrain renderer: only when its state really changes
     const want = is3d && shown && !!(SQ || pos) && !!map.getSource('dem'), cur = map.getTerrain();
@@ -563,7 +599,7 @@
     schedulePeaks();
     return true;
   }
-  map.on('zoomend', () => { if (SQ && mode === '3d') updateFrame(); });
+  map.on('zoomend', () => { if (mode === '3d') updateFrame(); });
 
   // ---------------------------------------------------------------- camera
 
@@ -577,28 +613,86 @@
   }
   // With terrain on, MapLibre 4.7's easeTo freezes the camera's elevation at the value it had when the move began
   // (0 while the DEM is still loading) and never unfreezes it: the camera then looks at sea level, under the block.
-  // So with terrain every move is a jumpTo, and the follow mode glides by jumping each frame.
-  let glideFrame = 0, movingUntil = 0, ownJump = 0;
+  // So the page animates the camera itself, one jumpTo a frame (MapLibre then sets the elevation under the centre at
+  // each frame), in 2D as in 3D. Any gesture stops it at once, where it is.
+  let anim = null, ownJump = 0;
   function jump(camera) {
     ownJump++;
     try { map.jumpTo(camera); } finally { ownJump--; }
   }
-  function move(camera, duration) {
-    cancelAnimationFrame(glideFrame);
-    const animate = duration && !map.getTerrain();
-    movingUntil = animate ? performance.now() + duration : 0;
-    if (animate) map.easeTo(Object.assign({ duration }, camera)); else jump(camera);
+  const easeInOut = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (2 - 2 * k) ** 3 / 2);
+  const easeOut = (k) => k * (2 - k);
+  /** Stops the page's animation where it is; its `end` runs (cancelled). */
+  function stopAnim() {
+    if (!anim) return;
+    const a = anim;
+    anim = null;
+    cancelAnimationFrame(a.frame);
+    a.end(true);
   }
-  function glide(to, duration) {
-    cancelAnimationFrame(glideFrame);
-    if (!map.getTerrain()) { map.easeTo({ center: to, duration }); return; }
-    const from = map.getCenter(), t0 = performance.now();
-    const step = (now) => {
-      const k = Math.min(1, (now - t0) / duration), e = k * (2 - k);
-      jump({ center: [from.lng + (to[0] - from.lng) * e, from.lat + (to[1] - from.lat) * e] });
-      if (k < 1) glideFrame = requestAnimationFrame(step);
+  /** The camera to `camera` (fields left out stay), in one jump or animated: 400-700 ms with the distance, or `duration`.
+   *  `minZoom` is applied without snapping the zoom on the way; `done(cancelled)` runs once it ends either way. */
+  function move(camera, animated, { minZoom = null, duration = 0, ease = easeInOut, kind = 'fit', done = null } = {}) {
+    stopAnim();
+    map.stop();
+    const to = {
+      center: camera.center ? maplibregl.LngLat.convert(camera.center) : map.getCenter(),
+      zoom: camera.zoom != null ? camera.zoom : map.getZoom(),
+      pitch: camera.pitch != null ? camera.pitch : map.getPitch(),
+      bearing: camera.bearing != null ? camera.bearing : map.getBearing(),
+      padding: camera.padding || map.getPadding(),
     };
-    glideFrame = requestAnimationFrame(step);
+    const end = (cancelled) => {
+      if (minZoom != null) map.setMinZoom(Math.min(minZoom, map.getZoom()));
+      if (done) done(cancelled);
+    };
+    const from = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing(), padding: map.getPadding() };
+    const fx = mercX(from.center.lng), fy = mercY(from.center.lat), dx = mercX(to.center.lng) - fx, dy = mercY(to.center.lat) - fy;
+    const dz = to.zoom - from.zoom, dp = to.pitch - from.pitch, db = ((to.bearing - from.bearing) % 360 + 540) % 360 - 180;
+    // how far it goes: zoom levels, screen widths travelled (at the wider of the two zooms), quarter turns
+    const width = map.getContainer().clientWidth || 1;
+    const widths = Math.hypot(dx, dy) * 512 * 2 ** Math.min(from.zoom, to.zoom) / width;
+    const dist = Math.abs(dz) + Math.min(3, widths) + Math.abs(dp) / 45 + Math.abs(db) / 90;
+    if (!animated || dist < 0.02) {
+      if (minZoom != null) map.setMinZoom(Math.min(minZoom, to.zoom));
+      jump(to);
+      end(false);
+      return;
+    }
+    if (minZoom != null) map.setMinZoom(Math.min(minZoom, from.zoom, to.zoom));
+    const ms = duration || Math.min(700, 400 + 100 * dist);
+    // the centre moves at a steady speed on screen while the zoom changes: fast while far out, slow while close in
+    const along = Math.abs(dz) > 0.01 ? (e) => (1 - 2 ** (-dz * e)) / (1 - 2 ** -dz) : (e) => e;
+    const unmerc = (x, y) => [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+    const pad = (e) => ({ top: from.padding.top + (to.padding.top - from.padding.top) * e,
+      bottom: from.padding.bottom + (to.padding.bottom - from.padding.bottom) * e,
+      left: from.padding.left + (to.padding.left - from.padding.left) * e,
+      right: from.padding.right + (to.padding.right - from.padding.right) * e });
+    // the clock starts at the first frame: a slow frame drawn just before (a mode switch) does not eat the animation
+    const a = anim = { kind, end, frame: 0, t0: 0 };
+    const step = () => {
+      if (anim !== a) return;
+      const now = performance.now();
+      if (!a.t0) { a.t0 = now; a.frame = requestAnimationFrame(step); return; }
+      const k = Math.min(1, (now - a.t0) / ms), e = ease(k), c = along(e);
+      if (k >= 1) {
+        anim = null;
+        jump(to);
+        end(false);
+        return;
+      }
+      jump({ center: unmerc(fx + dx * c, fy + dy * c), zoom: from.zoom + dz * e, pitch: from.pitch + dp * e,
+        bearing: from.bearing + db * e, padding: pad(e) });
+      a.frame = requestAnimationFrame(step);
+    };
+    a.frame = requestAnimationFrame(step);
+  }
+  function glide(to) {
+    move({ center: to }, true, { duration: 600, ease: easeOut, kind: 'glide' });
+  }
+  // a gesture takes the camera from wherever the animation has got to
+  for (const ev of ['mousedown', 'touchstart', 'wheel', 'keydown']) {
+    map.getCanvasContainer().addEventListener(ev, stopAnim, { capture: true, passive: true });
   }
   const FOV = 0.6435011087932844;  // MapLibre's vertical field of view
   /** 65° on a landscape view, down to 50° on a portrait one twice as tall as wide. */
@@ -653,8 +747,7 @@
   }
   const NO_PADDING = { top: 0, bottom: 0, left: 0, right: 0 };
   /** Following: the camera on the position. Otherwise the overview: the block's surface in 3D, the data in 2D. */
-  function fit(duration) {
-    duration = duration || 0;
+  function fit(animated, done) {
     const is3d = mode === '3d';
     const box = map.getContainer().getBoundingClientRect();
     const padding = Math.round(Math.max(8, Math.min(48, Math.min(box.width, box.height) * 0.07)));
@@ -662,27 +755,26 @@
       fitPending = null;
       followFitted = true;
       const cam = followCamera(box, is3d);
-      map.setMinZoom(is3d ? Math.max(0, cam.zoom - 5) : 0);
-      move(cam, duration);
+      move(cam, animated, { minZoom: is3d ? Math.max(0, cam.zoom - 5) : 0, done });
       return;
     }
-    if (is3d && SQ && !(relief && relief.sq === SQ)) { fitPending = duration; return; }
+    if (is3d && SQ && !(relief && relief.sq === SQ)) { fitPending = { animated, done }; return; }
     fitPending = null;
     if (is3d && SQ) {
       const block = blockCamera(SQ, relief, box, padding);
-      map.setMinZoom(Math.max(0, block.zoom - 5));  // the block alone in a white world: no further out
-      move({ center: block.center, zoom: block.zoom, pitch: block.pitch, bearing: 0, padding: block.padding }, duration);
+      // the block alone in a white world: no further out
+      move({ center: block.center, zoom: block.zoom, pitch: block.pitch, bearing: 0, padding: block.padding }, animated,
+        { minZoom: Math.max(0, block.zoom - 5), done });
       return;
     }
     let b = dataBox() || SQ;
     if (!b && pos) b = squareAround(pos.lon, pos.lat, 1);
-    if (!b) return;
-    if (b[2] - b[0] < 1e-5 && b[3] - b[1] < 1e-5) b = squareAround(b[0], b[1], 0.5);
-    const cam = map.cameraForBounds([[b[0], b[1]], [b[2], b[3]]], { padding, maxZoom: 17 });
-    if (!cam) return;
-    map.setMinZoom(0);
-    move({ center: cam.center, zoom: cam.zoom, pitch: is3d ? PITCH : 0, bearing: 0, padding: NO_PADDING }, duration);
+    const cam = b && map.cameraForBounds(b[2] - b[0] < 1e-5 && b[3] - b[1] < 1e-5 ? toBounds(squareAround(b[0], b[1], 0.5)) : toBounds(b),
+      { padding, maxZoom: 17 });
+    if (!cam) { if (done) done(false); return; }
+    move({ center: cam.center, zoom: cam.zoom, pitch: is3d ? PITCH : 0, bearing: 0, padding: NO_PADDING }, animated, { minZoom: 0, done });
   }
+  const toBounds = (b) => [[b[0], b[1]], [b[2], b[3]]];
   // MapLibre 4.7 keeps the camera above the elevation at the centre of the view only: tilting or zooming towards a
   // slope (or the inertia after a drag) takes it inside the relief, where the view goes wrong. Any move that is not
   // ours and ends below the ground under the camera is undone, back to the last camera that was above it.
@@ -704,14 +796,14 @@
   });
   /** The default view, from whatever state the camera is in: stops any move, then the overview (or the follow view). */
   function reset() {
-    cancelAnimationFrame(glideFrame);
+    stopAnim();
     map.stop();
     lastAbove = null;
-    fit(0);
+    fit(true);
   }
   ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach((ev) => map.on(ev, (e) => {
     if (!e.originalEvent) return;
-    cancelAnimationFrame(glideFrame);
+    stopAnim();
     if (follow) { follow = false; hostPost({ type: 'follow', value: false }); }
   }));
 
@@ -754,8 +846,11 @@
 
   // ---------------------------------------------------------------- live trail
 
-  // One short feature per segment, coloured by its own speed: appending is one updateData of one feature,
-  // and the whole trail is recoloured at most once a second, only when the mean moved.
+  // One short feature per segment, coloured by its own speed: appending is one updateData, and the whole trail is
+  // recoloured only when the mean moved. On terrain any change to the trail's source redraws the photo of every terrain
+  // tile, so the fixes (about one a second) are drawn together, every LIVE_FLUSH_3D_MS at most: the trail then ends a
+  // few metres behind the position marker, which moves at each fix.
+  const LIVE_FLUSH_MS = 1000, LIVE_FLUSH_3D_MS = 4000;
   function liveFeature(i) {
     const avg = live.count ? live.sum / live.count : 0;
     const c = live.smooth[i] == null || !avg ? '#d7191c' : speedColour(live.smooth[i] / avg);
@@ -769,24 +864,33 @@
     if (speed != null && speed > 0.3) { live.sum += +speed; live.count++; }
   }
   function liveRedraw() {
+    clearTimeout(live.pending);
+    live.pending = 0; live.added = []; live.full = false; live.flushedAt = Date.now();
     const features = [];
     for (let i = 1; i < live.coords.length; i++) features.push(liveFeature(i));
     src('live').setData({ type: 'FeatureCollection', features });
     live.colouredAvg = live.count ? live.sum / live.count : 0;
-    live.colouredAt = Date.now();
     if (!track) showLegend(live.colouredAvg || null);
   }
-  function liveMaybeRecolour() {
-    const avg = live.count ? live.sum / live.count : 0;
-    if (!avg || Math.abs(avg - live.colouredAvg) <= live.colouredAvg * 0.03) return;
-    const wait = 1000 - (Date.now() - live.colouredAt);
-    if (wait <= 0) { liveRedraw(); return; }
-    if (!live.pending) live.pending = setTimeout(() => { live.pending = 0; liveRedraw(); }, wait);
+  function liveFlush() {
+    live.pending = 0;
+    const avg = live.count ? live.sum / live.count : 0, s = src('live');
+    if (live.full || typeof s.updateData !== 'function' || (avg && Math.abs(avg - live.colouredAvg) > live.colouredAvg * 0.03)) {
+      liveRedraw();
+      return;
+    }
+    if (live.added.length) s.updateData({ add: live.added.map(liveFeature) });
+    live.added = []; live.flushedAt = Date.now();
+  }
+  function liveFlushSoon() {
+    if (live.pending) return;
+    const every = map.getTerrain() ? LIVE_FLUSH_3D_MS : LIVE_FLUSH_MS;
+    live.pending = setTimeout(liveFlush, Math.max(0, every - (Date.now() - live.flushedAt)));
   }
 
   // ---------------------------------------------------------------- position
 
-  let posMarker = null, posEl = null, posAdded = false;
+  let posMarker = null, posEl = null, posAdded = false, accSvg = null, accShape = null;
   function domMarker(element) {
     const marker = new maplibregl.Marker({ element, anchor: 'center', opacityWhenCovered: '1' });
     // MapLibre 4.7 checks every marker against the terrain about 10 times a second by reading the GPU's depth
@@ -798,6 +902,13 @@
     if (posMarker) return;
     posEl = document.createElement('div');
     posEl.className = 'smap-pos';
+    const NS = 'http://www.w3.org/2000/svg';
+    accSvg = document.createElementNS(NS, 'svg');
+    accSvg.setAttribute('class', 'acc');
+    accShape = document.createElementNS(NS, 'circle');
+    accShape.setAttribute('r', '1');
+    accSvg.appendChild(accShape);
+    posEl.appendChild(accSvg);
     for (const part of ['halo', 'arrow', 'dot']) {
       const d = document.createElement('div'); d.className = part; posEl.appendChild(d);
     }
@@ -825,30 +936,30 @@
     el.hidden = !text;
     if (text) { el.textContent = text; bannerTimer = setTimeout(() => { el.hidden = true; }, 8000); }
   }
-  function circle(lon, lat, r) {
-    const kx = 111320 * Math.cos(lat * Math.PI / 180), pts = [];
-    for (let i = 0; i <= 48; i++) {
-      const a = i / 48 * 2 * Math.PI;
-      pts.push([lon + Math.cos(a) * r / kx, lat + Math.sin(a) * r / 110540]);
+  // The accuracy circle is drawn in the position marker (an SVG ellipse, the circle on the ground as the camera sees it),
+  // not as a GeoJSON source: a fix a second reloaded that source and, on terrain, redrew the photo of every terrain tile.
+  function drawAccuracy() {
+    if (!posAdded) return;
+    const r = pos && pos.accuracy, kx = 111320 * Math.cos((pos ? pos.lat : 0) * Math.PI / 180);
+    let shown = false;
+    if (r) {
+      const c = map.project([pos.lon, pos.lat]), e = map.project([pos.lon + r / kx, pos.lat]), n = map.project([pos.lon, pos.lat + r / 110540]);
+      // the unit circle's x axis goes east, its y axis (down) south
+      const m = [e.x - c.x, e.y - c.y, c.x - n.x, c.y - n.y], size = Math.max(Math.hypot(m[0], m[1]), Math.hypot(m[2], m[3]));
+      shown = size >= 3 && size < 5000 && m.every(Number.isFinite);  // smaller than the dot, or past the horizon: none
+      if (shown) accShape.setAttribute('transform', `matrix(${m.map((v) => v.toFixed(2)).join(' ')} 0 0)`);
     }
-    return { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [pts] } };
+    accSvg.style.display = shown ? '' : 'none';
   }
-  // the accuracy disc as last sent: a host repeating the same fix must not reload the source (a 3D frame each)
-  let accKey = '';
-  function setAcc(p) {
-    const key = p && p.accuracy ? `${p.lon},${p.lat},${p.accuracy}` : '';
-    if (key === accKey) return;
-    accKey = key;
-    src('acc').setData(key ? circle(p.lon, p.lat, p.accuracy) : EMPTY);
-  }
+  map.on('move', drawAccuracy);
   function updatePos() {
-    if (!pos) { if (posMarker) posMarker.remove(); posAdded = false; setAcc(null); return; }
+    if (!pos) { if (posMarker) posMarker.remove(); posAdded = false; return; }
     ensurePosMarker();
     const outside = SQ && mode === '3d' && !follow
       && (pos.lon < SQ[0] || pos.lon > SQ[2] || pos.lat < SQ[1] || pos.lat > SQ[3]);
     if (outside) {
       // looking at an activity done elsewhere: no marker floating off the block, and nothing to warn about
-      posMarker.remove(); posAdded = false; setAcc(null);
+      posMarker.remove(); posAdded = false;
       return;
     }
     if (banner) setBanner(null);
@@ -856,7 +967,7 @@
     if (!posAdded) { posMarker.addTo(map); posAdded = true; }
     posEl.classList.toggle('heading', pos.heading != null);
     orientArrow();
-    setAcc(pos);
+    drawAccuracy();
   }
 
   // ---------------------------------------------------------------- peaks
@@ -953,7 +1064,7 @@
     if (markerFrame || !(posAdded || cursorAdded)) return;
     markerFrame = requestAnimationFrame(() => {
       markerFrame = 0;
-      if (posAdded) posMarker.setLngLat(posMarker.getLngLat());
+      if (posAdded) { posMarker.setLngLat(posMarker.getLngLat()); drawAccuracy(); }
       if (cursorAdded) cursorMarker.setLngLat(cursorMarker.getLngLat());
     });
   }
@@ -1243,12 +1354,10 @@
     appendLive(lon, lat, speed) {
       livePush(lon, lat, speed);
       const n = live.coords.length;
-      if (n >= 2) {
-        const s = src('live');
-        if (typeof s.updateData === 'function' && n > 2) s.updateData({ add: [liveFeature(n - 1)] });
-        else liveRedraw();
-      }
-      liveMaybeRecolour(); show();
+      if (n === 2) live.full = true;
+      if (n > 2) live.added.push(n - 1);
+      if (n >= 2) liveFlushSoon();
+      show();
     },
     setDots(list) {
       src('dots').setData({ type: 'FeatureCollection', features: (list || []).map((d) => ({ type: 'Feature', properties: { color: d.color }, geometry: { type: 'Point', coordinates: [d.lon, d.lat] } })) });
@@ -1263,7 +1372,7 @@
       refreshSquare();
       updatePos();
       if (follow && !followFitted) fit();
-      else if (follow && performance.now() >= movingUntil) glide([lon, lat], 600);  // never cut a fit's zoom short
+      else if (follow && !(anim && anim.kind !== 'glide')) glide([lon, lat]);  // never cut a fit short
     },
     locFail() {
       pos = null; updatePos();
@@ -1273,7 +1382,7 @@
       follow = !!on;
       followFitted = false;
       updatePos();
-      if (follow && pos) fit(400);
+      if (follow && pos) fit(true);
     },
     setLiveSquare(km) {
       liveSquareKm = km > 0 ? km : null; liveSq = null;
@@ -1284,8 +1393,16 @@
       show(); refreshSquare(); updatePos(); fit();
     },
     setMode(m) {
+      const was3d = mode === '3d';
       mode = m === '2d' ? '2d' : '3d';
-      applyMode(); updatePos(); updateFrame(); fit(350);
+      if (was3d && mode === '2d' && map.getTerrain()) {
+        // down to the flat view while still on the relief, then the relief goes: no jump in the picture
+        updatePos();
+        fit(true, () => { if (mode === '2d') { applyMode(); updateFrame(); } });
+      } else {
+        // up from the flat view: the relief comes at a pitch of 0, where it changes nothing on screen, then the camera tilts
+        applyMode(); updatePos(); updateFrame(); fit(true);
+      }
       hostPost({ type: 'mode', value: mode });
     },
     setExag(v) {
@@ -1303,7 +1420,7 @@
       map.setLayoutProperty('peaks', 'icon-image', peakImageExpr());
     },
     setCursor(lon, lat) { setCursorAt(lon, lat); },
-    fit() { fit(300); },
+    fit() { fit(true); },
     reset() { reset(); },
   };
 

@@ -21,6 +21,9 @@ body, .maplibregl-popup-content { font: 12px/1.35 system-ui, -apple-system, "Seg
   box-sizing: border-box; box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.5); }
 .smap-pos .halo { position: absolute; inset: -4px; border-radius: 50%; background: rgba(26, 115, 255, 0.55);
   border: 2px solid rgba(26, 115, 255, 0.8); animation: smap-pulse 1.6s ease-out infinite; }
+/* The accuracy circle: a unit circle the page transforms into the ground circle as seen (stroke kept at 1 px). */
+.smap-pos .acc { position: absolute; left: 50%; top: 50%; width: 1px; height: 1px; overflow: visible; }
+.smap-pos .acc circle { fill: rgba(26, 115, 255, 0.2); stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .smap-pos .arrow { position: absolute; left: 50%; top: 50%; width: 0; height: 0; display: none; }
 .smap-pos .arrow::before { content: ""; position: absolute; left: -15px; top: -42px; border-left: 15px solid transparent;
   border-right: 15px solid transparent; border-bottom: 26px solid #1a73ff;
