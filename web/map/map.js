@@ -399,8 +399,9 @@
 
   // A laptop's integrated GPU falls under 30 fps in 3D at the screen's full pixel density (1.5 at 150 % scaling draws
   // 2.25 times the pixels of 1): the page times its own frames while the map moves and, when too slow, draws fewer
-  // pixels (2, then 1.5, then 1), remembered for the next visit. A fast GPU never gets there.
-  const RATIO_KEY = 'smap-pixel-ratio', SLOW_FRAME_MS = 28, FRAME_SAMPLES = 40;
+  // pixels (2, then 1.5, then 1), remembered for the next visit. A fast GPU never gets there. The key changed when 3D
+  // stopped redrawing its draped layers every frame: machines lowered only because of that measure again.
+  const RATIO_KEY = 'smap-pixel-ratio-2', SLOW_FRAME_MS = 28, FRAME_SAMPLES = 40;
   const nativeRatio = Math.min(2, window.devicePixelRatio || 1);
   let ratio = nativeRatio;
   try {
@@ -411,9 +412,10 @@
   document.documentElement.dataset.theme = theme;
   let map;
   try {
+    // fadeDuration 0 makes MapLibre place every symbol again on each frame, on the relief: a third of the frame rate in 3D
     map = new maplibregl.Map({
       container: 'map', style: style(), center: [2.5, 46.5], zoom: 5, pitch: 0,
-      maxPitch: 80, fadeDuration: 0, maxTileCacheSize: 120, antialias: false, refreshExpiredTiles: false,
+      maxPitch: 80, fadeDuration: 300, maxTileCacheSize: 120, antialias: false, refreshExpiredTiles: false,
       pixelRatio: ratio, renderWorldCopies: false, validateStyle: false,
       interactive, attributionControl: { compact: true, customAttribution: ATTRIBUTION },
     });
@@ -464,7 +466,12 @@
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     return 6 * 156543 * Math.cos(lat * Math.PI / 180) / 2 ** z;  // 6 DEM pixels: wider than the cliff, so no white stripes
   }
+  // what band/mask/frame were last built for: every zoomend asks, and new data redraws the block's photo under them
+  let frameKey = null;
   function updateFrame() {
+    const key = SQ ? `${SQ.join()}|${bandMetres()}` : '';
+    if (key === frameKey) return;
+    frameKey = key;
     if (!SQ) { ['band', 'mask', 'frame'].forEach((id) => src(id).setData(EMPTY)); return; }
     const b = grow(SQ, bandMetres()), w = SQ[2] - SQ[0], h = SQ[3] - SQ[1];
     // a bounded ring, not the whole world: a world polygon tiled badly into a white veil
@@ -826,14 +833,22 @@
     }
     return { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [pts] } };
   }
+  // the accuracy disc as last sent: a host repeating the same fix must not reload the source (a 3D frame each)
+  let accKey = '';
+  function setAcc(p) {
+    const key = p && p.accuracy ? `${p.lon},${p.lat},${p.accuracy}` : '';
+    if (key === accKey) return;
+    accKey = key;
+    src('acc').setData(key ? circle(p.lon, p.lat, p.accuracy) : EMPTY);
+  }
   function updatePos() {
-    if (!pos) { if (posMarker) posMarker.remove(); posAdded = false; src('acc').setData(EMPTY); return; }
+    if (!pos) { if (posMarker) posMarker.remove(); posAdded = false; setAcc(null); return; }
     ensurePosMarker();
     const outside = SQ && mode === '3d' && !follow
       && (pos.lon < SQ[0] || pos.lon > SQ[2] || pos.lat < SQ[1] || pos.lat > SQ[3]);
     if (outside) {
       // looking at an activity done elsewhere: no marker floating off the block, and nothing to warn about
-      posMarker.remove(); posAdded = false; src('acc').setData(EMPTY);
+      posMarker.remove(); posAdded = false; setAcc(null);
       return;
     }
     if (banner) setBanner(null);
@@ -841,7 +856,7 @@
     if (!posAdded) { posMarker.addTo(map); posAdded = true; }
     posEl.classList.toggle('heading', pos.heading != null);
     orientArrow();
-    src('acc').setData(pos.accuracy ? circle(pos.lon, pos.lat, pos.accuracy) : EMPTY);
+    setAcc(pos);
   }
 
   // ---------------------------------------------------------------- peaks
@@ -1240,7 +1255,10 @@
     },
     setPos(lon, lat, heading, accuracy) {
       if (lon == null || lat == null) { pos = null; setBanner(null); refreshSquare(); updatePos(); return; }  // cleared by the host
-      pos = { lon, lat, heading: heading == null ? null : heading, accuracy: accuracy || null };
+      const next = { lon, lat, heading: heading == null ? null : heading, accuracy: accuracy || null };
+      // a PC's location repeats the same fix every second: nothing would change but a redrawn frame
+      if (pos && !follow && ['lon', 'lat', 'heading', 'accuracy'].every((k) => pos[k] === next[k])) return;
+      pos = next;
       show();
       refreshSquare();
       updatePos();
