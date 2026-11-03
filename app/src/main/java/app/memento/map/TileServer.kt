@@ -48,7 +48,8 @@ class FetchedTile(val key: TileKey, val bytes: ByteArray)
 /**
  * Serves the map page and its data from the app's own origin (`appassets.androidplatform.net`): the page
  * from the APK assets, tiles from the offline packs, then the browsing cache, then the network, the
- * peaks list and the buildings cells the same way. Runs on the WebView's background threads; every network step
+ * peaks list and the buildings cells the same way. The network is IGN / OpenStreetMap / AWS, or only the Tuileries
+ * server when one is configured ([MapConfig]). Runs on the WebView's background threads; every network step
  * has a deadline.
  */
 object TileServer {
@@ -102,10 +103,8 @@ object TileServer {
 
     private fun tile(key: TileKey): WebResourceResponse {
         // the file can vanish between the lookup and the open: a cache trim, an expired pack deleted
-        (OfflinePacks.findTile(key.path) ?: cache.get(key.path))?.let { openOrNull(it) }?.let { return image(key.mime, it) }
-        if (key.kind == TileKey.KIND_ORTHO) {
-            val osm = key.fallback()
-            cache.get(osm.path)?.let { openOrNull(it) }?.let { return image(osm.mime, it) }
+        for (v in key.variants()) {
+            (OfflinePacks.findTile(v.path) ?: cache.get(v.path))?.let { openOrNull(it) }?.let { return image(v.mime, it) }
         }
         if (!NetState.online.value || backedOff()) return overzoomed(key) ?: notFound()
         val got = try {
@@ -181,7 +180,9 @@ object TileServer {
         if (key.kind != TileKey.KIND_ORTHO) return null
         overzoomCache.get(key.path)?.let { return image(key.mime, ByteArrayInputStream(it)) }
         for (o in Overzoom.candidates(key)) {
-            val f = OfflinePacks.findTile(o.ancestor.path) ?: cache.get(o.ancestor.path) ?: continue
+            // a photo, JPEG or WebP; never the OpenStreetMap stand-in, which is not the photo
+            val f = o.ancestor.variants().filter { it.kind != TileKey.KIND_OSM }
+                .firstNotNullOfOrNull { OfflinePacks.findTile(it.path) ?: cache.get(it.path) } ?: continue
             val bytes = try { crop(f, o) } catch (e: IOException) { Log.w(TAG, "overzoom ${key.path}: $e"); null } ?: continue
             overzoomCache.put(key.path, bytes)
             return image(key.mime, ByteArrayInputStream(bytes))
@@ -211,6 +212,11 @@ object TileServer {
      * the OSM tile policy forbids bulk downloads, so only browsing falls back to it.
      */
     fun fetch(key: TileKey, allowOsm: Boolean): FetchedTile? {
+        MapConfig.tuileries?.let { t ->
+            // Tuileries applies the OpenStreetMap rule itself: its PNG stand-in is refused where OSM would be
+            val got = Tuileries.tileOf(key, get(t.tileUrl(key), t.headers())) ?: return null
+            return got.takeIf { allowOsm || it.key.kind != TileKey.KIND_OSM }
+        }
         if (key.kind == TileKey.KIND_BUILDINGS) return FetchedTile(key, Buildings.fetchCell(key.x, key.y, ::get))
         if (key.kind == TileKey.KIND_DEM) {
             val r = get(TileSources.dem(key.z, key.x, key.y))
@@ -267,6 +273,15 @@ object TileServer {
     }
 
     fun computePeaks(b: Bbox): List<Peak> {
+        MapConfig.tuileries?.let { t ->
+            val r = get(t.peaksUrl(b), t.headers())
+            if (r.code != 200) throw IOException("Sommets Tuileries : ${Tuileries.statusMessage(r.code)}")
+            return try {
+                Peaks.fromJson(String(r.body, Charsets.UTF_8))
+            } catch (e: Json.JsonException) {
+                throw IOException("Sommets Tuileries : réponse illisible")
+            }
+        }
         val wfs = get(Peaks.wfsUrl(b))
         if (wfs.code != 200) throw IOException("Sommets IGN : HTTP ${wfs.code}")
         val candidates = Peaks.preselect(Peaks.parseWfs(String(wfs.body, Charsets.UTF_8)))
@@ -295,11 +310,32 @@ object TileServer {
         null
     }
 
-    fun get(url: String): HttpResult {
+    /** `GET /api/info` of [t] (blocking): the settings' "Tester la connexion". */
+    fun tuileriesInfo(t: Tuileries): TuileriesInfo {
+        if (!t.configured) throw TuileriesException("Adresse invalide : https://… attendue")
+        val r = try {
+            get(t.infoUrl, t.headers())
+        } catch (e: IOException) {
+            throw TuileriesException("Serveur injoignable (${e.message})")
+        }
+        if (r.code != 200) throw TuileriesException(Tuileries.statusMessage(r.code))
+        return Tuileries.parseInfo(String(r.body, Charsets.UTF_8))
+    }
+
+    /**
+     * [headers]: Tuileries' credentials, given only for its URLs. A redirect is then not followed (Cloudflare Access's
+     * login page), so they never travel elsewhere.
+     */
+    fun get(url: String, headers: Map<String, String>? = null): HttpResult {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = TIMEOUT_MS
         c.readTimeout = TIMEOUT_MS
-        c.setRequestProperty("User-Agent", TileSources.USER_AGENT)
+        if (headers != null) {
+            c.instanceFollowRedirects = false
+            for ((k, v) in headers) c.setRequestProperty(k, v)
+        } else {
+            c.setRequestProperty("User-Agent", TileSources.USER_AGENT)
+        }
         try {
             val code = c.responseCode
             val body = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
@@ -334,6 +370,7 @@ object TileServer {
         "json" -> "application/json"
         "png" -> "image/png"
         "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
         "svg" -> "image/svg+xml"
         "woff2" -> "font/woff2"
         "pbf" -> "application/x-protobuf"

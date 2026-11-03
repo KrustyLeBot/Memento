@@ -206,9 +206,30 @@ object MapHost {
         // pauseTimers() is process-wide and outlives the WebView it was called on: after a renderer lost
         // while paused, the new page would otherwise never run a timer and never say "ready"
         w.resumeTimers()
-        val url = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") + "&theme=" + (if (dark) "dark" else "light") + "&interactive=1"
-        w.loadUrl(url)
+        w.loadUrl(pageUrl(mode3d, dark))
         return w
+    }
+
+    // photomax: the photo source's maxzoom (a setting); the page enlarges that level beyond it
+    internal fun pageUrl(mode3d: Boolean, dark: Boolean) = TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") +
+        "&theme=" + (if (dark) "dark" else "light") + "&interactive=1&photomax=" + MapConfig.photoMaxZoom
+
+    /** Loads the page again with the current [MapConfig] (read when it loads); the kept state is replayed on "ready". */
+    fun reloadPage() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { reloadPage() }
+            return
+        }
+        val w = web ?: return
+        ready = false
+        dirty.addAll(state.keys)
+        if (paused) {
+            // a paused WebView would never finish loading; "ready" pauses it again when nothing shows it
+            paused = false
+            w.onResume()
+            w.resumeTimers()
+        }
+        w.loadUrl(pageUrl(state["setMode"] != "\"2d\"", state["setTheme"] == "\"dark\""))
     }
 
     private fun onPost(json: String) {

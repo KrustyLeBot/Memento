@@ -143,19 +143,22 @@ object TilePlans {
      * The route pack for [route]: the aerial photo of its square from z8 to [MID_Z] and, within [CORRIDOR_M] of the
      * track, up to z17; relief z6–13 over the square. When that outgrows [budget], [CORRIDOR_STEPS] are tried, then a
      * lower square zoom, then the square alone. A route small enough to get its whole square at z17 gets that. Null
-     * when even the square at z8 does not fit (a route the size of a country).
+     * when even the square at z8 does not fit (a route the size of a country). No photo zoom above [photoMax] (the
+     * map's setting): the map shows that level enlarged beyond it, so a finer tile would never be drawn.
      */
-    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET): TilePlan? {
+    fun forRoute(route: Route, budget: Long = ROUTE_BUDGET, photoMax: Int = ORTHO_MAX_Z): TilePlan? {
         val box = route.bbox ?: return null
         val square = MapSquare.of(box)
-        TilePlan(square, ORTHO_MIN_Z..ORTHO_MAX_Z, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
+        val zTop = minOf(ORTHO_MAX_Z, photoMax)
+        TilePlan(square, ORTHO_MIN_Z..zTop, DEM_ZOOMS, buildings = true).let { if (it.estimatedBytes <= budget) return it }
         val line = Corridors.of(route, 0.0, IntRange.EMPTY)
         val counts = HashMap<Pair<Double, Int>, Long>()
         fun count(buf: Double, z: Int) = counts.getOrPut(buf to z) { Corridors.select(line.lons, line.lats, buf, z).size.toLong() }
-        for (mid in MID_Z downTo ORTHO_MIN_Z) {
+        for (mid in minOf(MID_Z, zTop) downTo ORTHO_MIN_Z) {
             val base = TilePlan(square, ORTHO_MIN_Z..mid, DEM_ZOOMS, buildings = true)
             if (base.estimatedBytes > budget) continue
-            for ((buf, top) in CORRIDOR_STEPS) {
+            for ((buf, stepTop) in CORRIDOR_STEPS) {
+                val top = minOf(stepTop, zTop)
                 if (top <= mid) continue
                 val extra = (mid + 1..top).sumOf { count(buf, it) } * ORTHO_TILE_BYTES
                 if (base.estimatedBytes + extra <= budget) return base.copy(corridor = line.copy(bufferM = buf, zooms = mid + 1..top))

@@ -71,6 +71,7 @@ fun MapCacheSettings(vm: MainViewModel) {
         SettingsHint("Le cache garde les cartes déjà vues (300 Mo au plus). Les parcours préparés et les zones autour du départ sont supprimés d'eux-mêmes après 24 h.")
         OutlinedButton(onClick = { confirm = true }) { Text("Vider le cache des cartes") }
     }
+    MapSourceSettings(vm.settings)
     StartZoneSettings(vm.settings)
 
     if (confirm) {

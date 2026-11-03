@@ -26,7 +26,10 @@ class MapPageContractTest {
 
     @Test
     fun tileUrlsThePageBuildsAreServed() {
-        assertTrue(page.contains("tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: 19"))
+        assertTrue(page.contains("tiles: ['ortho://{z}/{x}/{y}'], tileSize: 256, maxzoom: PHOTO_MAX_Z }"))
+        // the photo's top zoom is the host's setting, passed in the page URL
+        assertTrue(page.contains("params.get('photomax')"))
+        assertTrue(MapHost.pageUrl(true, false).endsWith("&photomax=${MapConfig.photoMaxZoom}"))
         assertTrue(page.contains("fetch(`\${BASE}t/ortho/\${z}/\${x}/\${y}`, { signal })"))
         assertTrue(page.contains("`\${BASE}t/dem/\${z}/\${x}/\${y}`"))
         // what MapLibre and the DEM protocol make of them, as TileServer sees the path
