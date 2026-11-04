@@ -569,6 +569,43 @@
     t.sourceCache.freeRtt();
     map.triggerRepaint();
   }
+  // MapLibre 4.7 on terrain, at the end of a gesture, re-centres the view on the ground under the screen's centre
+  // and derives the zoom from the camera's height above that point. Low over a valley, looking level at a cliff,
+  // that point can be as high as the camera: the height is 0 or less, the zoom infinite, the view matrix cannot be
+  // inverted and the exception, thrown inside MapLibre's render task queue, leaves the queue marked as running for
+  // good: every later frame fails silently, the map is frozen (black on the phone) and takes no gesture. That
+  // re-centring is skipped when the height is not a sane positive figure, and the queue is freed should anything
+  // else ever throw there, so the map keeps drawing and answering.
+  const transformProto = Object.getPrototypeOf(map.transform);
+  if (typeof transformProto.recalculateZoom === 'function' && !transformProto.__guarded) {
+    const recalc = transformProto.recalculateZoom;
+    transformProto.recalculateZoom = function (terrain) {
+      const height = Math.cos(this._pitch) * this.cameraToCenterDistance / this._pixelPerMeter + this.elevation;
+      const at = this.pointLocation(this.centerPoint, terrain);
+      const ground = at && terrain.getElevationForLngLatZoom(at, this.tileZoom);
+      if (!Number.isFinite(ground) || !(height - ground > 1)) return;
+      const saved = { center: this._center, elevation: this._elevation, zoom: this.zoom };
+      try {
+        recalc.call(this, terrain);
+      } catch (e) {
+        this._center = saved.center; this._elevation = saved.elevation; this.zoom = saved.zoom;
+      }
+      if (!Number.isFinite(this.zoom)) { this._center = saved.center; this._elevation = saved.elevation; this.zoom = saved.zoom; }
+    };
+    transformProto.__guarded = true;
+  }
+  const tasks = map._renderTaskQueue;
+  if (tasks && typeof tasks.run === 'function') {
+    const run = tasks.run.bind(tasks);
+    tasks.run = (t) => {
+      try {
+        run(t);
+      } catch (e) {
+        tasks._currentlyRunning = false;  // the next frame runs again instead of failing forever
+        report(`map frame: ${e && e.message ? e.message : e}`);
+      }
+    };
+  }
   let frameGaps = [], lastFrame = 0;
   map.on('render', () => {
     const now = performance.now(), gap = now - lastFrame;
