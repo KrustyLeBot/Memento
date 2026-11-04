@@ -761,6 +761,7 @@
   // each frame), in 2D as in 3D. Any gesture stops it at once, where it is.
   let anim = null, ownJump = 0;
   function jump(camera) {
+    wantedPitch = null;  // a camera of ours: its pitch is the one to keep
     ownJump++;
     try { map.jumpTo(camera); } finally { ownJump--; }
   }
@@ -779,6 +780,7 @@
   function move(camera, animated, { minZoom = null, duration = 0, ease = easeInOut, kind = 'fit', done = null } = {}) {
     stopAnim();
     map.stop();
+    wantedPitch = null;
     const to = {
       center: camera.center ? maplibregl.LngLat.convert(camera.center) : map.getCenter(),
       zoom: camera.zoom != null ? camera.zoom : map.getZoom(),
@@ -922,27 +924,52 @@
   // MapLibre 4.7 keeps the camera above the elevation at the centre of the view only: tilting or zooming towards a
   // slope (or the inertia after a drag) takes it inside the relief, where the view goes wrong. Any move that is not
   // ours and ends below the ground under the camera is undone, back to the last camera that was above it.
+  // The camera never goes into the relief, and a move that would take it there keeps going, the camera sliding up
+  // over the ground. MapLibre 4.7 itself lifts it to the ground's level; transformCameraUpdate adds a clearance: the
+  // pitch lowered just enough (bisection), else the distance grown (the camera behind a summit). It corrects what is
+  // drawn, not what the gesture asked for, so the gesture stays alive; the pitch the owner had is kept aside and
+  // given back as soon as the ground allows, during that gesture or a later one, until the owner tilts the view
+  // or one of our cameras takes over. Undoing the move instead (the former way) stopped every gesture that ran
+  // into the slope, the camera stuck where it was, one turn after another.
   const CLEARANCE_M = 30;
-  let lastAbove = null;
-  function underground() {
-    const t = map.transform, cam = t.getCameraPosition();
+  let wantedPitch = null;  // the owner's pitch while the relief holds the camera lower
+  function underground(t = map.transform) {
+    const cam = t.getCameraPosition();
     return cam.altitude < map.terrain.getElevationForLngLatZoom(cam.lngLat, t.tileZoom) + CLEARANCE_M;
   }
-  map.on('move', () => {
-    if (!map.terrain) { lastAbove = null; return; }
-    // our own cameras are trusted as they are: a gesture from one that starts low must not be sent back elsewhere
-    if (ownJump || !underground()) {
-      lastAbove = { center: map.getCenter(), zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing() };
-    } else if (lastAbove) {
-      map.stop();
-      jump(lastAbove);
+  map.transformCameraUpdate = (t) => {
+    if (!map.terrain) return {};
+    const asked = t.pitch, target = wantedPitch === null ? asked : Math.max(asked, wantedPitch);
+    t.pitch = target;
+    if (!underground(t)) return target === asked ? {} : { pitch: target };
+    if (wantedPitch === null) wantedPitch = target;
+    t.pitch = 0;
+    if (!underground(t)) {
+      let lo = 0, hi = target;
+      for (let i = 0; i < 10; i++) {
+        const mid = (lo + hi) / 2;
+        t.pitch = mid;
+        if (underground(t)) hi = mid; else lo = mid;
+      }
+      return { pitch: lo };
     }
+    t.pitch = asked;
+    for (let i = 0; i < 24 && underground(t); i++) t.zoom -= 0.1;
+    return { pitch: asked, zoom: t.zoom };
+  };
+  // MapLibre's own lift ran first and left the hook a pitch already lowered: the owner's was lost on the way
+  if (typeof map._elevateCameraIfInsideTerrain === 'function') map._elevateCameraIfInsideTerrain = () => ({});
+  // the owner tilting the view sets the pitch from now on; reached again, it needs no keeping
+  map.on('pitchstart', (e) => { if (e.originalEvent) wantedPitch = null; });
+  map.on('moveend', () => { if (wantedPitch !== null && map.getPitch() >= wantedPitch - 0.01) wantedPitch = null; });
+  // relief arriving under a still camera (the DEM still loading when it was placed) raises the camera as well
+  map.on('idle', () => {
+    if (map.terrain && !map.isMoving() && underground()) map.jumpTo({ pitch: map.getPitch() + 1e-6 });
   });
   /** The default view, from whatever state the camera is in: stops any move, then the overview (or the follow view). */
   function reset() {
     stopAnim();
     map.stop();
-    lastAbove = null;
     fit(true);
   }
   ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'].forEach((ev) => map.on(ev, (e) => {
