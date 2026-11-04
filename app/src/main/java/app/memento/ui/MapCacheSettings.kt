@@ -74,6 +74,13 @@ fun MapCacheSettings(vm: MainViewModel) {
                 "0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd. Les cartes hors ligne déjà préparées " +
                 "gardent leur relief. Réglage synchronisé avec le PC.",
         )
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Bâtiments en 3D", fontWeight = FontWeight.SemiBold)
+                SettingsHint("Les bâtiments de l'IGN sur la carte 3D, en ligne seulement (jamais dans les cartes hors ligne). Synchronisé avec le PC.")
+            }
+            androidx.compose.material3.Switch(cfg.buildings, { vm.changeActivitySettings(cfg.copy(buildings = it)) })
+        }
     }
 
     SettingsCard {

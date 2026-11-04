@@ -508,6 +508,7 @@ def test_urls_the_page_requests_are_served():
     assert "fetch(`${BASE}t/${path}/${z}/${x}/${y}`, { signal })" in page
     assert "path: 'demhd', size: 512, maxzoom: 15" in page and "path: 'dem', size: 256, maxzoom: 13" in page
     assert "params.get('relief') === 'mapterhorn'" in page
+    assert "params.get('buildings') !== '0'" in page
     assert mapcache.parse_request("/t/demhd/15/17008/11701") == mapcache.TileRequest("demhd", 15, 17008, 11701)
     assert mapcache.upstream_url(mapcache.TileRequest("demhd", 15, 17008, 11701)) == \
         "https://tiles.mapterhorn.com/15/17008/11701.webp"
@@ -563,3 +564,5 @@ def test_open_maps_reload_when_the_relief_changes(monkeypatch):
     assert loads == []  # unchanged: nothing reloads
     mapview.set_relief("mapterhorn")
     assert loads == ["mapterhorn"]
+    mapview.set_relief("mapterhorn", False)  # the buildings switched off: a reload too
+    assert len(loads) == 2 and mapview.BUILDINGS is False

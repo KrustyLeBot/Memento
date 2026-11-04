@@ -211,22 +211,24 @@ object MapHost {
     }
 
     private var pageRelief = MapRelief.current
+    private var pageBuildings = MapRelief.buildings
 
-    /** relief: the source the page draws the terrain from (the synced setting), read when it loads. */
+    /** relief, buildings: the synced map settings, read by the page when it loads. */
     internal fun pageUrl(mode3d: Boolean, dark: Boolean): String {
         pageRelief = MapRelief.current
+        pageBuildings = MapRelief.buildings
         return TileServer.PAGE + "?mode=" + (if (mode3d) "3d" else "2d") + "&theme=" + (if (dark) "dark" else "light") +
-            "&interactive=1&relief=" + pageRelief.key
+            "&interactive=1&relief=" + pageRelief.key + (if (pageBuildings) "" else "&buildings=0")
     }
 
-    /** The relief setting changed (here or synced from the PC): the page loads again with it; its kept state is replayed on "ready". */
+    /** A map setting changed (here or synced from the PC): the page loads again with it; its kept state is replayed on "ready". */
     fun reliefChanged() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             main.post { reliefChanged() }
             return
         }
         val w = web ?: return
-        if (pageRelief == MapRelief.current) return
+        if (pageRelief == MapRelief.current && pageBuildings == MapRelief.buildings) return
         ready = false
         dirty.addAll(state.keys)
         if (paused) {

@@ -23,6 +23,13 @@
   const BLD_CELLS = LOW_END ? 9 : 16;      // drawn at most, the nearest to the camera's centre
   const BLD_KEEP = LOW_END ? 20 : 40;      // kept in memory (least recently used out)
   const BLD_MAX = LOW_END ? 8000 : 15000;  // buildings drawn at most: a phone stays fluid
+  // buildings=0 (the synced "Bâtiments" setting, passed by the host): none fetched nor drawn
+  const BUILDINGS = params.get('buildings') !== '0';
+  // MapLibre stands a building on the relief at its centre's elevation, walls reaching 10 m below it: on a slope the
+  // roof sank under the ground uphill, leaving a flat slab on the slope, and BD TOPO's lowest heights (1 m) drew as
+  // floating slabs. A building is at least BLD_MIN_H tall and is raised by the ground's rise from its centre to its
+  // highest corner, so its roof clears the slope (the downhill side may still hang over a drop past 10 m).
+  const BLD_MIN_H = 3, BLD_MAX_RISE = 25;
   const BLD_MIN_ZOOM = 14.5;   // shown from this zoom, or once the screen's width spans BLD_SPAN_M or less
   const BLD_SPAN_M = 2000;
   const BLD_COLOUR = '#e6dccb';
@@ -1314,14 +1321,14 @@
   // only the buildings wholly inside the block.
   const bld = {
     cells: new Map(),     // "x/y" -> { x, y, state: 'loading'|'ready'|'failed', items }, least recently used first
-    wanted: [], drawnKey: '', timer: 0, mergeTimer: 0, loading: 0, nextId: 1,
+    wanted: [], drawnKey: '', timer: 0, mergeTimer: 0, loading: 0, nextId: 1, relief: 0,
   };
   function bldMinZoom() {
     const lat = SQ ? (SQ[1] + SQ[3]) / 2 : map.getCenter().lat;
     const width = map.getContainer().clientWidth || 1;
     return Math.min(BLD_MIN_ZOOM, Math.log2(78271.517 * Math.cos(lat * Math.PI / 180) * width / BLD_SPAN_M));
   }
-  const bldOn = () => mode === '3d' && shown && !!SQ && !!map.getTerrain() && map.getZoom() >= bldMinZoom();
+  const bldOn = () => BUILDINGS && mode === '3d' && shown && !!SQ && !!map.getTerrain() && map.getZoom() >= bldMinZoom();
   function bldVisibility() {
     const on = bldOn();
     vis('bld', on);
@@ -1408,7 +1415,7 @@
   /** One source for the cells drawn: inside the block only, the nearest cells first, BLD_MAX buildings at most. */
   function mergeBuildings() {
     const sq = SQ, ready = bld.wanted.filter((k) => bld.cells.get(k) && bld.cells.get(k).state === 'ready');
-    const drawnKey = sq ? `${sq.join(',')}|${ready.join(';')}` : '';
+    const drawnKey = sq ? `${sq.join(',')}|${ready.join(';')}|${bld.relief}` : '';
     if (drawnKey === bld.drawnKey) return;
     bld.drawnKey = drawnKey;
     const features = [];
@@ -1418,12 +1425,36 @@
         for (let i = 0; i < items.length && features.length < BLD_MAX; i++) {
           const it = items[i], b = it.box;
           if (b[0] < sq[0] || b[2] > sq[2] || b[1] < sq[1] || b[3] > sq[3]) continue;  // would hang over the wall
-          features.push({ type: 'Feature', id: it.id, properties: { h: it.h }, geometry: { type: 'Polygon', coordinates: it.rings } });
+          features.push({ type: 'Feature', id: it.id, properties: { h: standingHeight(it) }, geometry: { type: 'Polygon', coordinates: it.rings } });
         }
       }
     }
     src('bld').setData({ type: 'FeatureCollection', features });
   }
+
+  /** The height to extrude [it] by, from its centre's ground: BLD_MIN_H at least, plus the slope up to its highest corner. */
+  function standingHeight(it) {
+    const h = Math.max(BLD_MIN_H, it.h), terrain = map.terrain;
+    if (!terrain) return h;
+    const outer = it.rings[0], z = BLD_Z + 2;
+    let cx = 0, cy = 0, top = -Infinity;
+    // the vertices' mean, as MapLibre takes the centroid; the closing vertex repeats the first
+    for (let i = 0; i < outer.length - 1; i++) {
+      cx += outer[i][0]; cy += outer[i][1];
+      top = Math.max(top, terrain.getElevationForLngLatZoom(new maplibregl.LngLat(outer[i][0], outer[i][1]), z));
+    }
+    const centre = terrain.getElevationForLngLatZoom(new maplibregl.LngLat(cx / (outer.length - 1), cy / (outer.length - 1)), z);
+    // past BLD_MAX_RISE the footprint is a long one down a mountainside (a lift's station to station): left as it is
+    const rise = top - centre;
+    return Math.round((h + (rise > 0 && rise <= BLD_MAX_RISE ? rise : 0)) * 10) / 10;
+  }
+  // relief arriving under the buildings drawn: their heights again once it has settled
+  let reliefTimer = 0;
+  map.on('sourcedata', (e) => {
+    if (e.sourceId !== 'dem' || !e.tile || !bldOn() || !bld.drawnKey) return;
+    clearTimeout(reliefTimer);
+    reliefTimer = setTimeout(() => { bld.relief++; mergeBuildings(); }, 800);
+  });
 
   // ---------------------------------------------------------------- API
 

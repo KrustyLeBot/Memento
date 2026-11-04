@@ -113,7 +113,7 @@ class Common:
         found = read_versioned(self.data.path(SETTINGS_PATH))
         settings = ActivitySettings.parse(found[0].decode("utf-8", "replace")) if found else ActivitySettings()
         return {"refine_altitude": settings.refine_altitude, "totals": [s.key for s in Sport if s in settings.totals],
-                "relief": settings.relief, "version": found[1] if found else None,
+                "relief": settings.relief, "buildings": settings.buildings, "version": found[1] if found else None,
                 "sports": [{"key": s.key, "label": s.label} for s in Sport],
                 "reliefs": [{"key": k, "label": label} for k, label in RELIEFS.items()]}
 
@@ -129,16 +129,20 @@ class Common:
             totals = {known[k] for k in body["totals"]}
             refine = bool(body["refine_altitude"])
             relief = body.get("relief")  # absent from an older page: left as it is
+            buildings = body.get("buildings")
         except (KeyError, TypeError, AttributeError):
             raise bad_request("Réglages invalides") from None
         if relief is not None and relief not in RELIEFS:
             raise bad_request("Relief inconnu")
+        if buildings is not None and not isinstance(buildings, bool):
+            raise bad_request("Réglages invalides")
 
         def run():
             current = self._activity_settings()
             if (current["version"] or "none") != expected:
                 raise ApiError(409, "Ces réglages ont été modifiés ailleurs.", current=current)
-            self.data.store.save_activity_settings(ActivitySettings(refine, totals, relief or current["relief"]))
+            self.data.store.save_activity_settings(ActivitySettings(
+                refine, totals, relief or current["relief"], current["buildings"] if buildings is None else buildings))
             return self._activity_settings()
         return JSONResponse(await self.data.run(run))
 

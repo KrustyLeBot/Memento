@@ -11,10 +11,12 @@ data class ActivitySettings(
     val totals: Set<Sport> = Sport.values().toSet(),
     /** Where the map's relief comes from, on every platform. */
     val relief: Relief = Relief.AWS,
+    /** The buildings drawn in 3D when online (offline packs never hold them). */
+    val buildings: Boolean = true,
 ) {
     fun toJson(): String =
         "{\"refine_altitude\": $refineAltitude, \"totals\": [" + totals.joinToString(", ") { "\"${it.key}\"" } + "], " +
-            "\"relief\": \"${relief.key}\"}\n"
+            "\"relief\": \"${relief.key}\", \"buildings\": $buildings}\n"
 
     companion object {
         const val PATH = "activities/settings.json"
@@ -25,7 +27,8 @@ data class ActivitySettings(
             val sports = if (list == null) Sport.values().toSet() else
                 Regex("\"(\\w+)\"").findAll(list).mapNotNull { m -> Sport.values().firstOrNull { it.key == m.groupValues[1] } }.toSet()
             val relief = Regex("\"relief\"\\s*:\\s*\"(\\w+)\"").find(text)?.groupValues?.get(1)
-            return ActivitySettings(refine, sports, Relief.values().firstOrNull { it.key == relief } ?: Relief.AWS)
+            val buildings = Regex("\"buildings\"\\s*:\\s*(true|false)").find(text)?.groupValues?.get(1) != "false"
+            return ActivitySettings(refine, sports, Relief.values().firstOrNull { it.key == relief } ?: Relief.AWS, buildings)
         }
     }
 }

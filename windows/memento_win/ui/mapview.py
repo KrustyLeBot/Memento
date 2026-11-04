@@ -61,19 +61,19 @@ class MapView(QWebEngineView):
         page.loadFinished.connect(self._load_finished)
         page.renderProcessTerminated.connect(self._crashed)
         self.setMinimumHeight(260)
-        self.relief = RELIEF
+        self.relief = (RELIEF, BUILDINGS)
         _VIEWS.add(self)
         self._load_page()
 
     def _load_page(self) -> None:
-        # relief: the source the page draws the terrain from (the synced setting), read when it loads
-        self.relief = RELIEF
+        # relief, buildings: the synced map settings, read by the page when it loads
+        self.relief = (RELIEF, BUILDINGS)
         self.load(QUrl(f"{maphost.BASE_URL}map/index.html?mode={self.state['setMode'][0]}&theme={self.state['setTheme'][0]}"
-                       f"&interactive=1&relief={self.relief}"))
+                       f"&interactive=1&relief={RELIEF}{'' if BUILDINGS else '&buildings=0'}"))
 
     def reload_for_relief(self) -> None:
-        """The relief setting changed: the page loads again with it; the kept state is replayed once it is loaded."""
-        if self.relief != RELIEF:
+        """A map setting changed: the page loads again with it; the kept state is replayed once it is loaded."""
+        if self.relief != (RELIEF, BUILDINGS):
             self.loaded = False
             self._load_page()
 
@@ -105,15 +105,16 @@ class MapView(QWebEngineView):
 
 
 RELIEF = "aws"  # core/settings.RELIEFS key of the synced "Relief de la carte" setting
+BUILDINGS = True  # the synced "Bâtiments" setting
 _VIEWS: "weakref.WeakSet[MapView]" = weakref.WeakSet()
 
 
-def set_relief(relief: str) -> None:
-    """The setting as read from activities/settings.json (changed here or synced from the phone): open maps reload."""
-    global RELIEF
-    if relief == RELIEF:
+def set_relief(relief: str, buildings: bool = True) -> None:
+    """The settings as read from activities/settings.json (changed here or synced from the phone): open maps reload."""
+    global RELIEF, BUILDINGS
+    if (relief, buildings) == (RELIEF, BUILDINGS):
         return
-    RELIEF = relief
+    RELIEF, BUILDINGS = relief, buildings
     for view in list(_VIEWS):
         view.reload_for_relief()
 

@@ -276,6 +276,11 @@ def test_activity_settings_default_to_everything_and_round_trip_through_the_fold
     assert Store(tmp_path).activity_settings().relief == "mapterhorn"
     assert ActivitySettings.parse('{"refine_altitude": false, "totals": ["walk"], "relief": "mapterhorn"}\n').relief == "mapterhorn"
     assert ActivitySettings.parse('{"relief": "lidar"}').relief == "aws"
+    # the buildings: on until switched off, the phone's JSON read as written
+    assert ActivitySettings.parse('{}').buildings is True
+    assert ActivitySettings.parse('{"relief": "aws", "buildings": false}\n').buildings is False
+    store.save_activity_settings(ActivitySettings(True, set(Sport), "aws", False))
+    assert Store(tmp_path).activity_settings().buildings is False
 
 
 def test_scanning_the_notes_keeps_the_activities_cache(tmp_path):

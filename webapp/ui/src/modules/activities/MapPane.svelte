@@ -48,17 +48,19 @@
   }
 
   // the synced "Relief de la carte" setting: read before the page loads, and the page loads again when it changes
-  let relief = 'aws';
+  // the synced map settings, as the page's query: relief, and buildings=0 when they are off
+  let relief = 'relief=aws';
   let starting = false;
   async function readRelief() {
     try {
-      return (await settingsApi.activities()).relief || 'aws';
+      const s = await settingsApi.activities();
+      return `relief=${s.relief || 'aws'}${s.buildings === false ? '&buildings=0' : ''}`;
     } catch (error) {
       return relief;  // the settings could not be read: the page keeps what it has
     }
   }
   const pageSrc = () =>
-    `/map/index.html?mode=${state.get('setMode')?.[0] ?? mode}&theme=${state.get('setTheme')?.[0]}&interactive=1&relief=${relief}`;
+    `/map/index.html?mode=${state.get('setMode')?.[0] ?? mode}&theme=${state.get('setTheme')?.[0]}&interactive=1&${relief}`;
 
   async function start() {
     if (starting || src) return;

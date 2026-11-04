@@ -204,12 +204,12 @@ export const conflicts = {
 /** Puts back what a delete (or another undoable action) changed. */
 export const undo = (/** @type {string} */ token) => request('POST', `/api/undo/${encodeURIComponent(token)}`);
 
-/** @typedef {{ refine_altitude: boolean, totals: string[], relief: string, sports: { key: string, label: string }[],
+/** @typedef {{ refine_altitude: boolean, totals: string[], relief: string, buildings: boolean, sports: { key: string, label: string }[],
  *   reliefs: { key: string, label: string }[], version: string | null }} ActivitySettings */
 export const settings = {
   /** @returns {Promise<ActivitySettings>} */
   activities: () => request('GET', '/api/settings/activities'),
   /** @returns {Promise<ActivitySettings>} */
-  saveActivities: (/** @type {string | null} */ version, /** @type {{ refine_altitude: boolean, totals: string[], relief: string }} */ value) =>
+  saveActivities: (/** @type {string | null} */ version, /** @type {{ refine_altitude: boolean, totals: string[], relief: string, buildings?: boolean }} */ value) =>
     request('PUT', '/api/settings/activities', { version, json: value }),
 };

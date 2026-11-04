@@ -138,6 +138,9 @@ class SettingsScreen(QWidget):
                              "en France, 0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd.")
         relief_hint.setWordWrap(True)
         body.addWidget(relief_hint)
+        self.buildings_box = QCheckBox("Bâtiments en 3D (en ligne seulement, jamais dans les cartes hors ligne)")
+        self.buildings_box.toggled.connect(lambda _=False: self._activity_edited())
+        body.addWidget(self.buildings_box)
 
         section("Contacts")
         self.first_name_box = QCheckBox("Prénom d'abord (trie et regroupe la liste par prénom plutôt que par nom)")
@@ -212,7 +215,8 @@ class SettingsScreen(QWidget):
             return
         relief = next((k for k, b in self.relief_buttons.items() if b.isChecked()), "aws")
         self.activity_changed.emit(ActivitySettings(self.refine_box.isChecked(),
-                                                    {s for s, b in self.total_boxes.items() if b.isChecked()}, relief))
+                                                    {s for s, b in self.total_boxes.items() if b.isChecked()}, relief,
+                                                    self.buildings_box.isChecked()))
 
     def _alerts(self) -> list[int]:
         return sorted(m for m, b in self.alert_buttons.items() if b.isChecked())
@@ -251,6 +255,7 @@ class SettingsScreen(QWidget):
             box.setChecked(sport in activity.totals)
         self.refine_box.setChecked(activity.refine_altitude)
         self.relief_buttons.get(activity.relief, self.relief_buttons["aws"]).setChecked(True)
+        self.buildings_box.setChecked(activity.buildings)
         self._loading = False
         (self.grid_button if grid else self.list_button).setChecked(True)
         self.theme_buttons.get(theme_mode, self.theme_buttons["system"]).setChecked(True)

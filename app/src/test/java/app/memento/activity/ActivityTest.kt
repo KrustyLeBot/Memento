@@ -443,6 +443,10 @@ class SettingsAndRefineTest {
         assertEquals(Relief.MAPTERHORN, ActivitySettings.parse(ActivitySettings(relief = Relief.MAPTERHORN).toJson()).relief)
         assertEquals(Relief.MAPTERHORN, ActivitySettings.parse("{\"refine_altitude\": false, \"totals\": [\"walk\"], \"relief\": \"mapterhorn\"}\n").relief)
         assertEquals(Relief.AWS, ActivitySettings.parse("{\"relief\": \"lidar\"}").relief)
+        // the buildings: on until switched off, the PC's JSON read as written
+        assertTrue(empty.buildings)
+        assertTrue(!ActivitySettings.parse(ActivitySettings(buildings = false).toJson()).buildings)
+        assertTrue(!ActivitySettings.parse("{\"relief\": \"aws\", \"buildings\": false}\n").buildings)
     }
 
     @Test

@@ -17,10 +17,11 @@ class ActivitySettings:
     refine_altitude: bool = False  # on the phone, when saving a recording: correct the barometer with the terrain model
     totals: set[Sport] = field(default_factory=lambda: set(Sport))  # sports counted in the totals
     relief: str = "aws"  # the map's relief on every platform: one of RELIEFS
+    buildings: bool = True  # the buildings drawn in 3D when online (offline packs never hold them)
 
     def to_json(self) -> str:
-        return json.dumps({"refine_altitude": self.refine_altitude,
-                           "totals": [s.key for s in Sport if s in self.totals], "relief": self.relief}) + "\n"
+        return json.dumps({"refine_altitude": self.refine_altitude, "totals": [s.key for s in Sport if s in self.totals],
+                           "relief": self.relief, "buildings": self.buildings}) + "\n"
 
     @staticmethod
     def parse(text: str) -> "ActivitySettings":
@@ -33,4 +34,5 @@ class ActivitySettings:
         totals = data.get("totals")
         sports = set(Sport) if not isinstance(totals, list) else {s for s in Sport if s.key in totals}
         relief = data.get("relief")
-        return ActivitySettings(data.get("refine_altitude") is True, sports, relief if relief in RELIEFS else "aws")
+        return ActivitySettings(data.get("refine_altitude") is True, sports, relief if relief in RELIEFS else "aws",
+                                data.get("buildings") is not False)

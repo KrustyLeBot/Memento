@@ -10,6 +10,10 @@ object MapRelief {
     @Volatile
     var current: Relief = Relief.AWS
 
+    /** The synced "Bâtiments" setting: the buildings drawn in 3D online. */
+    @Volatile
+    var buildings: Boolean = true
+
     /** The tile kind of [relief]'s relief tiles. */
     fun kind(relief: Relief = current): String = if (relief == Relief.MAPTERHORN) TileKey.KIND_DEM_HD else TileKey.KIND_DEM
 }

@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         included = set(activity.totals)
         if included != self.activities.included:  # changed by the phone (settings.json synced)
             self.activities.set_included(included)
-        mapview.set_relief(activity.relief)
+        mapview.set_relief(activity.relief, activity.buildings)
         self.activities.set_activities(acts)
         latest = max((n for n in acts if n.activity), key=lambda n: n.activity.start, default=None)
         self.list_screen.set_activity_summary(
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
     def _activity_settings_changed(self, settings) -> None:
         self.store.save_activity_settings(settings)
         self.activities.set_included(settings.totals)
-        mapview.set_relief(settings.relief)
+        mapview.set_relief(settings.relief, settings.buildings)
 
     def _open_in(self, key: str) -> None:
         origin = self.module if self.stack.currentWidget() is not self.settings else None

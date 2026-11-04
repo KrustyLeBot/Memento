@@ -26,6 +26,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         fs.writeText(app.memento.activity.ActivitySettings.PATH, s.toJson())
         _activitySettings.value = s
         app.memento.map.MapRelief.current = s.relief
+        app.memento.map.MapRelief.buildings = s.buildings
         app.memento.map.MapHost.reliefChanged()
     }
 
@@ -105,6 +106,7 @@ class NoteRepository(private val context: Context, private val settings: Setting
         fs.readText(app.memento.activity.ActivitySettings.PATH)?.let {
             _activitySettings.value = app.memento.activity.ActivitySettings.parse(it)
             app.memento.map.MapRelief.current = _activitySettings.value.relief
+            app.memento.map.MapRelief.buildings = _activitySettings.value.buildings
             app.memento.map.MapHost.reliefChanged()
         }
         _notes.value = result

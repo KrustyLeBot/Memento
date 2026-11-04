@@ -264,6 +264,12 @@ def test_activity_settings_round_trip_with_versions(client, data_dir):
     old_page = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": ["walk"]},
                           headers={**HEADERS, "If-Match": hd.json()["version"]})
     assert old_page.json()["relief"] == "mapterhorn"
+    assert old_page.json()["buildings"] is True
+    off = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": ["walk"], "buildings": False},
+                     headers={**HEADERS, "If-Match": old_page.json()["version"]})
+    assert off.json()["buildings"] is False and off.json()["relief"] == "mapterhorn"
+    assert '"buildings": false' in (data_dir / "activities" / "settings.json").read_text()
+    old_page = off
     bad = client.put("/api/settings/activities", json={"refine_altitude": False, "totals": [], "relief": "lidar"},
                      headers={**HEADERS, "If-Match": old_page.json()["version"]})
     assert bad.status_code == 400

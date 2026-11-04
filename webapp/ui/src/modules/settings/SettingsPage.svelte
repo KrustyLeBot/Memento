@@ -39,11 +39,11 @@
     setPref('hidden', [...hidden]);
   }
 
-  /** @param {{ refine_altitude: boolean, totals: string[], relief: string }} value */
+  /** @param {{ refine_altitude: boolean, totals: string[], relief: string, buildings?: boolean }} value */
   async function saveActivity(value) {
     if (!activity) return;
     try {
-      activity = await api.saveActivities(activity.version, value);
+      activity = await api.saveActivities(activity.version, { buildings: activity.buildings, ...value });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         activity = error.body.current;
@@ -141,6 +141,10 @@
         </div>
         <p class="muted">AWS : le relief actuel, environ 30 m en France. Mapterhorn : le RGE ALTI de l'IGN (5 m partout en
           France, 0,5 à 1 m là où le LiDAR HD est passé), plus fin et plus lourd.</p>
+        <label class="check"><input type="checkbox" checked={activity.buildings}
+          on:change={(e) => saveActivity({ refine_altitude: activity?.refine_altitude ?? false, totals: activity?.totals ?? [],
+            relief: activity?.relief ?? 'aws', buildings: e.currentTarget.checked })} />
+          Bâtiments en 3D (en ligne seulement, jamais dans les cartes hors ligne)</label>
       </div>
     {/if}
 

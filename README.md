@@ -93,7 +93,9 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   AWS (`aws`, 256 px PNG to z13, about 30 m data in France) or [Mapterhorn](https://mapterhorn.com) (`mapterhorn`,
   512 px WebP asked to z15: IGN RGE ALTI 5 m everywhere in France, LiDAR HD 0.5–1 m where flown; 146–182 KB a tile).
   A Mapterhorn tile the host cannot get (offline with a pack made before the switch, or the service down) is put
-  together from AWS's four tiles one zoom deeper. Every map open reloads when the setting changes, on every platform. In 3D (default) as a square block cut out of the relief around the track (side = the
+  together from AWS's four tiles one zoom deeper. A second synced setting, "Bâtiments en 3D" (`"buildings"`, on by
+  default), draws the buildings or not when online (offline packs never hold them). Every map open reloads when either
+  setting changes, on every platform. In 3D (default) as a square block cut out of the relief around the track (side = the
   track's larger side + 25 %, at least 1 km), or flat in 2D; the switch is a native control and is remembered. The
   track is coloured by its speed relative to the mean (red slow, yellow mean, green fast), ski days keep their
   descents/climbs colours; lines are drawn with a white halo and a dark casing and the overlays on opaque surfaces,
@@ -134,7 +136,9 @@ week, the month and overall, then the latest activities (walking, cycling, elect
   (two WFS pages at a time; a 429 is waited out 1, 2 then 4 s) and kept in the same disk cache as the tiles; offline
   and not cached, there are none (404). The page draws the 16
   cells nearest the camera's centre (15 000 buildings at most), only inside the block, all in one light stone colour
-  (one extrusion layer, nothing computed per building). Offline packs hold no buildings: a pack downloads as little
+  (one extrusion layer). MapLibre stands each building at its centre's elevation, walls reaching 10 m below it: the
+  page makes each one at least 3 m tall and raises it by the ground's rise from its centre to its highest corner (up
+  to 25 m), so its roof clears the slope uphill instead of lying on it as a flat slab. Offline packs hold no buildings: a pack downloads as little
   as it can (packs from earlier builds still resume theirs).
 - FIT is read and written with a small implementation of the public format (`Fit.kt`, `fit.py`), no SDK.
 - Tests use synthetic tracks only: this repository is public and a real track reveals where you live.
