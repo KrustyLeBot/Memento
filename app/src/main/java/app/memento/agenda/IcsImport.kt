@@ -151,7 +151,8 @@ data class UndoReport(val deleted: Int, val exdatesRemoved: Int, val calendarsRe
  *   conversion); any other DTEND (UTC, or a zone on a start without one) is converted to the start's zone.
  * - RRULE verbatim; EXDATE converted to the series' form; RDATE: one extra single event per date; RECURRENCE-ID
  *   overrides -> exception files + exdate on the series.
- * - VALARM relative to the start (not EMAIL) -> alerts; others ignored (counted).
+ * - VALARM relative to the start (not EMAIL) -> alerts; others ignored (counted). A new event also gets the
+ *   default reminders ([CalendarSettings.defaultAlerts]); updating an existing one keeps the reminders set here.
  * - DESCRIPTION -> body (HTML -> text); X-GOOGLE-CONFERENCE not in the description -> first line "Visio : …";
  *   without it, a meeting link of the description ([Links.meetingLink]: Proton Meet, Meet, Teams, Zoom) not already on
  *   its first line -> "Visio : …"; else a URL not in the description -> "Lien : …"; ORGANIZER/ATTENDEE ->
@@ -635,6 +636,8 @@ object IcsImport {
             val rep = CalendarReport(p.name, calId, cancelled = pv.cancelled, ignored = pv.ignored,
                 unresolvedZones = pv.unresolvedZones, errors = pv.errors.toList())
             report.calendars.add(rep)
+            // A new event gets its VALARMs plus the default reminders ("Rappels par défaut"), like one made here.
+            fun withDefaults(e: Event): Event = e.copy(alerts = (cals.defaultAlerts(e.allDay) + e.alerts).distinct().sorted())
             val inTarget = byId.values.filter { cals.calendar(it.calendar).id == calId }
             val existingByKey = HashMap<Pair<String?, Stamp?>, Event>()
             inTarget.filter { it.uid != null }.forEach { existingByKey[it.uid to it.recurrenceAt] = it }
@@ -654,13 +657,13 @@ object IcsImport {
                     val keepBody = old.icalHash != null && old.icalHash == e.icalHash
                     val merged = e.copy(
                         note = old.note.copy(title = e.title, body = if (keepBody) old.body else e.body, updated = now),
-                        calendar = old.calendar, importId = old.importId,
+                        calendar = old.calendar, importId = old.importId, alerts = old.alerts,
                     )
                     val saved = write(merged)
                     rep.updated++
                     if (saved.isSeries) seriesByUid[saved.uid!!] = saved
                 } else {
-                    val saved = write(e.copy(importId = importId))
+                    val saved = write(withDefaults(e).copy(importId = importId))
                     rep.created++
                     if (saved.isSeries) {
                         rep.series++
@@ -677,7 +680,7 @@ object IcsImport {
                 if (series == null) {
                     ov.event?.let { ev ->
                         if (options.since == null || hasOccurrenceSince(ev, options.since, device)) {
-                            write(ev.copy(calendar = calId, importId = importId)); rep.created++
+                            write(withDefaults(ev).copy(calendar = calId, importId = importId)); rep.created++
                         } else rep.beforeCutoff++
                     }
                     continue
@@ -697,10 +700,10 @@ object IcsImport {
                 } else if (old != null && options.duplicates == DuplicatePolicy.UPDATE) {
                     val keepBody = old.icalHash != null && old.icalHash == exc.icalHash
                     write(exc.copy(note = old.note.copy(title = exc.title, body = if (keepBody) old.body else exc.body, updated = now),
-                        importId = old.importId, recurrenceOf = series.id))
+                        importId = old.importId, recurrenceOf = series.id, alerts = old.alerts))
                     rep.updated++
                 } else {
-                    write(exc.copy(importId = importId))
+                    write(withDefaults(exc).copy(importId = importId))
                     rep.exceptions++
                     rep.created++
                 }

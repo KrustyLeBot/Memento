@@ -83,6 +83,39 @@ class AgendaInviteTest {
     }
 
     @Test
+    fun invitationGetsTheDefaultReminders() {
+        val store = AgendaStore(MemoryFs())
+        val mine = settings.withDefaultAlerts(false, listOf(-60, -1440)).withDefaultAlerts(true, listOf(-360))
+        fun file(alarm: Boolean, allDay: Boolean = false) = (listOf("BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT", "UID:inv-1",
+            if (allDay) "DTSTART;VALUE=DATE:20261126" else "DTSTART:20261126T090000Z", "SUMMARY:Rdv") +
+            (if (alarm) listOf("BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-PT15M", "END:VALARM") else emptyList()) +
+            listOf("END:VEVENT", "END:VCALENDAR")).joinToString("\r\n").toByteArray()
+        fun import(bytes: ByteArray) = IcsImport.apply(store, IcsImport.read(listOf(IcsSource.fromBytes("rdv.ics", bytes)), Vectors.DEVICE, Vectors.NOW),
+            ImportOptions(), store.scan().events, mine, Vectors.DEVICE, "inv", Vectors.NOW)
+
+        import(file(alarm = true))
+        assertEquals(listOf(-1440, -60, -15), store.scan().events.single().alerts)
+        // An updated invitation keeps the reminders chosen in the app.
+        val edited = store.scan().events.single()
+        store.save(edited.copy(alerts = listOf(-30)))
+        import(file(alarm = false))
+        assertEquals(listOf(-30), store.scan().events.single().alerts)
+
+        val allDay = AgendaStore(MemoryFs())
+        IcsImport.apply(allDay, IcsImport.read(listOf(IcsSource.fromBytes("j.ics", file(alarm = false, allDay = true))), Vectors.DEVICE, Vectors.NOW),
+            ImportOptions(), emptyList(), mine, Vectors.DEVICE, "inv", Vectors.NOW)
+        assertEquals(listOf(-360), allDay.scan().events.single().alerts)
+    }
+
+    @Test
+    fun calendarExportGetsTheDefaultRemindersToo() {
+        val store = AgendaStore(MemoryFs())
+        IcsImport.apply(store, IcsImport.read(listOf(IcsSource.fromBytes("big.ics", ics("Perso Google", 3, "x"))), Vectors.DEVICE, Vectors.NOW),
+            ImportOptions(), emptyList(), settings.withDefaultAlerts(false, listOf(-60)), Vectors.DEVICE, "exp", Vectors.NOW)
+        assertTrue(store.scan().events.all { it.alerts == listOf(-60) })
+    }
+
+    @Test
     fun calendarExportsStillProposeNewCalendars() {
         val zip = ByteArrayOutputStream().also { out ->
             ZipOutputStream(out).use { z ->

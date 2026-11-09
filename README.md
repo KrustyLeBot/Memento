@@ -193,7 +193,9 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   are listed one by one (title, time in the event's zone and on the device, place); a single invitation gets a
   short "Ajouter cet événement à …" dialog ("Plus d'options…" opens the full form). `LOCATION` placeholders
   (`null`, `undefined`, `None`, blank) are no place. A Proton Meet / Google Meet / Teams / Zoom link of the
-  description becomes the first line "Visio : …" unless it is already there.
+  description becomes the first line "Visio : …" unless it is already there. `VALARM`s relative to the start become
+  reminders, plus the default reminders ("Rappels par défaut") as for an event made here; importing an event
+  again (an updated invitation, "Mettre à jour") keeps the reminders set in the app.
 - Event detail: a "Liens" section lists every link of the description (the meeting link first, "Rejoindre la visio
   (Proton Meet)"), at most 10, each opening the browser; links in the description text are clickable too.
 - Export: one `.ics` per calendar (or a zip of all), with a `VTIMEZONE` for every zone used (`end_tz` included,
