@@ -1,6 +1,6 @@
 <script>
-  // The agenda's section of Réglages: this browser's preferences (week start, event-zone times, default reminders,
-  // like the PC's settings on Windows) and the synced ones (default calendar, birthdays layer: calendars.json).
+  // The agenda's section of Réglages: this browser's preferences (week start, event-zone times, like the PC's
+  // settings on Windows) and the synced ones (default calendar, default reminders, birthdays layer: calendars.json).
   import { onMount } from 'svelte';
   import { prefs, setPref } from '../../lib/ui.js';
   import AlertsField from './AlertsField.svelte';
@@ -24,12 +24,17 @@
   </div>
   <label class="check"><input type="checkbox" checked={p.eventZone} on:change={(e) => setPref('agenda.eventZone', e.currentTarget.checked)} />
     Heures dans le fuseau de l'événement (sinon celui de ce navigateur)</label>
-  <div class="stack">
-    <span>Rappels par défaut des nouveaux événements</span>
-    <AlertsField value={p.defaultAlerts} on:change={(e) => setPref('agenda.defaultAlerts', e.detail)} />
-  </div>
   {#if $calendars}
     <p class="muted">Synchronisé avec le téléphone et le PC :</p>
+    <div class="stack">
+      <span>Rappels par défaut des nouveaux événements et des imports .ics</span>
+      <AlertsField value={$calendars.default_alerts} on:change={(e) => changeCalendars({ op: 'alerts', alerts: e.detail })} />
+    </div>
+    <div class="stack">
+      <span>Rappels par défaut des événements sur la journée</span>
+      <AlertsField value={$calendars.default_alerts_all_day}
+        on:change={(e) => changeCalendars({ op: 'alerts', all_day: true, alerts: e.detail })} />
+    </div>
     <div class="row">
       <span>Agenda par défaut</span>
       <select class="field auto" value={$calendars.default} aria-label="Agenda par défaut"

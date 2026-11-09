@@ -167,6 +167,7 @@ def settings_json(settings, version: str | None, counts: dict) -> dict:
                        "count": counts.get(c.id, 0)} for c in settings.calendars],
         "default": settings.default_calendar().id,
         "layers": {k: {"visible": settings.layer(k).visible, "color": settings.layer(k).color} for k in LAYERS},
+        "default_alerts": settings.default_alerts(False), "default_alerts_all_day": settings.default_alerts(True),
         "problem": settings.problem, "version": version, "palette": [list(p) for p in calendars.PALETTE],
     }
 
@@ -490,7 +491,8 @@ class Agenda:
     async def change_calendars(self, request: Request) -> JSONResponse:
         """One change of calendars.json, If-Match its version (`none` when absent):
         {"op": "create", "name"} | {"op": "update", "id", "name"?, "color"?, "visible"?} | {"op": "default", "id"}
-        | {"op": "layer", "key", "visible"?, "color"?}. Unknown keys of the file are kept. An unreadable file is
+        | {"op": "layer", "key", "visible"?, "color"?} | {"op": "alerts", "alerts": [-15, …], "all_day"?: bool}
+        (the default reminders of new and imported events, synced with the phone). Unknown keys of the file are kept. An unreadable file is
         replaced only by a request carrying its version (the user was told and agreed)."""
         calendars, *_ = core()
         expected = require_version(request.headers.get("if-match"))
@@ -539,6 +541,15 @@ class Agenda:
                 if color is not None:
                     layer.color = color
                 settings.layers[key] = layer
+            elif op == "alerts":
+                raw = body.get("alerts")
+                try:
+                    alerts = [int(a) for a in raw] if isinstance(raw, list) else None
+                except (TypeError, ValueError):
+                    alerts = None
+                if alerts is None:
+                    raise bad_request("Rappels invalides")
+                settings.set_default_alerts(bool(body.get("all_day")), alerts)
             else:
                 raise bad_request("Opération inconnue")
             self.data.store.agenda.save_calendars(settings)

@@ -244,7 +244,7 @@
     editor = {
       isNew: true, scope: null, target: null,
       event: { title: '', body: '', start, end: minutesStamp(stampMinutes(start) + 60, false), tz: ZONE, end_tz: null,
-        calendar: cal?.default, alerts: [...p.defaultAlerts], location: '', rrule: null, exdate: [], rich: true },
+        calendar: cal?.default, alerts: [...(cal?.default_alerts ?? [-15])], location: '', rrule: null, exdate: [], rich: true },
     };
   }
 

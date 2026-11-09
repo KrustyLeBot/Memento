@@ -16,7 +16,9 @@ Mapping (RFC 5545 -> file), identical on Android (`IcsImport.kt`):
   there, no conversion); any other DTEND (UTC, or a zone on a start without one) is converted to the start's zone.
 - RRULE verbatim; EXDATE (every line, comma lists) converted to the series' form; RDATE: one extra single event
   per date; RECURRENCE-ID overrides -> exception files (recurrence_of / recurrence_at) + exdate on the series.
-- VALARM with a TRIGGER relative to the start (ACTION other than EMAIL) -> alerts; others ignored (counted).
+- VALARM with a TRIGGER relative to the start (ACTION other than EMAIL) -> alerts; others ignored (counted). A new
+  event also gets the default reminders (`CalendarSettings.default_alerts`, synced); updating an existing one keeps
+  the reminders set in the app.
 - DESCRIPTION -> body (HTML converted to text, links kept); X-GOOGLE-CONFERENCE not already in the description
   -> a first line "Visio : …"; without it, a meeting link of the description (`meeting_link`: Proton Meet, Meet,
   Teams, Zoom) not already on its first line -> "Visio : …"; else a URL not in the description -> "Lien : …";
@@ -690,6 +692,10 @@ def apply_import(store: AgendaStore, parsed: list[ParsedCalendar], options: Impo
         existing_by_key = {(e.uid, e.recurrence_at): e for e in in_target if e.uid}
         series_by_uid: dict[str, Event] = {}
 
+        def with_defaults(event: Event) -> Event:
+            # its VALARMs plus the default reminders ("Rappels par défaut"), like an event made in the app
+            return event.copy(alerts=sorted(set(settings.default_alerts(event.all_day)) | set(event.alerts)))
+
         def write(event: Event) -> Event:
             saved = store.save(event, taken_ids)
             by_id[saved.id] = saved
@@ -710,13 +716,13 @@ def apply_import(store: AgendaStore, parsed: list[ParsedCalendar], options: Impo
                 keep_body = old.ical_hash is not None and old.ical_hash == event.ical_hash
                 merged = event.copy(
                     note=old.note.copy(title=event.title, body=old.body if keep_body else event.body, updated=now),
-                    calendar=old.calendar, import_id=old.import_id)
+                    calendar=old.calendar, import_id=old.import_id, alerts=old.alerts)
                 saved = write(merged)
                 rep.updated += 1
                 if saved.rrule:
                     series_by_uid[saved.uid] = saved
             else:
-                saved = write(event.copy(import_id=import_id))
+                saved = write(with_defaults(event).copy(import_id=import_id))
                 rep.created += 1
                 rep.series += 1 if saved.rrule else 0
                 if saved.rrule and saved.uid and saved.uid not in series_by_uid:
@@ -732,7 +738,7 @@ def apply_import(store: AgendaStore, parsed: list[ParsedCalendar], options: Impo
             if series is None:
                 if ov.event is not None:  # orphan override: a plain event
                     if options.since is None or _has_occurrence_since(ov.event, options.since, device_zone):
-                        write(ov.event.copy(calendar=cal_id, import_id=import_id))
+                        write(with_defaults(ov.event).copy(calendar=cal_id, import_id=import_id))
                         rep.created += 1
                     else:
                         rep.before_cutoff += 1
@@ -754,10 +760,10 @@ def apply_import(store: AgendaStore, parsed: list[ParsedCalendar], options: Impo
             elif old is not None and options.duplicates == "update":
                 keep_body = old.ical_hash is not None and old.ical_hash == exc.ical_hash
                 write(exc.copy(note=old.note.copy(title=exc.title, body=old.body if keep_body else exc.body, updated=now),
-                               import_id=old.import_id, recurrence_of=series.id))
+                               import_id=old.import_id, recurrence_of=series.id, alerts=old.alerts))
                 rep.updated += 1
             else:
-                write(exc.copy(import_id=import_id))
+                write(with_defaults(exc).copy(import_id=import_id))
                 rep.exceptions += 1
                 rep.created += 1
             if progress:

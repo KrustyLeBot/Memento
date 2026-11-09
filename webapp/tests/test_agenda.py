@@ -175,6 +175,11 @@ def test_calendars_create_rename_default_layers_and_delete_with_move(client, dat
     cal = change(cal["version"], op="default", id="travail").json()
     cal = change(cal["version"], op="layer", key="birthdays", visible=False).json()
     assert cal["default"] == "travail" and not cal["layers"]["birthdays"]["visible"]
+    assert cal["default_alerts"] == [-15] and cal["default_alerts_all_day"] == []
+    cal = change(cal["version"], op="alerts", alerts=[-1440, -60]).json()
+    assert cal["default_alerts"] == [-1440, -60]
+    assert '"default_alerts": [\n    "-1d",\n    "-1h"\n  ]' in (data_dir / "agenda" / "calendars.json").read_text(encoding="utf-8")
+    assert change(cal["version"], op="alerts", alerts="x").status_code == 400
     ev = create(client, title="Point", start="2026-11-03T10:00", end="2026-11-03T11:00", tz="Europe/Paris")
     assert "calendar: travail" in (data_dir / ev["path"]).read_text(encoding="utf-8")
     cal = change(cal["version"], op="update", id="travail", visible=False).json()

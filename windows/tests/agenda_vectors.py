@@ -47,6 +47,7 @@ def import_vector(name: str, fs: MemoryFs | None = None):
     store = AgendaStore(fs)
     parsed = read_sources([IcsSource.from_path(VECTORS / f"{name}.ics")], DEVICE_ZONE, NOW)
     settings = store.calendars()
+    settings.set_default_alerts(False, [])  # no default reminders: the vectors check the ICS mapping alone
     previews = preview(parsed, [], settings)
     report = apply_import(store, parsed, ImportOptions(), [], settings, DEVICE_ZONE, IMPORT_ID, NOW)
     return store, previews, report

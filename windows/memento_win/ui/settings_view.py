@@ -167,7 +167,8 @@ class SettingsScreen(QWidget):
         self.default_calendar.activated.connect(
             lambda i: self._agenda({"default_calendar": self.default_calendar.itemData(i)}))
         body.addWidget(self.default_calendar, 0, Qt.AlignmentFlag.AlignLeft)
-        body.addWidget(QLabel("Rappels par défaut des nouveaux événements, avant le début (ils sonnent sur le téléphone)"))
+        body.addWidget(QLabel("Rappels par défaut des nouveaux événements et des imports .ics, avant le début (synchronisé, "
+                              "ils sonnent sur le téléphone)"))
         self.alert_buttons: dict[int, QPushButton] = {}
         alerts_row = QHBoxLayout()
         for minutes in (0, -5, -10, -15, -30, -60, -1440, -10080):
@@ -231,7 +232,7 @@ class SettingsScreen(QWidget):
         self.week_buttons.get(prefs.week_start, self.week_buttons[0]).setChecked(True)
         self.event_zone_box.setChecked(prefs.event_zone_times)
         for minutes, b in self.alert_buttons.items():
-            b.setChecked(minutes in prefs.default_alerts)
+            b.setChecked(minutes in calendars.default_alerts(False))
         self.default_calendar.clear()
         for cal in calendars.calendars:
             self.default_calendar.addItem(cal.name, cal.id)

@@ -32,7 +32,6 @@ class FakeConfig:
     contacts_first_name_first = False
     agenda_week_start = 0
     agenda_event_zone = False
-    agenda_default_alerts = [-15]
     agenda_view = "agenda"
 
 

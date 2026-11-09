@@ -73,7 +73,7 @@ object Vectors {
     fun import(name: String, fs: MemoryFs = MemoryFs()): Imported {
         val store = AgendaStore(fs)
         val parsed = IcsImport.read(listOf(IcsSource.fromFile(File(DIR, "$name.ics"))), DEVICE, NOW)
-        // No default reminders: the vectors check the ICS mapping, shared with Python (which does not add them).
+        // No default reminders: the vectors check the ICS mapping alone (same on the Python side).
         val settings = store.calendars().withDefaultAlerts(false, emptyList())
         val previews = IcsImport.preview(parsed, emptyList(), settings)
         val (report, _) = IcsImport.apply(store, parsed, ImportOptions(), emptyList(), settings, DEVICE, IMPORT_ID, NOW)

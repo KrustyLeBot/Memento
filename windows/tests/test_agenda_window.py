@@ -35,7 +35,6 @@ class FakeConfig:
     contacts_first_name_first = False
     agenda_week_start = 0
     agenda_event_zone = False
-    agenda_default_alerts = [-15]
     agenda_view = "agenda"
 
 
@@ -616,7 +615,7 @@ def test_settings_section_drives_the_agenda(filled, app):
     window.agenda.render(force=True)
     assert window.agenda.month.grid_start.weekday() == 6
     window.settings.alert_buttons[-60].setChecked(True)
-    assert -60 in window.agenda.prefs.default_alerts
+    assert window.agenda.data.settings.default_alerts(False) == [-60, -15]
     window.settings.default_calendar.setCurrentIndex(window.settings.default_calendar.findData("travail"))
     window.settings.default_calendar.activated.emit(window.settings.default_calendar.currentIndex())
     assert window.agenda.data.settings.default == "travail"

@@ -334,8 +334,10 @@ class MainWindow(QMainWindow):
         if "event_zone_times" in change:
             self.config.agenda_event_zone = prefs.event_zone_times = change["event_zone_times"]
         if "default_alerts" in change:
-            prefs.default_alerts = list(change["default_alerts"])
-            self.config.agenda_default_alerts = prefs.default_alerts
+            # the chips replace the values they show; another one set on the phone (e.g. 2 h) is kept
+            shown = set(self.settings.alert_buttons)
+            kept = [m for m in self.agenda.data.settings.default_alerts(False) if m not in shown]
+            self.agenda.set_default_alerts(kept + list(change["default_alerts"]))
         if "default_calendar" in change:
             self.agenda.set_default_calendar(change["default_calendar"])
         if "birthdays" in change:

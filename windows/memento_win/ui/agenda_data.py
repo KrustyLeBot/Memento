@@ -7,7 +7,7 @@ expansion, so a calendar of thousands of single events costs one list filter per
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QTimeZone
@@ -37,13 +37,12 @@ class AgendaPrefs:
     """Settings of this PC (QSettings); the synced ones live in calendars.json."""
     week_start: int = 0            # 0 = Monday, 6 = Sunday
     event_zone_times: bool = False  # show the event's own wall times
-    default_alerts: list[int] = field(default_factory=list)
     view: str = "agenda"
 
     @staticmethod
     def from_config(config) -> "AgendaPrefs":
         return AgendaPrefs(getattr(config, "agenda_week_start", 0), getattr(config, "agenda_event_zone", False),
-                           list(getattr(config, "agenda_default_alerts", []) or []), getattr(config, "agenda_view", "agenda"))
+                           getattr(config, "agenda_view", "agenda"))
 
 
 class AgendaData:

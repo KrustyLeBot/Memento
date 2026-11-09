@@ -97,6 +97,45 @@ def test_calendar_exports_still_propose_new_calendars():
     assert [settings.calendar(c).name for c in report.new_calendars] == ["Perso Google", "sport", "big"]
 
 
+def _rdv(alarm: bool, all_day: bool = False) -> bytes:
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT", "UID:inv-1",
+             "DTSTART;VALUE=DATE:20261126" if all_day else "DTSTART:20261126T090000Z", "SUMMARY:Rdv"]
+    lines += ["BEGIN:VALARM", "ACTION:DISPLAY", "TRIGGER:-PT15M", "END:VALARM"] if alarm else []
+    return "\r\n".join(lines + ["END:VEVENT", "END:VCALENDAR"]).encode()
+
+
+def test_imported_events_get_the_default_reminders():
+    """Same case as Android's `invitationGetsTheDefaultReminders`: the file's VALARMs plus the synced defaults."""
+    mine = settings_with_default()
+    mine.set_default_alerts(False, [-60, -1440])
+    mine.set_default_alerts(True, [-360])
+    store = AgendaStore(MemoryFs())
+
+    def run(data: bytes, target: AgendaStore = store) -> None:
+        apply_import(target, read_sources([IcsSource.from_bytes("rdv.ics", data)], DEVICE_ZONE, NOW), ImportOptions(),
+                     target.scan().events, mine, DEVICE_ZONE, "inv", NOW)
+
+    run(_rdv(alarm=True))
+    assert store.scan().events[0].alerts == [-1440, -60, -15]
+    store.save(store.scan().events[0].copy(alerts=[-30]))
+    run(_rdv(alarm=False))  # an updated invitation keeps the reminders chosen in the app
+    assert store.scan().events[0].alerts == [-30]
+    day = AgendaStore(MemoryFs())
+    run(_rdv(alarm=False, all_day=True), day)
+    assert day.scan().events[0].alerts == [-360]
+    export = AgendaStore(MemoryFs())
+    run(_ics("Perso Google", 3, "x"), export)
+    assert [e.alerts for e in export.scan().events] == [[-1440, -60]] * 3
+
+
+def test_default_reminders_are_synced_like_the_phone():
+    s = CalendarSettings()
+    assert (s.default_alerts(False), s.default_alerts(True)) == ([-15], [])
+    s.set_default_alerts(False, [-60, -1440, -60])
+    assert '"default_alerts": [\n    "-1d",\n    "-1h"\n  ]' in s.to_json()
+    assert CalendarSettings.parse(s.to_json()).default_alerts(False) == [-1440, -60]
+
+
 def test_meeting_link_line_is_not_duplicated():
     from memento_win.core.agenda import ics
     from memento_win.core.agenda.ics_import import build_body

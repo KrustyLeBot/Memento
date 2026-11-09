@@ -9,8 +9,12 @@ import json
 from dataclasses import dataclass, field
 
 from .. import note as fmt
+from .model import format_alert, parse_alert
 
 PATH = "agenda/calendars.json"
+# Reminders of a new event ("Rappels par défaut"), synced with the phone: `["-15m", "-1d"]`.
+KEY_ALERTS = "default_alerts"
+KEY_ALERTS_ALL_DAY = "default_alerts_all_day"
 
 # Fixed palette: every colour has a contrast of at least 3:1 against white and against #121212 (bars and
 # dots read on the light and the dark theme). Checked by tests on both platforms.
@@ -72,6 +76,23 @@ class CalendarSettings:
 
     def layer(self, key: str) -> Layer:
         return self.layers.get(key) or Layer(True, DEFAULT_LAYER_COLORS.get(key, "#78858F"))
+
+    def default_alerts(self, all_day: bool) -> list[int]:
+        """Reminders of a new event (minutes, negative = before), as the phone's `CalendarSettings.defaultAlerts`:
+        unset -> 15 min before for a timed event, none for an all-day one."""
+        raw = self.extra.get(KEY_ALERTS_ALL_DAY if all_day else KEY_ALERTS)
+        if raw is None:
+            return [] if all_day else [-15]
+        out = []
+        for v in raw if isinstance(raw, list) else []:
+            try:
+                out.append(parse_alert(str(v)))
+            except ValueError:
+                pass
+        return out
+
+    def set_default_alerts(self, all_day: bool, alerts: list[int]) -> None:
+        self.extra[KEY_ALERTS_ALL_DAY if all_day else KEY_ALERTS] = [format_alert(m) for m in sorted(set(alerts))]
 
     def to_json(self) -> str:
         cals = []

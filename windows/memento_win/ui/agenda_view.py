@@ -638,7 +638,7 @@ class AgendaScreen(QWidget):
             start = datetime(day.year, day.month, day.day, hour)
         settings = self.data.settings
         ev = new_event("", start, start + timedelta(hours=1), tz=self.data.zone,
-                       calendar=settings.default_calendar().id, alerts=list(self.prefs.default_alerts))
+                       calendar=settings.default_calendar().id, alerts=settings.default_alerts(False))
         dialog = EventDialog(self, ev, settings, self.data.zone, today, is_new=True)
         accepted = dialog_hook(dialog) if dialog_hook is not None else dialog.exec() == QDialog.DialogCode.Accepted
         if not accepted:
@@ -784,6 +784,12 @@ class AgendaScreen(QWidget):
 
         def change(s):
             s.calendar(calendar_id).name = name
+        self._edit_settings(change)
+
+    def set_default_alerts(self, alerts: list[int]) -> None:
+        """The reminders of a new timed event, synced (calendars.json, like the phone's "Rappels par défaut")."""
+        def change(s):
+            s.set_default_alerts(False, alerts)
         self._edit_settings(change)
 
     def set_default_calendar(self, calendar_id: str) -> None:

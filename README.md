@@ -204,13 +204,16 @@ ical_extra:                    # ICS properties the app does not model, verbatim
 - Windows: views Agenda, Mois, Semaine, Jour (keys T, ← →, Ctrl+F), the event editor (repetition presets and a
   custom editor writing plain `RRULE`s; a rule it cannot express is shown as "Règle importée" and kept as is),
   series scopes "cet événement" / "tous les événements", delete with undo, calendars, import and export, and
-  "Ajouter à l'agenda" in the note editor. Week start, "heures dans le fuseau de l'événement" and default reminders
-  are settings of the PC; the default calendar and the layers are in `calendars.json`. Windows stores reminders but
+  "Ajouter à l'agenda" in the note editor. Week start and "heures dans le fuseau de l'événement" are settings of the
+  PC; the default calendar, the default reminders and the layers are in `calendars.json` (shared with the phone and
+  the web app). Windows stores reminders but
   never notifies (the phone does). Editing a whole series moves its `exdate` and its edited occurrences with the
   first start, so they keep matching.
 
 - `agenda/calendars.json` also holds the default reminders of new events: `"default_alerts": ["-15m"]` and
   `"default_alerts_all_day": ["-6h"]` (all-day offsets count from 00:00, so `-6h` is the day before at 18:00).
+  Unset: 15 min before a timed event, none for an all-day one. The phone, the PC and the web app all read and edit
+  them there, and every ICS import adds them, wherever it runs.
 
 ### Using the agenda (Android)
 

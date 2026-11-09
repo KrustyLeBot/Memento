@@ -123,20 +123,6 @@ class Config:
         self._settings.sync()
 
     @property
-    def agenda_default_alerts(self) -> list[int]:
-        """Reminders a new event starts with, in minutes relative to its start (negative = before)."""
-        out = []
-        for part in str(self._settings.value("agenda_default_alerts", "")).split(","):
-            if part.strip().lstrip("-").isdigit():
-                out.append(int(part))
-        return out
-
-    @agenda_default_alerts.setter
-    def agenda_default_alerts(self, value: list[int]) -> None:
-        self._settings.setValue("agenda_default_alerts", ",".join(str(v) for v in value))
-        self._settings.sync()
-
-    @property
     def agenda_view(self) -> str:
         value = str(self._settings.value("agenda_view", "agenda"))
         return value if value in ("agenda", "month", "week", "day") else "agenda"
