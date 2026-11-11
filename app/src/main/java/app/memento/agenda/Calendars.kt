@@ -52,6 +52,19 @@ data class CalendarSettings(
     fun withDefaultAlerts(allDay: Boolean, alerts: List<Int>): CalendarSettings =
         copy(extra = extra + ((if (allDay) KEY_ALERTS_ALL_DAY else KEY_ALERTS) to alerts.distinct().sorted().map { Alerts.format(it) }))
 
+    /**
+     * Reminders of every contact birthday, existing ones included (computed, nothing is written into the contacts),
+     * synced: `birthday_alerts`. Same all-day offsets as an event (from 00:00 of the day); by default 1 week before
+     * at 09:00. An empty list turns them off.
+     */
+    fun birthdayAlerts(): List<Int> {
+        val raw = extra[KEY_BIRTHDAY_ALERTS] ?: return DEFAULT_BIRTHDAY_ALERTS
+        return (raw as? List<*>).orEmpty().mapNotNull { v -> try { Alerts.parse(v.toString()) } catch (_: IllegalArgumentException) { null } }
+    }
+
+    fun withBirthdayAlerts(alerts: List<Int>): CalendarSettings =
+        copy(extra = extra + (KEY_BIRTHDAY_ALERTS to alerts.distinct().sorted().map { Alerts.format(it) }))
+
     fun withLayer(key: String, transform: (Layer) -> Layer): CalendarSettings = copy(layers = layers + (key to transform(layer(key))))
 
     fun withCalendar(id: String, transform: (Calendar) -> Calendar): CalendarSettings =
@@ -103,6 +116,9 @@ data class CalendarSettings(
         const val LAYER_BIRTHDAYS = "birthdays"
         const val KEY_ALERTS = "default_alerts"
         const val KEY_ALERTS_ALL_DAY = "default_alerts_all_day"
+        const val KEY_BIRTHDAY_ALERTS = "birthday_alerts"
+        /** 1 week before at 09:00 (minutes from 00:00 of the birthday). */
+        val DEFAULT_BIRTHDAY_ALERTS = listOf(-7 * 1440 + 9 * 60)
 
         /** Fixed palette: each colour has a contrast of at least 3:1 against white and against #121212. */
         val PALETTE: List<Pair<String, String>> = listOf(

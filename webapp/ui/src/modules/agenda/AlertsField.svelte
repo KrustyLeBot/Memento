@@ -1,10 +1,15 @@
 <script>
   // Reminders as removable chips, and "Ajouter un rappel" (presets, or a custom number of minutes/hours/days/weeks).
   import { createEventDispatcher } from 'svelte';
-  import { ALERT_PRESETS, alertLabel } from './dates.js';
+  import { ALERT_PRESETS, ALL_DAY_ALERT_PRESETS, alertLabel as timedLabel, allDayAlertLabel } from './dates.js';
 
   /** @type {number[]} minutes, negative = before the start */
   export let value = [];
+  /** All-day reminders (minutes from 00:00 of the day: "La veille à 18:00"), e.g. the birthdays'. */
+  export let allDay = false;
+  $: alertLabel = allDay ? allDayAlertLabel : timedLabel;
+  $: presets = allDay ? ALL_DAY_ALERT_PRESETS : ALERT_PRESETS;
+  let atTime = '09:00';
   const dispatch = createEventDispatcher();
   let picking = '';
   let custom = false;
@@ -37,20 +42,35 @@
   {/each}
   <select class="add" bind:value={picking} on:change={picked} aria-label="Ajouter un rappel">
     <option value="">+ Ajouter un rappel</option>
-    {#each ALERT_PRESETS.filter((m) => !value.includes(m)) as m}<option value={String(m)}>{alertLabel(m)}</option>{/each}
+    {#each presets.filter((m) => !value.includes(m)) as m}<option value={String(m)}>{alertLabel(m)}</option>{/each}
     <option value="custom">Personnalisé…</option>
   </select>
 </div>
 {#if custom}
   <div class="custom">
-    <input class="field num" type="number" min="1" max="999" bind:value={amount} aria-label="Durée" />
-    <select class="field" bind:value={unit} aria-label="Unité">
-      <option value={1}>minutes</option><option value={60}>heures</option><option value={1440}>jours</option><option value={10080}>semaines</option>
-    </select>
-    <select class="field" bind:value={sign} aria-label="Avant ou après">
-      <option value={-1}>avant</option><option value={1}>après</option>
-    </select>
-    <button type="button" class="btn" on:click={() => { add(sign * Math.max(1, Math.round(amount)) * unit); custom = false; }}>Ajouter</button>
+    <input class="field num" type="number" min="0" max="999" bind:value={amount} aria-label="Durée" />
+    {#if allDay}
+      <select class="field" bind:value={unit} aria-label="Unité">
+        <option value={1440}>jours</option><option value={10080}>semaines</option>
+      </select>
+      <select class="field" bind:value={sign} aria-label="Avant ou après">
+        <option value={-1}>avant</option><option value={1}>après</option>
+      </select>
+      <input class="field" type="time" bind:value={atTime} aria-label="Heure" />
+      <button type="button" class="btn" on:click={() => {
+        const [h, m] = atTime.split(':').map(Number);
+        add(sign * Math.max(0, Math.round(amount)) * unit + (h || 0) * 60 + (m || 0));
+        custom = false;
+      }}>Ajouter</button>
+    {:else}
+      <select class="field" bind:value={unit} aria-label="Unité">
+        <option value={1}>minutes</option><option value={60}>heures</option><option value={1440}>jours</option><option value={10080}>semaines</option>
+      </select>
+      <select class="field" bind:value={sign} aria-label="Avant ou après">
+        <option value={-1}>avant</option><option value={1}>après</option>
+      </select>
+      <button type="button" class="btn" on:click={() => { add(sign * Math.max(1, Math.round(amount)) * unit); custom = false; }}>Ajouter</button>
+    {/if}
     <button type="button" class="btn" on:click={() => (custom = false)}>Annuler</button>
   </div>
 {/if}

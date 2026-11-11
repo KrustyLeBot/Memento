@@ -274,6 +274,25 @@ def test_alarms_horizon_keys_and_reminders():
     assert got[0].key == f"{series.id}|2026-11-03T09:00|-1440"
 
 
+def test_birthday_alarms_cover_every_contact_and_follow_the_setting():
+    from memento_win.core.agenda.entries import Birthday
+    people = [Birthday("c1", "Marie", "1990-11-18"), Birthday("c2", "Zoé", "--02-29"), Birthday("c3", "Bad", "hier")]
+    now = utc(2026, 11, 10, 8, 0)
+    got = alarms(AgendaSources(birthdays=people), now, PARIS)  # default: 1 week before at 09:00
+    assert [(a.key, a.title, a.at, a.kind.value) for a in got] == [
+        ("c1|2026-11-18|-9540", "Anniversaire de Marie", utc(2026, 11, 11, 8), "birthday")]
+    settings = CalendarSettings()
+    settings.set_birthday_alerts([-9540, -360])  # + the day before at 18:00
+    got = alarms(AgendaSources(birthdays=people, settings=settings), now, PARIS, timedelta(days=10))
+    assert [(a.key, a.at) for a in got] == [("c1|2026-11-18|-9540", utc(2026, 11, 11, 8)),
+                                           ("c1|2026-11-18|-360", utc(2026, 11, 17, 17))]
+    settings.set_birthday_alerts([])
+    assert alarms(AgendaSources(birthdays=people, settings=settings), now, PARIS) == []
+    settings = CalendarSettings()
+    settings.layers["birthdays"].visible = False  # a hidden layer is not announced
+    assert alarms(AgendaSources(birthdays=people, settings=settings), now, PARIS) == []
+
+
 # ---- import ----
 
 def test_duplicates_policies_and_body_preservation():

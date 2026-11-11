@@ -15,6 +15,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -321,6 +322,28 @@ class AgendaLogicTest {
             "reminder|${n.reminder}" to "2026-11-03T11:00:00Z",
             "2026-11-04T09:00|-15" to "2026-11-04T07:45:00Z",
         ), got.map { it.key.substringAfter('|') to Vectors.iso(it.at) })
+    }
+
+    @Test
+    fun birthdayAlarmsCoverEveryContactAndFollowTheSetting() {
+        val people = listOf(Birthday("c1", "Marie", "1990-11-18"), Birthday("c2", "Zoé", "--02-29"), Birthday("c3", "Bad", "hier"))
+        val now = utc("2026-11-10T08:00:00Z")
+        val got = AgendaIndex.alarms(AgendaSources(birthdays = people), now, paris) // default: 1 week before at 09:00
+        assertEquals(listOf(Triple("c1|2026-11-18|-9540", "Anniversaire de Marie", "2026-11-11T08:00:00Z")),
+            got.map { Triple(it.key, it.title, Vectors.iso(it.at)) })
+        assertTrue(got.all { it.kind == EntryKind.BIRTHDAY })
+        var settings = CalendarSettings().withBirthdayAlerts(listOf(-9540, -360)) // + the day before at 18:00
+        val two = AgendaIndex.alarms(AgendaSources(birthdays = people, settings = settings), now, paris, Duration.ofDays(10))
+        assertEquals(listOf("c1|2026-11-18|-9540" to "2026-11-11T08:00:00Z", "c1|2026-11-18|-360" to "2026-11-17T17:00:00Z"),
+            two.map { it.key to Vectors.iso(it.at) })
+        val src = AgendaSources(birthdays = people, settings = settings)
+        assertTrue(AgendaIndex.alarmAlive(src, "c1|2026-11-18|-360", paris))
+        assertFalse(AgendaIndex.alarmAlive(src, "c1|2026-11-18|-100", paris))
+        settings = settings.withBirthdayAlerts(emptyList())
+        assertEquals(emptyList<Alarm>(), AgendaIndex.alarms(AgendaSources(birthdays = people, settings = settings), now, paris))
+        assertFalse(AgendaIndex.alarmAlive(AgendaSources(birthdays = people, settings = settings), "c1|2026-11-18|-360", paris))
+        val hidden = CalendarSettings().withLayer(CalendarSettings.LAYER_BIRTHDAYS) { it.copy(visible = false) } // a hidden layer is not announced
+        assertEquals(emptyList<Alarm>(), AgendaIndex.alarms(AgendaSources(birthdays = people, settings = hidden), now, paris))
     }
 
     @Test

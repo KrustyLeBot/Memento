@@ -99,3 +99,19 @@ def alert_label(minutes: int) -> str:
     if minutes == 0:
         return "Au début"
     return f"{duration(minutes)} {'avant' if minutes < 0 else 'après'}"
+
+
+def all_day_alert_label(minutes: int) -> str:
+    """All-day reminder (minutes from 00:00 of the day): 540 -> "Le jour même à 09:00", -360 -> "La veille à 18:00",
+    -9540 -> "1 semaine avant à 09:00" (as the phone's `AgendaText.alertLabel`)."""
+    days, rest = divmod(minutes, 1440)
+    at = f" à {rest // 60:02d}:{rest % 60:02d}"
+    if days == 0:
+        return f"Le jour même{at}"
+    if days == -1:
+        return f"La veille{at}"
+    if days == -7:
+        return f"1 semaine avant{at}"
+    if days < 0:
+        return f"{-days} jours avant{at}"
+    return f"Le lendemain{at}" if days == 1 else f"{days} jours après{at}"

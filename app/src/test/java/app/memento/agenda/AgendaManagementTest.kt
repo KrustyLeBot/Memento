@@ -75,4 +75,13 @@ class AgendaManagementTest {
         assertEquals(listOf(-360), back.defaultAlerts(true))
         assertEquals(listOf<Int>(), back.withDefaultAlerts(false, emptyList()).defaultAlerts(false))
     }
+
+    @Test
+    fun birthdayAlertsDefaultToAWeekBeforeAndAreSynced() {
+        val s = CalendarSettings()
+        assertEquals(listOf(-9540), s.birthdayAlerts()) // 1 week before at 09:00
+        val back = CalendarSettings.parse(s.withBirthdayAlerts(listOf(-360, -9540, -360)).toJson())
+        assertEquals(listOf(-9540, -360), back.birthdayAlerts())
+        assertEquals(listOf<Int>(), CalendarSettings.parse(s.withBirthdayAlerts(emptyList()).toJson()).birthdayAlerts())
+    }
 }

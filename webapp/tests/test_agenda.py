@@ -180,6 +180,11 @@ def test_calendars_create_rename_default_layers_and_delete_with_move(client, dat
     assert cal["default_alerts"] == [-1440, -60]
     assert '"default_alerts": [\n    "-1d",\n    "-1h"\n  ]' in (data_dir / "agenda" / "calendars.json").read_text(encoding="utf-8")
     assert change(cal["version"], op="alerts", alerts="x").status_code == 400
+    assert cal["birthday_alerts"] == [-9540]  # 1 week before at 09:00, unless set
+    cal = change(cal["version"], op="birthday_alerts", alerts=[-360, -9540]).json()
+    assert cal["birthday_alerts"] == [-9540, -360]
+    assert '"birthday_alerts": [\n    "-159h",\n    "-6h"\n  ]' in (data_dir / "agenda" / "calendars.json").read_text(encoding="utf-8")
+    assert change(cal["version"], op="birthday_alerts", alerts="x").status_code == 400
     ev = create(client, title="Point", start="2026-11-03T10:00", end="2026-11-03T11:00", tz="Europe/Paris")
     assert "calendar: travail" in (data_dir / ev["path"]).read_text(encoding="utf-8")
     cal = change(cal["version"], op="update", id="travail", visible=False).json()

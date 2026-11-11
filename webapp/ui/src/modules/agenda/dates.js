@@ -167,6 +167,23 @@ export function duration(minutes) {
 export const alertLabel = (minutes) => (minutes === 0 ? 'Au début' : `${duration(minutes)} ${minutes < 0 ? 'avant' : 'après'}`);
 export const ALERT_PRESETS = [-5, -10, -15, -30, -60, -1440, -10080];
 
+/**
+ * All-day reminder (minutes from 00:00 of the day): 540 -> "Le jour même à 09:00", -360 -> "La veille à 18:00",
+ * -9540 -> "1 semaine avant à 09:00".
+ * @param {number} minutes
+ */
+export function allDayAlertLabel(minutes) {
+  const days = Math.floor(minutes / 1440);
+  const rest = minutes - days * 1440;
+  const at = ` à ${String(Math.floor(rest / 60)).padStart(2, '0')}:${String(rest % 60).padStart(2, '0')}`;
+  if (days === 0) return `Le jour même${at}`;
+  if (days === -1) return `La veille${at}`;
+  if (days === -7) return `1 semaine avant${at}`;
+  if (days < 0) return `${-days} jours avant${at}`;
+  return days === 1 ? `Le lendemain${at}` : `${days} jours après${at}`;
+}
+export const ALL_DAY_ALERT_PRESETS = [540, -360, -900, -2340, -9540];
+
 /** City of an IANA zone: "America/New_York" -> "New York". @param {string} zone */
 export const city = (zone) => zone.split('/').pop()?.replace(/_/g, ' ') ?? zone;
 

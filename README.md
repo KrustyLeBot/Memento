@@ -214,6 +214,10 @@ ical_extra:                    # ICS properties the app does not model, verbatim
   `"default_alerts_all_day": ["-6h"]` (all-day offsets count from 00:00, so `-6h` is the day before at 18:00).
   Unset: 15 min before a timed event, none for an all-day one. The phone, the PC and the web app all read and edit
   them there, and every ICS import adds them, wherever it runs.
+  `"birthday_alerts": ["-159h"]` is the reminder of every contact birthday (same all-day offsets: `-159h` is
+  1 week before at 09:00, the default when unset; `[]` turns them off). It applies to all contacts with a birth
+  date, existing and new, nothing is written into the contacts, and nothing rings while the Anniversaires layer is
+  hidden. The phone rings them; the PC and the web app edit the setting.
 
 ### Using the agenda (Android)
 

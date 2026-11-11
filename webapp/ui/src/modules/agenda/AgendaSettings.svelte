@@ -35,6 +35,11 @@
       <AlertsField value={$calendars.default_alerts_all_day}
         on:change={(e) => changeCalendars({ op: 'alerts', all_day: true, alerts: e.detail })} />
     </div>
+    <div class="stack">
+      <span>Rappels des anniversaires de tous les contacts, déjà là ou futurs (aucun si les anniversaires sont masqués)</span>
+      <AlertsField allDay value={$calendars.birthday_alerts}
+        on:change={(e) => changeCalendars({ op: 'birthday_alerts', alerts: e.detail })} />
+    </div>
     <div class="row">
       <span>Agenda par défaut</span>
       <select class="field auto" value={$calendars.default} aria-label="Agenda par défaut"

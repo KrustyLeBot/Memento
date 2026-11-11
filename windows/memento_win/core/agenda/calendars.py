@@ -15,6 +15,10 @@ PATH = "agenda/calendars.json"
 # Reminders of a new event ("Rappels par défaut"), synced with the phone: `["-15m", "-1d"]`.
 KEY_ALERTS = "default_alerts"
 KEY_ALERTS_ALL_DAY = "default_alerts_all_day"
+# Reminders of every contact birthday (existing ones too), synced with the phone: `["-159h"]`. All-day offsets
+# (from 00:00 of the day); unset -> 1 week before at 09:00; an empty list turns them off.
+KEY_BIRTHDAY_ALERTS = "birthday_alerts"
+DEFAULT_BIRTHDAY_ALERTS = [-7 * 1440 + 9 * 60]
 
 # Fixed palette: every colour has a contrast of at least 3:1 against white and against #121212 (bars and
 # dots read on the light and the dark theme). Checked by tests on both platforms.
@@ -93,6 +97,23 @@ class CalendarSettings:
 
     def set_default_alerts(self, all_day: bool, alerts: list[int]) -> None:
         self.extra[KEY_ALERTS_ALL_DAY if all_day else KEY_ALERTS] = [format_alert(m) for m in sorted(set(alerts))]
+
+    def birthday_alerts(self) -> list[int]:
+        """Reminders of every contact birthday (minutes from 00:00 of the day, negative = before), as the phone's
+        `CalendarSettings.birthdayAlerts`."""
+        raw = self.extra.get(KEY_BIRTHDAY_ALERTS)
+        if raw is None:
+            return list(DEFAULT_BIRTHDAY_ALERTS)
+        out = []
+        for v in raw if isinstance(raw, list) else []:
+            try:
+                out.append(parse_alert(str(v)))
+            except ValueError:
+                pass
+        return out
+
+    def set_birthday_alerts(self, alerts: list[int]) -> None:
+        self.extra[KEY_BIRTHDAY_ALERTS] = [format_alert(m) for m in sorted(set(alerts))]
 
     def to_json(self) -> str:
         cals = []

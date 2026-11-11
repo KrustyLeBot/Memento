@@ -136,6 +136,15 @@ def test_default_reminders_are_synced_like_the_phone():
     assert CalendarSettings.parse(s.to_json()).default_alerts(False) == [-1440, -60]
 
 
+def test_birthday_reminders_default_to_a_week_before_and_are_synced():
+    s = CalendarSettings()
+    assert s.birthday_alerts() == [-9540]  # 1 week before at 09:00
+    s.set_birthday_alerts([-360, -9540, -360])
+    assert CalendarSettings.parse(s.to_json()).birthday_alerts() == [-9540, -360]
+    s.set_birthday_alerts([])
+    assert CalendarSettings.parse(s.to_json()).birthday_alerts() == []  # an empty list turns them off
+
+
 def test_meeting_link_line_is_not_duplicated():
     from memento_win.core.agenda import ics
     from memento_win.core.agenda.ics_import import build_body

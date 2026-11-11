@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
                                QToolButton, QVBoxLayout, QWidget)
 
-from ..core.agenda.frdates import alert_label
+from ..core.agenda.frdates import alert_label, all_day_alert_label
 from ..core.settings import RELIEFS, ActivitySettings
 from ..core.track import Sport
 from ..services import updater
@@ -21,7 +21,7 @@ class SettingsScreen(QWidget):
     activity_changed = Signal(object)  # ActivitySettings
     module_visibility = Signal(str, bool)
     contacts_order = Signal(bool)  # True: first name first
-    agenda_changed = Signal(dict)  # one key of: week_start, event_zone_times, default_alerts, default_calendar, birthdays
+    agenda_changed = Signal(dict)  # one key of: week_start, event_zone_times, default_alerts, default_calendar, birthdays, birthday_alerts
 
     def __init__(self):
         super().__init__()
@@ -182,6 +182,18 @@ class SettingsScreen(QWidget):
         self.birthdays_box = QCheckBox("Afficher les anniversaires des contacts (synchronisé)")
         self.birthdays_box.toggled.connect(lambda on: self._agenda({"birthdays": on}))
         body.addWidget(self.birthdays_box)
+        body.addWidget(QLabel("Rappels des anniversaires de tous les contacts, déjà là ou futurs (synchronisé, ils sonnent "
+                              "sur le téléphone ; aucun si les anniversaires sont masqués)"))
+        self.birthday_alert_buttons: dict[int, QPushButton] = {}
+        birthday_row = QHBoxLayout()
+        for minutes in (540, -360, -900, -2340, -9540):
+            b = self._chip(all_day_alert_label(minutes))
+            b.setMinimumWidth(b.sizeHint().width())
+            b.toggled.connect(lambda _=False: self._agenda({"birthday_alerts": self._birthday_alerts()}))
+            self.birthday_alert_buttons[minutes] = b
+            birthday_row.addWidget(b)
+        birthday_row.addStretch()
+        body.addLayout(birthday_row)
 
         section("À propos")
         self.version = QLabel(f"Mémento build {updater.current_build()}")
@@ -222,6 +234,9 @@ class SettingsScreen(QWidget):
     def _alerts(self) -> list[int]:
         return sorted(m for m, b in self.alert_buttons.items() if b.isChecked())
 
+    def _birthday_alerts(self) -> list[int]:
+        return sorted(m for m, b in self.birthday_alert_buttons.items() if b.isChecked())
+
     def _agenda(self, change: dict) -> None:
         if not self._loading:
             self.agenda_changed.emit(change)
@@ -238,6 +253,8 @@ class SettingsScreen(QWidget):
             self.default_calendar.addItem(cal.name, cal.id)
         self.default_calendar.setCurrentIndex(max(0, self.default_calendar.findData(calendars.default_calendar().id)))
         self.birthdays_box.setChecked(calendars.layer("birthdays").visible)
+        for minutes, b in self.birthday_alert_buttons.items():
+            b.setChecked(minutes in calendars.birthday_alerts())
         self._loading = False
 
     def set_contacts_first_name_first(self, value: bool) -> None:

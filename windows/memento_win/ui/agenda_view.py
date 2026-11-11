@@ -792,6 +792,12 @@ class AgendaScreen(QWidget):
             s.set_default_alerts(False, alerts)
         self._edit_settings(change)
 
+    def set_birthday_alerts(self, alerts: list[int]) -> None:
+        """The reminders of every contact birthday, synced (calendars.json `birthday_alerts`)."""
+        def change(s):
+            s.set_birthday_alerts(alerts)
+        self._edit_settings(change)
+
     def set_default_calendar(self, calendar_id: str) -> None:
         def change(s):
             s.default = calendar_id

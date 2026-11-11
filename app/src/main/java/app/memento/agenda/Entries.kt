@@ -277,6 +277,11 @@ object AgendaIndex {
             return sources.notes.any { it.id == id && !it.conflict && it.reminder == ms }
         }
         val offset = parts[2].toIntOrNull() ?: return false
+        sources.birthdays.firstOrNull { it.contactId == id }?.let { b ->
+            val d = try { LocalDate.parse(parts[1]) } catch (_: java.time.DateTimeException) { return false }
+            val at = Zones.toInstant(d.atStartOfDay().plusMinutes(offset.toLong()), device)
+            return birthdayAlarmDays(sources, b, at, at.plusSeconds(1), device).any { it.first == d && it.second == offset }
+        }
         val wall = try { Stamp.parse(parts[1]) } catch (_: IllegalArgumentException) { return false }
         val e = sources.events.firstOrNull { it.id == id && !it.note.conflict }
             ?: datedNotes(sources.notes.filter { it.id == id }).first.firstOrNull()
@@ -285,6 +290,26 @@ object AgendaIndex {
         val at = if (wall.allDay) Zones.dayStart(wall.date, device) else Zones.toInstant(wall.dateTime(), Zones.zoneOr(e.tz, device))
         val sub = AgendaSources(events = sources.events.filter { it.id == id || it.recurrenceOf == id }, notes = sources.notes.filter { it.id == id })
         return entries(sub, at, at.plusSeconds(1), device, respectVisibility = false).entries.any { it.key == "$id|${parts[1]}" }
+    }
+
+    /**
+     * The (birthday date, alert offset) pairs of [b] whose alert may fall in [from, to): none when the Anniversaires
+     * layer is hidden (nobody wants a reminder of what the calendar does not show) or the birthday is unreadable.
+     */
+    private fun birthdayAlarmDays(sources: AgendaSources, b: Birthday, from: Instant, to: Instant, device: ZoneId): List<Pair<LocalDate, Int>> {
+        val alerts = sources.settings.birthdayAlerts()
+        if (alerts.isEmpty() || !sources.settings.layer(CalendarSettings.LAYER_BIRTHDAYS).visible) return emptyList()
+        val (year, month, day) = try { parseBirthday(b.birthday) } catch (_: IllegalArgumentException) { return emptyList() }
+        val slack = 86_400L
+        val first = localDate(from.minusSeconds((alerts.maxOrNull() ?: 0).coerceAtLeast(0) * 60L + slack), device)
+        val last = localDate(to.plusSeconds((alerts.minOrNull() ?: 0).coerceAtMost(0).let { -it } * 60L + slack), device)
+        val out = ArrayList<Pair<LocalDate, Int>>()
+        for (y in first.year..last.year) {
+            if (year != null && y < year) continue
+            val d = try { LocalDate.of(y, month, day) } catch (_: java.time.DateTimeException) { LocalDate.of(y, 2, 28) }
+            for (a in alerts) out.add(d to a)
+        }
+        return out
     }
 
     /**
@@ -313,6 +338,15 @@ object AgendaIndex {
                     if (!at.isBefore(now) && at.isBefore(end)) {
                         out.add(Alarm("${o.key}|$offset", at, kind, e.title, e.id, e.path.ifEmpty { null }, o.startInstant, e.allDay, offset, e.location))
                     }
+                }
+            }
+        }
+        for (b in sources.birthdays) {
+            for ((d, offset) in birthdayAlarmDays(sources, b, now, end, device)) {
+                val day = Zones.dayStart(d, device)
+                val at = Zones.toInstant(d.atStartOfDay().plusMinutes(offset.toLong()), device)
+                if (!at.isBefore(now) && at.isBefore(end)) {
+                    out.add(Alarm("${b.contactId}|$d|$offset", at, EntryKind.BIRTHDAY, "Anniversaire de ${b.name}", b.contactId, b.path, day, true, offset))
                 }
             }
         }

@@ -338,6 +338,10 @@ class MainWindow(QMainWindow):
             shown = set(self.settings.alert_buttons)
             kept = [m for m in self.agenda.data.settings.default_alerts(False) if m not in shown]
             self.agenda.set_default_alerts(kept + list(change["default_alerts"]))
+        if "birthday_alerts" in change:
+            shown = set(self.settings.birthday_alert_buttons)
+            kept = [m for m in self.agenda.data.settings.birthday_alerts() if m not in shown]
+            self.agenda.set_birthday_alerts(kept + list(change["birthday_alerts"]))
         if "default_calendar" in change:
             self.agenda.set_default_calendar(change["default_calendar"])
         if "birthdays" in change:

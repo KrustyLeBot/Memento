@@ -168,6 +168,7 @@ def settings_json(settings, version: str | None, counts: dict) -> dict:
         "default": settings.default_calendar().id,
         "layers": {k: {"visible": settings.layer(k).visible, "color": settings.layer(k).color} for k in LAYERS},
         "default_alerts": settings.default_alerts(False), "default_alerts_all_day": settings.default_alerts(True),
+        "birthday_alerts": settings.birthday_alerts(),
         "problem": settings.problem, "version": version, "palette": [list(p) for p in calendars.PALETTE],
     }
 
@@ -492,6 +493,7 @@ class Agenda:
         """One change of calendars.json, If-Match its version (`none` when absent):
         {"op": "create", "name"} | {"op": "update", "id", "name"?, "color"?, "visible"?} | {"op": "default", "id"}
         | {"op": "layer", "key", "visible"?, "color"?} | {"op": "alerts", "alerts": [-15, …], "all_day"?: bool}
+        | {"op": "birthday_alerts", "alerts": [-9540, …]} (all-day offsets from 00:00, for every contact birthday)
         (the default reminders of new and imported events, synced with the phone). Unknown keys of the file are kept. An unreadable file is
         replaced only by a request carrying its version (the user was told and agreed)."""
         calendars, *_ = core()
@@ -541,7 +543,7 @@ class Agenda:
                 if color is not None:
                     layer.color = color
                 settings.layers[key] = layer
-            elif op == "alerts":
+            elif op in ("alerts", "birthday_alerts"):
                 raw = body.get("alerts")
                 try:
                     alerts = [int(a) for a in raw] if isinstance(raw, list) else None
@@ -549,7 +551,10 @@ class Agenda:
                     alerts = None
                 if alerts is None:
                     raise bad_request("Rappels invalides")
-                settings.set_default_alerts(bool(body.get("all_day")), alerts)
+                if op == "birthday_alerts":
+                    settings.set_birthday_alerts(alerts)
+                else:
+                    settings.set_default_alerts(bool(body.get("all_day")), alerts)
             else:
                 raise bad_request("Opération inconnue")
             self.data.store.agenda.save_calendars(settings)

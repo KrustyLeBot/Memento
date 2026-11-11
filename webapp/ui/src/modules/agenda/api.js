@@ -31,7 +31,7 @@ const qs = (params = {}) => {
  *   links: { url: string, label: string }[], rule_text: string | null }} AgendaEvent
  * @typedef {{ id: string, name: string, color: string, visible: boolean, imported: boolean, count: number }} Calendar
  * @typedef {{ calendars: Calendar[], default: string, layers: Record<string, { visible: boolean, color: string }>,
- *   default_alerts: number[], default_alerts_all_day: number[],
+ *   default_alerts: number[], default_alerts_all_day: number[], birthday_alerts: number[],
  *   problem: string | null, version: string | null, palette: [string, string][], created?: string | null }} Calendars
  * @typedef {{ freq: string, interval: number, weekdays: number[], monthly: string, month_day: number, nth: number,
  *   nth_weekday: number, until: string | null, count: number | null }} RuleSpec

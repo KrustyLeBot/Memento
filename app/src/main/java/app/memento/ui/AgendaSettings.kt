@@ -50,6 +50,7 @@ fun AgendaSettings(vm: MainViewModel) {
         onPauseOrDispose { }
     }
     var addAlert by remember { mutableStateOf<Boolean?>(null) } // all-day?
+    var addBirthdayAlert by remember { mutableStateOf(false) }
 
     SectionTitle("Agenda")
     SettingsCard {
@@ -93,6 +94,16 @@ fun AgendaSettings(vm: MainViewModel) {
                 c.updateCalendars { it.withLayer(CalendarSettings.LAYER_BIRTHDAYS) { l -> l.copy(visible = v) } }
             })
         }
+        Text("Rappels des anniversaires", fontWeight = FontWeight.SemiBold)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val list = settings.birthdayAlerts()
+            list.forEach { a ->
+                InputChip(true, { c.updateCalendars { it.withBirthdayAlerts(list - a) } }, { Text(AgendaText.alertLabel(a, true, h24)) },
+                    trailingIcon = { Icon(Icons.Default.Close, "Retirer") })
+            }
+            FilterChip(false, { addBirthdayAlert = true }, { Text("Ajouter") }, leadingIcon = { Icon(Icons.Default.Add, null) })
+        }
+        SettingsHint("Pour tous les contacts avec une date de naissance, ceux d'aujourd'hui comme les futurs. Aucun rappel si la liste est vide ou si les anniversaires sont masqués.")
         OutlinedButton(onClick = { vm.screen = Screen.AGENDA_CALENDARS }) { Text("Agendas et calques…") }
         SettingsHint("Agendas, couleurs, agenda et rappels par défaut sont synchronisés avec le PC (agenda/calendars.json).")
     }
@@ -118,6 +129,12 @@ fun AgendaSettings(vm: MainViewModel) {
         SettingsHint("Widgets : appui long sur l'écran d'accueil → Widgets → Mémento (« Agenda » et « Aujourd'hui »).")
     }
 
+    if (addBirthdayAlert) {
+        AlertPickerDialog(true, h24, { addBirthdayAlert = false }) { a ->
+            val list = settings.birthdayAlerts()
+            if (a !in list) c.updateCalendars { it.withBirthdayAlerts(list + a) }
+        }
+    }
     addAlert?.let { allDay ->
         AlertPickerDialog(allDay, h24, { addAlert = null }) { a ->
             val list = settings.defaultAlerts(allDay)

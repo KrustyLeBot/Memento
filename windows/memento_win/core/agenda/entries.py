@@ -305,6 +305,39 @@ def alarms(sources: AgendaSources, now: datetime, device_zone: str,
         if now <= at < end:
             out.append(Alarm(f"{n.id}|reminder|{n.reminder}", at, EntryKind.NOTE, n.title, n.id, n.path or None,
                              at, False, 0))
+    out.extend(_birthday_alarms(sources, now, end, device_zone))
     out.sort(key=lambda a: (a.at, a.key))
+    return out
+
+
+def _birthday_alarms(sources: AgendaSources, now: datetime, end: datetime, device_zone: str) -> list[Alarm]:
+    """The reminders of every contact birthday (`birthday_alerts`, all-day offsets from 00:00 of the day); none when
+    the Anniversaires layer is hidden (nobody wants a reminder of what the calendar does not show)."""
+    alerts = sorted(set(sources.settings.birthday_alerts()))
+    if not alerts or not sources.settings.layer(LAYER_BIRTHDAYS).visible:
+        return []
+    tz = zones.zone(device_zone)
+    slack = timedelta(days=1)
+    first = _local_date(now - timedelta(minutes=max(max(alerts), 0)) - slack, tz)
+    last = _local_date(end + timedelta(minutes=max(-min(alerts), 0)) + slack, tz)
+    out = []
+    for b in sources.birthdays:
+        try:
+            year, month, day = parse_birthday(b.birthday)
+        except ValueError:
+            continue
+        for y in range(first.year, last.year + 1):
+            if year is not None and y < year:
+                continue
+            try:
+                d = date(y, month, day)
+            except ValueError:
+                d = date(y, 2, 28)
+            for offset in alerts:
+                at = zones.to_instant(datetime.combine(d, datetime.min.time()) + timedelta(minutes=offset), tz)
+                if now <= at < end:
+                    out.append(Alarm(f"{b.contact_id}|{d.isoformat()}|{offset}", at, EntryKind.BIRTHDAY,
+                                     f"Anniversaire de {b.name}", b.contact_id, b.path or None,
+                                     zones.day_start(d, tz), True, offset))
     return out
 
