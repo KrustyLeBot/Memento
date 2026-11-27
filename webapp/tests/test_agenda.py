@@ -146,10 +146,11 @@ def test_moving_a_whole_series_moves_its_exceptions(client, data_dir):
 
 def test_rule_field_presets_custom_and_imported(client):
     rule = client.post("/api/agenda/rule", params=TZ, headers=HEADERS,
-                       json={"start": "2026-11-26T18:00", "tz": "Europe/Paris", "preset": "monthly_last"}).json()
+                       json={"start": "2030-11-28T18:00", "tz": "Europe/Paris", "preset": "monthly_last"}).json()
     assert rule["rrule"] == "FREQ=MONTHLY;BYDAY=-1TH" and rule["preset"] == "monthly_last"
     assert "Tous les mois le dernier jeudi" in [p["label"] for p in rule["presets"]]
-    assert rule["preview"].startswith("Prochaines : 26 nov.")
+    # A start in the future: the preview begins at the later of today and the start, so a past start drifts.
+    assert rule["preview"].startswith("Prochaines : 28 nov. 2030, 26 déc. 2030")
     # the start moves to a day that is no last Thursday: the preset follows as the day of the month
     moved = client.post("/api/agenda/rule", params=TZ, headers=HEADERS,
                         json={"start": "2026-11-12T18:00", "tz": "Europe/Paris", "preset": "monthly_last"}).json()
