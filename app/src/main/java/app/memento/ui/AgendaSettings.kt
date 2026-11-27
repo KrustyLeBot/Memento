@@ -116,7 +116,11 @@ fun AgendaSettings(vm: MainViewModel) {
         Text("Rappels", fontWeight = FontWeight.SemiBold)
         SettingsHint(if (notifications) "Notifications autorisées." else "Notifications désactivées pour l'app : aucun rappel ne s'affichera.",
             if (notifications) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+        if (notifications) Reminders.soundStatus(context).forEach { st ->
+            SettingsHint(st.text, if (st.ok) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
+        }
         OutlinedButton(onClick = { Reminders.openChannelSettings(context) }) { Text("Canal « Rappels d'agenda » (son, priorité)") }
+        if (notifications) OutlinedButton(onClick = { Reminders.test(context) }) { Text("Tester un rappel") }
         SettingsHint(if (exact) "Alarmes exactes : autorisées, les rappels sonnent à la minute."
             else "Alarmes exactes : refusées, les rappels peuvent arriver avec quelques minutes de retard.",
             if (exact) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)

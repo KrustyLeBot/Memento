@@ -250,7 +250,10 @@ ical_extra:                    # ICS properties the app does not model, verbatim
 
 - Notifications on the **"Rappels d'agenda"** channel (high importance, sound): title, day, time and place, a
   **Reporter 10 min** action; a tap opens the event (or the note). Settings → Agenda → *Canal « Rappels d'agenda »*
-  opens the channel's system page.
+  opens the channel's system page. Above it, the channel's real state (Android keeps the user's choice, whatever
+  the app asks): silent, disabled or without a sound is shown in red, and so are a phone in silent or vibrate mode
+  and "Ne pas déranger" when the channel may not bypass it. *Tester un rappel* shows a reminder at once through the
+  same path as a real one (no snooze; a tap opens the app).
 - Only the next 48 hours are registered with Android (`AlarmManager`), recomputed after every change (edit, sync,
   import, file watcher), every 6 hours, after a reboot, a time or zone change and an app update. Keys are stable
   (event id + occurrence + offset): a resync never shows a reminder twice; vanished ones are cancelled.

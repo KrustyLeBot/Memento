@@ -84,6 +84,48 @@ object Reminders {
         }
     }
 
+    /** One line of the reminders' state in Réglages; [ok] false is shown as a problem. */
+    data class Status(val text: String, val ok: Boolean)
+
+    /**
+     * Whether a reminder can ring right now: the channel as the user left it (Android 8+ ignores what the app
+     * asks once the channel exists), then the phone's ringer and "Ne pas déranger".
+     */
+    fun soundStatus(context: Context): List<Status> {
+        val out = ArrayList<Status>()
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            createChannel(context)
+            val ch = nm.getNotificationChannel(CHANNEL)
+            out += when {
+                ch == null -> Status("Canal « Rappels d'agenda » introuvable.", false)
+                ch.importance == NotificationManager.IMPORTANCE_NONE -> Status("Canal « Rappels d'agenda » : désactivé, aucun rappel ne s'affiche.", false)
+                ch.importance < NotificationManager.IMPORTANCE_DEFAULT -> Status("Canal « Rappels d'agenda » : silencieux, les rappels s'affichent sans son ni vibration.", false)
+                ch.sound == null -> Status("Canal « Rappels d'agenda » : alerte, mais aucun son choisi.", false)
+                ch.importance < NotificationManager.IMPORTANCE_HIGH -> Status("Canal « Rappels d'agenda » : alerte avec son, sans fenêtre en haut de l'écran.", true)
+                else -> Status("Canal « Rappels d'agenda » : alerte avec son et fenêtre en haut de l'écran.", true)
+            }
+            if (ch != null && nm.currentInterruptionFilter > NotificationManager.INTERRUPTION_FILTER_ALL && !ch.canBypassDnd()) {
+                out += Status("« Ne pas déranger » est actif : les rappels arrivent sans son.", false)
+            }
+        }
+        when (context.getSystemService(android.media.AudioManager::class.java).ringerMode) {
+            android.media.AudioManager.RINGER_MODE_SILENT -> out += Status("Téléphone en mode silencieux : les rappels ne sonnent pas.", false)
+            android.media.AudioManager.RINGER_MODE_VIBRATE -> out += Status("Téléphone en mode vibreur : les rappels vibrent sans sonner.", false)
+        }
+        return out
+    }
+
+    /** Shows a reminder right away, through the same path as a real one, to hear what the channel does. */
+    fun test(context: Context) {
+        val now = System.currentTimeMillis()
+        val fired = Intent().putExtra(EXTRA_TITLE, "Test de rappel").putExtra(EXTRA_START, now + 30 * 60_000L)
+            .putExtra(EXTRA_ALL_DAY, false).putExtra(EXTRA_AT, now)
+        notify(context, fired, TEST_KEY, test = true)
+    }
+
+    private const val TEST_KEY = "test"
+
     fun notificationsAllowed(context: Context): Boolean =
         (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
             context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
@@ -215,7 +257,7 @@ object Reminders {
         return listOfNotNull(day, time, location?.ifBlank { null }).joinToString(" · ")
     }
 
-    private fun notify(context: Context, fired: Intent, notifyKey: String) {
+    private fun notify(context: Context, fired: Intent, notifyKey: String, test: Boolean = false) {
         if (!notificationsAllowed(context)) {
             Log.w(TAG, "reminder not shown: notifications are off for the app")
             return
@@ -230,9 +272,11 @@ object Reminders {
             .putExtras(fired)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val snooze = Intent(context, ReminderReceiver::class.java).setAction(ACTION_SNOOZE).setData(alarmUri(notifyKey)).putExtras(fired)
+        // The test has no entry to open: a tap opens the app.
+        val tap = if (test) Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP) else open
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(context, CHANNEL) else Notification.Builder(context)
         @Suppress("DEPRECATION")
-        val n = b.setSmallIcon(R.drawable.ic_stat_memento)
+        val base = b.setSmallIcon(R.drawable.ic_stat_memento)
             .setContentTitle(title)
             .setContentText(text)
             .setCategory(Notification.CATEGORY_EVENT)
@@ -241,10 +285,10 @@ object Reminders {
             .setAutoCancel(true)
             .setWhen(fired.getLongExtra(EXTRA_START, System.currentTimeMillis()))
             .setShowWhen(true)
-            .setContentIntent(PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-            .addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_stat_memento), "Reporter 10 min",
-                PendingIntent.getBroadcast(context, 0, snooze, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)).build())
-            .build()
+            .setContentIntent(PendingIntent.getActivity(context, 0, tap, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        if (!test) base.addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_stat_memento), "Reporter 10 min",
+            PendingIntent.getBroadcast(context, 0, snooze, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)).build())
+        val n = base.build()
         context.getSystemService(NotificationManager::class.java).notify(TAG, id, n)
     }
 
